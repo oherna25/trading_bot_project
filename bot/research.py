@@ -2,9 +2,18 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 from bot.exposure import compute_gex
+from bot.feeds import (
+    BAR_FEEDS,
+    CHAIN_FEEDS,
+    FeedContext,
+    FeedUnavailableError,
+    ingest_bars,
+    ingest_chain,
+    live_context,
+)
 from bot.journal import Journal
 from bot.shapes import (
     Bar,
@@ -119,4 +128,41 @@ def route_chat(text: str, underlying: str, store: SnapshotStore, journal: Journa
     if "dashboard" in text.lower():
         return dashboard_link_response(underlying, store, journal, config, now)
     reply, _ = handle_chat_query(text, underlying, store, journal, now)
+    return reply
+
+
+def _ingest_first_working(
+    feed_names: Sequence[str],
+    ingest: Callable[..., object],
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    context_factory: Callable[[str], FeedContext],
+) -> Optional[str]:
+    for feed_name in feed_names:
+        try:
+            ingest(feed_name, store, journal, context_factory(underlying))
+        except Exception as exc:
+            journal.append(now, "feed_failed", {"feed_name": feed_name, "error": type(exc).__name__})
+            continue
+        return feed_name
+    return None
+
+
+def live_brief(
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    chain_feeds: Optional[Sequence[str]] = None,
+    bar_feeds: Optional[Sequence[str]] = None,
+    context_factory: Callable[[str], FeedContext] = live_context,
+) -> str:
+    chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
+    bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
+    if _ingest_first_working(chains, ingest_chain, underlying, store, journal, now, context_factory) is None:
+        raise FeedUnavailableError(f"all chain feeds failed for {underlying}")
+    _ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
+    reply, _ = handle_chat_query("live session brief", underlying, store, journal, now)
     return reply
