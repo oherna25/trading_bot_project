@@ -1,0 +1,39 @@
+---
+title: Research chat interactions
+---
+sequenceDiagram
+    autonumber
+    participant U as Operator
+    participant T as Telegram chat
+    participant B as Bot service
+    participant A as LLM analyst
+    participant S as Snapshot store
+    participant J as Journal
+
+    U->>T: Ask for GEX brief
+    T->>B: Forward command
+    B->>A: Run tool call
+    A->>S: Read latest ChainSnapshot
+    S-->>A: Return snapshot
+    A->>A: Compute profile
+    A->>J: Journal signal
+    A-->>B: Return brief text
+    B->>T: Send reply
+    T->>U: Show brief
+
+    U->>T: Ask for dashboard
+    T->>B: Forward command
+    B->>A: Route dashboard request
+    A->>S: Read latest ChainSnapshot
+    S-->>A: Return snapshot
+    A-->>B: Return dashboard link
+    B->>T: Send link reply
+    T->>U: Show dashboard link
+
+    Note over B,S: Scheduled brief runs on Modal cron
+    B->>A: Trigger session brief
+    A->>S: Read latest ChainSnapshot
+    S-->>A: Return snapshot
+    A-->>B: Return brief text
+    B->>T: Push brief
+    T->>U: Show brief

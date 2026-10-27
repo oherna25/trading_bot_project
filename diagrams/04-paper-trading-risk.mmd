@@ -1,0 +1,19 @@
+---
+title: Paper trading and risk workflow
+---
+flowchart TB
+    SIG["Signal with snapshot id"] --> INT["Build OrderIntent"]
+    INT --> SCHEMA{"Schema valid"}
+    SCHEMA -->|no| DROP["Drop and journal reason"]
+    SCHEMA -->|yes| VETO{"Risk reviewer veto"}
+    VETO -->|veto| DROP
+    VETO -->|pass| SIZE["Size from account and risk per trade"]
+    SIZE --> TGT{"Inside trade and day targets"}
+    TGT -->|no| DROP
+    TGT -->|yes| HALT{"Daily halt active"}
+    HALT -->|yes| DROP
+    HALT -->|no| VENUE["Submit to paper venue"]
+    VENUE --> FILL["Record Fill"]
+    FILL --> JOUR[("Journal")]
+    DROP --> JOUR
+    JOUR --> POS["Update Position and RiskState"]

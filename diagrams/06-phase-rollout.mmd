@@ -1,0 +1,22 @@
+---
+title: Phase rollout and gates
+---
+flowchart TB
+    P0["Phase 0 spikes"] --> G0{"All spikes pass"}
+    G0 -->|no| STOP0["Stop dependent phases"]
+    G0 -->|yes| P1["Phase 1 data core"]
+    P1 --> G1{"Engine totals match reference"}
+    G1 -->|no| FIX1["Fix engine"]
+    FIX1 --> P1
+    G1 -->|yes| P2["Phase 2 research loop"]
+    P2 --> G2{"Chat brief matches stored profile"}
+    G2 -->|no| FIX2["Fix loop"]
+    FIX2 --> P2
+    G2 -->|yes| P3["Phase 3 risk and paper"]
+    P3 --> G3{"Halt drill and fill reconcile pass"}
+    G3 -->|no| FIX3["Fix risk engine"]
+    FIX3 --> P3
+    G3 -->|yes| P4["Phase 4 autonomy gate"]
+    P3 --> P5["Phase 5 dashboard and social"]
+    P4 --> LIVEG["Gated live trading"]
+    P5 --> DASH["Dashboard live"]

@@ -1,0 +1,17 @@
+---
+title: Autonomy gate to live trading
+---
+flowchart TB
+    PAPER["Paper trading evidence"] --> DAYS{"Clean paper days met"}
+    DAYS -->|no| KEEP["Keep paper trading"]
+    DAYS -->|yes| DD{"Drawdown inside bound"}
+    DD -->|no| KEEP
+    DD -->|yes| DRILL{"Halt drills passed"}
+    DRILL -->|no| KEEP
+    DRILL -->|yes| LIST["Operator signs go live checklist"]
+    LIST --> EN["Enable live adapter explicitly"]
+    EN --> LIVE["Live ordering active"]
+    LIVE --> KILL{"Kill switch or halt"}
+    KILL -->|fired| OFF["Ordering halted needs reset"]
+    KILL -->|clear| LIVE
+    OFF --> LIST

@@ -1,0 +1,74 @@
+---
+title: Trading bot system overview
+---
+flowchart TB
+    subgraph FEEDS["Data feeds"]
+        TRADIER["Tradier sandbox and brokerage"]
+        ALPACA["Alpaca live stocks"]
+        FINNHUB["Finnhub fallback"]
+        EOD["Market Data EOD"]
+        YF["yfinance backup"]
+        SQZ["SqueezeMetrics CSV reference"]
+    end
+
+    subgraph INGEST["Ingestion"]
+        ADAPT["Feed adapters"]
+        STORE[("ChainSnapshot store")]
+    end
+
+    subgraph ENGINE["Exposure engine"]
+        GEX["GEX and VEX engine"]
+        PROF["GexProfile"]
+        REPLAY["Replay harness"]
+    end
+
+    subgraph BRAIN["Analyst"]
+        LLM["LLM tool analyst"]
+        SIG["Signal"]
+        JOUR[("Journal")]
+    end
+
+    subgraph RISK["Risk and execution"]
+        REV["Risk reviewer veto"]
+        INTENT["OrderIntent"]
+        RENG["Risk engine"]
+        PAPER["Paper venue"]
+        LIVE["Live venue default off"]
+        KILL["Kill switch"]
+    end
+
+    subgraph SURF["Surfaces"]
+        CHAT["Telegram chat"]
+        DASH["Dashboard via chat link"]
+        CRON["Modal schedules"]
+    end
+
+    TRADIER --> ADAPT
+    ALPACA --> ADAPT
+    FINNHUB --> ADAPT
+    EOD --> ADAPT
+    YF --> ADAPT
+    SQZ -. cross check .-> GEX
+    ADAPT --> STORE
+    STORE --> GEX
+    GEX --> PROF
+    STORE --> REPLAY
+    PROF --> LLM
+    STORE --> LLM
+    LLM --> SIG
+    SIG --> JOUR
+    SIG --> REV
+    REV --> INTENT
+    INTENT --> RENG
+    RENG --> PAPER
+    RENG --> LIVE
+    PAPER --> JOUR
+    LIVE --> JOUR
+    KILL -. halt .-> RENG
+    CRON --> GEX
+    CRON --> CHAT
+    CHAT --> LLM
+    LLM --> CHAT
+    CHAT -. dashboard link .-> DASH
+    DASH --> STORE
+    DASH --> JOUR
