@@ -46,6 +46,7 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling |
 | `bot/profile.py` | Risk questionnaire table, answer parsing, `OperatorProfile`, suggested params |
 | `bot/ideas.py` | Timeframe and symbol parsing, ranked top-10 `TradeIdea` screener |
+| `bot/muse.py` | Muse chat transport: `parse_chat_payload`, `handle_chat`, `TOOL_REGISTRY`, `dispatch_tool`, `openapi_spec`, `route_http`, `serve`, drill `Harness` |
 
 ## Feeds
 
@@ -91,7 +92,7 @@ Run the suite (fully offline, no network):
 .venv/bin/python -m pytest tests/ -q
 ```
 
-There is no chat transport, scheduler, or server yet; you drive the library from Python. Offline research brief with canned data:
+There is no scheduler yet; you drive the library from Python or serve the Muse chat transport with `bot.muse.serve`. Offline research brief with canned data:
 
 ```python
 from datetime import datetime, timezone
@@ -150,8 +151,21 @@ from bot.replay import replay_week
 journal = replay_week([snapshot_day2, snapshot_day0, snapshot_day1], Journal())
 ```
 
+Chat through the Muse transport (self-seeded drill harness):
+
+```python
+from bot.muse import Harness
+
+harness = Harness()
+harness.post("give me the gex brief")
+harness.run_once()
+print(harness.outbox[-1]["body"])
+```
+
+`bot.muse.serve(store, journal, config)` exposes the same surface over HTTP (`POST /chat`, `POST /mcp`, `GET /openapi.json`).
+
 ## Status and roadmap
 
-Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, 124-test offline suite.
+Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, Muse chat transport with tool registry and drill harness, 138-test offline suite.
 
-Not yet implemented: a chat transport (Telegram), a scheduler and persistent store (Modal), Telegram ogg-to-WAV conversion for voice notes, options-intent gating on the saved profile, multi-leg trade structures, and the live order venue (`submit_live` raises until Phase 4). `live_enabled` defaults to `False`.
+Not yet implemented: a scheduler and persistent store (Modal), ogg-to-WAV conversion for voice notes, options-intent gating on the saved profile, multi-leg trade structures, and the live order venue (`submit_live` raises until Phase 4). `live_enabled` defaults to `False`.
