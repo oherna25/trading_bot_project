@@ -23,9 +23,20 @@ flowchart TB
     end
 
     subgraph BRAIN["Analyst"]
-        LLM["LLM tool analyst"]
+        LLM["Analyst router"]
+        BUDG{"Model key and budget set"}
+        SPARK["Muse Spark 1.3"]
+        FALL["Deterministic fallback"]
         SIG["Signal"]
         JOUR[("Journal")]
+    end
+
+    subgraph MODELS["Meta models"]
+        API["Meta Model API"]
+        GROUND["Web grounding"]
+        VOICE["Voice Transcribe in"]
+        IMG["Muse Image cards"]
+        WONDER["Muse Wonder review"]
     end
 
     subgraph RISK["Risk and execution"]
@@ -55,7 +66,14 @@ flowchart TB
     STORE --> REPLAY
     PROF --> LLM
     STORE --> LLM
-    LLM --> SIG
+    LLM --> BUDG
+    BUDG -->|yes| SPARK
+    BUDG -->|no| FALL
+    SPARK --> API
+    GROUND -. enrich thesis .-> SPARK
+    SPARK --> SIG
+    FALL --> SIG
+    SPARK -. receipt .-> JOUR
     SIG --> JOUR
     SIG --> REV
     REV --> INTENT
@@ -65,6 +83,15 @@ flowchart TB
     PAPER --> JOUR
     LIVE --> JOUR
     KILL -. halt .-> RENG
+    JOUR -. evidence .-> WONDER
+    WONDER --> API
+    WONDER -. review note .-> JOUR
+    CHAT --> VOICE
+    VOICE --> API
+    VOICE -. transcript .-> LLM
+    LLM -. render card .-> IMG
+    IMG --> API
+    IMG -. card art .-> CHAT
     CRON --> GEX
     CRON --> CHAT
     CHAT --> LLM

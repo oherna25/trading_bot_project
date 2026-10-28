@@ -20,3 +20,25 @@ flowchart TB
     P3 --> P5["Phase 5 dashboard and social"]
     P4 --> LIVEG["Gated live trading"]
     P5 --> DASH["Dashboard live"]
+    LIVEG --> M0["Phase M0 model spikes"]
+    DASH --> M0
+    M0 --> GM0{"Spikes pass and budget set"}
+    GM0 -->|no| STOPM["Stop model phases"]
+    GM0 -->|yes| M1["Phase M1 Spark analyst"]
+    M1 --> GM1{"Brief numbers match profile"}
+    GM1 -->|no| FIXM1["Fix analyst backend"]
+    FIXM1 --> M1
+    GM1 -->|yes| M2["Phase M2 voice and grounding"]
+    GM1 -->|yes| M3["Phase M3 cards and review"]
+    M2 --> GM2{"Voice brief matches typed brief"}
+    GM2 -->|no| FIXM2["Fix voice path"]
+    FIXM2 --> M2
+    GM2 -->|yes| M4["Phase M4 demo"]
+    M3 --> GM3{"Card numbers match engine"}
+    GM3 -->|no| FIXM3["Fix card renderer"]
+    FIXM3 --> M3
+    GM3 -->|yes| M4
+    M4 --> GM4{"Kill drill passes on demo head"}
+    GM4 -->|no| FIXM4["Fix demo"]
+    FIXM4 --> M4
+    GM4 -->|yes| DONE["Hackathon entry ready"]

@@ -1,0 +1,296 @@
+import re
+from datetime import datetime, timezone
+
+import pytest
+
+from bot.exposure import compute_gex
+from bot.ideas import format_ideas, parse_timeframe, rank_ideas, symbols_for
+from bot.journal import Journal
+from bot.research import route_chat
+from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
+from bot.store import SnapshotStore
+
+NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
+
+CONFIG = OperatorConfig(
+    dashboard_base_url="https://ops.example.internal",
+    dashboard_link_expiry_seconds=3600,
+    max_day_loss=1000.0,
+    day_profit_target=500.0,
+    max_trade_size=5000.0,
+)
+
+
+def _contract(strike, expiry, call_or_put, open_interest, gamma):
+    return OptionContract(
+        strike=strike, expiry=expiry, call_or_put=call_or_put,
+        open_interest=open_interest, gamma=gamma,
+    )
+
+
+def _seeded_store() -> SnapshotStore:
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="TEST",
+            timestamp_utc=NOW,
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(
+                _contract(100.0, "2026-11-20", "call", 1000.0, 0.05),
+                _contract(100.0, "2026-11-20", "put", 2000.0, 0.03),
+                _contract(105.0, "2026-10-30", "call", 500.0, 0.10),
+                _contract(95.0, "2027-06-01", "put", 3000.0, 0.02),
+                _contract(110.0, "2026-11-20", "call", 9999.0, None),
+                _contract(115.0, "2026-11-20", "call", 0.0, 0.09),
+            ),
+        )
+    )
+    store.save(
+        ChainSnapshot(
+            underlying="DEMO",
+            timestamp_utc=NOW,
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(_contract(50.0, "2026-11-13", "call", 400.0, 0.08),),
+        )
+    )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW, open=100.0,
+                               high=103.0, low=99.0, close=102.0, volume=1200.0))
+    store.save_bar("DEMO", Bar(interval="1d", timestamp_utc=NOW, open=50.0,
+                               high=52.0, low=49.0, close=51.0, volume=800.0))
+    return store
+
+
+def _entry(store: SnapshotStore, symbol: str):
+    snapshot_id, snapshot = store.read_latest(symbol)
+    return (snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), store.read_latest_bar(symbol))
+
+
+def test_parse_timeframe_names():
+    assert parse_timeframe("weekly ideas") == 7
+    assert parse_timeframe("week ahead ideas") == 7
+    assert parse_timeframe("monthly ideas") == 30
+    assert parse_timeframe("month of ideas") == 30
+    assert parse_timeframe("quarter ideas") == 90
+    assert parse_timeframe("leaps ideas") == 365
+    assert parse_timeframe("year long ideas") == 365
+
+
+def test_parse_timeframe_days_and_max():
+    assert parse_timeframe("ideas for the next 45 days") == 45
+    assert parse_timeframe("45-day trade ideas") == 45
+    assert parse_timeframe("weekly or monthly ideas") == 30
+    assert parse_timeframe("10 days or quarter ideas") == 90
+
+
+def test_parse_timeframe_none():
+    assert parse_timeframe("trade ideas please") is None
+
+
+def test_symbols_for_mentions_and_default():
+    store = _seeded_store()
+    assert symbols_for("ideas for DEMO", store, "TEST") == ["DEMO"]
+    assert symbols_for("demo ideas", store, "TEST") == ["DEMO"]
+    assert symbols_for("trade ideas", store, "TEST") == ["TEST"]
+    assert symbols_for("ideas for NOPE", store, "TEST") == ["TEST"]
+    assert symbols_for("TEST and DEMO ideas", store, "TEST") == ["TEST", "DEMO"]
+
+
+def test_rank_ideas_orders_by_gamma_open_interest():
+    store = _seeded_store()
+    ideas = rank_ideas([_entry(store, "TEST")])
+    assert len(ideas) == 4
+    scores = []
+    for idea in ideas:
+        snapshot = store.read_snapshot(idea.snapshot_id)
+        contract = next(
+            c for c in snapshot.contracts_list
+            if (c.strike, c.expiry, c.call_or_put) == (idea.strike, idea.expiry, idea.call_or_put)
+        )
+        scores.append(abs(contract.gamma * contract.open_interest))
+    assert scores == sorted(scores, reverse=True)
+    assert (ideas[0].strike, ideas[0].call_or_put) in {(100.0, "put"), (95.0, "put")}
+
+
+def test_rank_ideas_caps_at_ten():
+    snapshot = ChainSnapshot(
+        underlying="WIDE",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=tuple(
+            _contract(80.0 + n, "2026-11-20", "call", 100.0 + n * 10.0, 0.01) for n in range(12)
+        ),
+    )
+    snapshot_id = f"WIDE:{NOW.isoformat()}"
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    assert len(ideas) == 10
+    assert {idea.strike for idea in ideas} == {82.0 + n for n in range(10)}
+
+
+def test_rank_ideas_timeframe_filters_by_expiry():
+    store = _seeded_store()
+    entry = _entry(store, "TEST")
+    weekly = rank_ideas([entry], 7, now=NOW)
+    assert [(i.strike, i.expiry) for i in weekly] == [(105.0, "2026-10-30")]
+    monthly = rank_ideas([entry], 30, now=NOW)
+    assert len(monthly) == 3
+    assert rank_ideas([entry], 2, now=NOW) == []
+    assert len(rank_ideas([entry])) == 4
+
+
+def test_rank_ideas_direction_follows_flip():
+    snapshot = ChainSnapshot(
+        underlying="DIR",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            _contract(90.0, "2026-11-20", "call", 1000.0, 0.05),
+            _contract(110.0, "2026-11-20", "put", 2000.0, 0.03),
+        ),
+    )
+    snapshot_id = f"DIR:{NOW.isoformat()}"
+    profile = compute_gex(snapshot, snapshot_id)
+    assert profile.flip_point == 110.0
+
+    def bar_at(close):
+        return Bar(interval="1d", timestamp_utc=NOW, open=close, high=close,
+                   low=close, close=close, volume=1.0)
+
+    assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, bar_at(115.0))])} == {"long"}
+    assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, bar_at(102.0))])} == {"short"}
+    assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, None)])} == {"flat"}
+
+
+def test_rank_ideas_flat_when_flip_unknown():
+    store = _seeded_store()
+    ideas = rank_ideas([_entry(store, "DEMO")])
+    assert len(ideas) == 1
+    assert ideas[0].direction == "flat"
+
+
+def test_rank_ideas_confidence_share_capped():
+    store = _seeded_store()
+    ideas = rank_ideas([_entry(store, "TEST")])
+    total = 1000.0 + 2000.0 + 500.0 + 3000.0
+    by_key = {(i.strike, i.call_or_put): i for i in ideas}
+    assert by_key[(100.0, "put")].confidence == pytest.approx(2000.0 / total)
+    assert all(i.confidence <= 0.9 for i in ideas)
+    single = rank_ideas([_entry(store, "DEMO")])
+    assert single[0].confidence == pytest.approx(0.9)
+
+
+def test_rank_ideas_thesis_and_trigger_name_fields():
+    store = _seeded_store()
+    ideas = rank_ideas([_entry(store, "TEST")])
+    assert ideas
+    for idea in ideas:
+        snapshot = store.read_snapshot(idea.snapshot_id)
+        contract = next(
+            c for c in snapshot.contracts_list
+            if (c.strike, c.expiry, c.call_or_put) == (idea.strike, idea.expiry, idea.call_or_put)
+        )
+        sign = 1.0 if contract.call_or_put == "call" else -1.0
+        exposure = sign * contract.gamma * contract.open_interest * 100.0
+        assert str(idea.strike) in idea.thesis
+        assert idea.expiry in idea.thesis
+        assert f"{exposure:.1f}" in idea.thesis
+        assert "flip" in idea.thesis
+        assert str(idea.strike) in idea.trigger
+        assert idea.expiry in idea.trigger
+        assert "flip" in idea.trigger
+
+
+def test_rank_ideas_empty_without_qualifying_contracts():
+    snapshot = ChainSnapshot(
+        underlying="EMPTY",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(_contract(100.0, "2026-11-20", "call", 500.0, None),),
+    )
+    snapshot_id = f"EMPTY:{NOW.isoformat()}"
+    assert rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)]) == []
+
+
+def test_rank_ideas_single_contract_snapshot():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(_contract(100.0, "2026-11-20", "call", 1000.0, 0.05),),
+    )
+    snapshot_id = "TEST:x"
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    assert len(ideas) == 1
+    assert ideas[0].symbol == "TEST"
+    assert ideas[0].snapshot_id == "TEST:x"
+
+
+def test_format_ideas_numbered_lines():
+    store = _seeded_store()
+    ideas = rank_ideas([_entry(store, "TEST")])
+    lines = format_ideas(ideas).splitlines()
+    assert lines[0].startswith("trade ideas")
+    assert len(lines) == 1 + len(ideas)
+    for number, line in enumerate(lines[1:], 1):
+        assert re.match(rf"{number}\. ", line)
+
+
+def test_format_ideas_empty_states_none_found():
+    assert "none found" in format_ideas([])
+
+
+def test_route_chat_ideas_path_journals_one_event():
+    store = _seeded_store()
+    journal = Journal()
+    reply = route_chat("show me trade ideas", "TEST", store, journal, CONFIG, NOW)
+    assert "trade ideas" in reply.lower()
+    assert "1." in reply
+    assert [e.kind for e in journal.entries()] == ["ideas"]
+    payload = journal.entries()[0].payload
+    assert payload["query"] == "show me trade ideas"
+    assert payload["symbols"] == ["TEST"]
+    assert payload["timeframe"] is None
+    snapshot_id, _ = store.read_latest("TEST")
+    assert payload["snapshot_ids"] == [snapshot_id]
+    numbered = [line for line in reply.splitlines()[1:] if re.match(r"\d+\. ", line)]
+    assert payload["count"] == len(numbered) == 4
+
+
+def test_route_chat_ideas_timeframe_and_none_found():
+    store = _seeded_store()
+    journal = Journal()
+    reply = route_chat("2 day trade ideas", "TEST", store, journal, CONFIG, NOW)
+    assert "none found" in reply
+    payload = journal.entries()[0].payload
+    assert payload["timeframe"] == 2
+    assert payload["count"] == 0
+
+
+def test_route_chat_ideas_multiple_symbols():
+    store = _seeded_store()
+    journal = Journal()
+    reply = route_chat("ideas for TEST and DEMO", "TEST", store, journal, CONFIG, NOW)
+    payload = journal.entries()[0].payload
+    assert payload["symbols"] == ["TEST", "DEMO"]
+    assert len(payload["snapshot_ids"]) == 2
+    assert payload["count"] == 5
+    assert "DEMO" in reply
+
+
+def test_route_chat_ideas_unknown_symbol_falls_back():
+    store = _seeded_store()
+    journal = Journal()
+    reply = route_chat("ideas for NOPE", "TEST", store, journal, CONFIG, NOW)
+    assert "trade ideas" in reply.lower()
+    assert journal.entries()[0].payload["symbols"] == ["TEST"]
+
+
+def test_route_chat_dashboard_stays_before_ideas():
+    store = _seeded_store()
+    reply = route_chat("dashboard idea", "TEST", store, Journal(), CONFIG, NOW)
+    assert reply.startswith("dashboard for snapshot TEST:")

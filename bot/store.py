@@ -24,6 +24,14 @@ class SnapshotStore:
     def read_snapshot(self, snapshot_id: str) -> Optional[ChainSnapshot]:
         return self._snapshots.get(snapshot_id)
 
+    def list_underlyings(self) -> list[str]:
+        seen: list[str] = []
+        for snapshot_id in self._order:
+            snapshot = self._snapshots.get(snapshot_id)
+            if snapshot is not None and snapshot.underlying not in seen:
+                seen.append(snapshot.underlying)
+        return seen
+
     def read_latest(self, underlying: str) -> Optional[tuple[str, ChainSnapshot]]:
         for snapshot_id in reversed(self._order):
             if self._snapshots[snapshot_id].underlying == underlying:

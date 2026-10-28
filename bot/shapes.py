@@ -71,6 +71,30 @@ class Signal:
 
 
 @dataclass(frozen=True)
+class TradeIdea:
+    symbol: str
+    direction: str
+    thesis: str
+    trigger: str
+    strike: float
+    expiry: str
+    call_or_put: str
+    confidence: float
+    snapshot_id: str
+
+
+@dataclass(frozen=True)
+class ModelReceipt:
+    model_id: str
+    role_name: str
+    prompt_hash: str
+    tokens_in: int
+    tokens_out: int
+    cost_usd: float
+    latency_ms: float
+
+
+@dataclass(frozen=True)
 class OrderIntent:
     symbol: str
     side: str
@@ -142,3 +166,11 @@ class PaperEvidence:
     max_drawdown: float
     drawdown_bound: float
     halt_drills_passed: bool
+
+
+@dataclass(frozen=True)
+class OperatorProfile:
+    risk_tolerance: str
+    portfolio_size: float
+    knowledge: str
+    options_ok: bool

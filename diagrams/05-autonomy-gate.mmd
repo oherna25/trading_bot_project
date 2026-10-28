@@ -8,7 +8,10 @@ flowchart TB
     DD -->|no| KEEP
     DD -->|yes| DRILL{"Halt drills passed"}
     DRILL -->|no| KEEP
-    DRILL -->|yes| LIST["Operator signs go live checklist"]
+    DRILL -->|yes| WON["Muse Wonder advisory read"]
+    WON --> LIST["Operator signs go live checklist"]
+    WON -. advisory only .-> LIST
+    WON -. review note .-> WJ[("Journal")]
     LIST --> EN["Enable live adapter explicitly"]
     EN --> LIVE["Live ordering active"]
     LIVE --> KILL{"Kill switch or halt"}

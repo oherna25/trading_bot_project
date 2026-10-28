@@ -4,6 +4,8 @@ A research-first trading system that grows into gated autonomy one verified phas
 
 The plan lives in [init.md](init.md). The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/).
 
+Meta model integration is planned as Phases M0-M4 in [init.md](init.md): a Muse Spark analyst behind the research loop, voice input, brief cards, and a Muse Wonder advisory review. M1, M2, M3, and M4 are implemented.
+
 ## How it works
 
 Data flows one way, and every step writes to the journal:
@@ -14,10 +16,12 @@ market APIs ──▶ feeds ──▶ store ──▶ exposure ──▶ researc
                   └──────────┴──────────┴─────────────┴───────────┴──▶ journal
 ```
 
+Meta Model API serves a Spark analyst behind research, plus voice input, card art, and a Wonder advisory review; every model call journals a ModelReceipt (Phases M0-M4 in init.md, all implemented).
+
 1. **Feeds** (`bot/feeds.py`) pull options chains and daily bars from five sources through a registry table keyed by source name. Each adapter normalizes vendor JSON into `ChainSnapshot` or `Bar` records stamped with source name and latency.
 2. **Store** (`bot/store.py`) is an in-memory snapshot and bar store. `read_latest` serves the research loop.
 3. **Exposure** (`bot/exposure.py`) computes GEX and VEX from stored chains: signed Greek × open interest × multiplier per contract, summed per strike, plus the flip point where cumulative exposure changes sign. No vendor GEX feed is required.
-4. **Research** (`bot/research.py`) is the chat loop. It reads the latest snapshot, computes the profile, runs the analyst tool, derives display fields (status, trigger, entry band, checklist, coverage), and returns a text brief. Dashboard requests route to a snapshot-pinned link builder instead.
+4. **Research** (`bot/research.py`) is the chat loop. It reads the latest snapshot, computes the profile, runs the analyst tool, derives display fields (status, trigger, entry band, checklist, coverage), and returns a text brief. Dashboard requests route to a snapshot-pinned link builder instead. The analyst tool routes to a Muse Spark backend behind a role registry when live_models=True; otherwise the deterministic rule runs as the offline fallback (Phase M1). Grounding appends a web-searched note to theses when grounding=True, and voice notes transcribe through bot/voice.py and route as chat queries (Phase M2). Brief cards append a card line when cards=True, and advisory_review gives a standalone Wonder pre-promotion read (Phase M3). Profile messages print a four-question risk questionnaire or save a one-shot OperatorProfile with suggested risk params. Idea requests return up to 10 ranked TradeIdeas filtered by timeframe words and named stocks.
 5. **Risk** (`bot/risk.py`) sizes intents from account size × risk per trade (1% default), validates every intent against schema, halt/kill flags, and trade/day targets, and submits fills to the paper venue. A daily-loss breach halts the day.
 6. **Autonomy** (`bot/autonomy.py`) gates promotion: clean paper days plus bounded drawdown plus passed halt drills yields `ready_for_checklist`. Live ordering ships disabled and needs an explicit signed action. The kill switch flattens auto-ordering and needs an operator reset.
 7. **Dashboard** (`bot/dashboard.py`) builds a read-only screen (header, alignment strip, conviction grid, options strip, top contract card, positions, journal) from the same store and journal as chat. It has no entry point of its own; chat hands out the link.
@@ -27,16 +31,21 @@ market APIs ──▶ feeds ──▶ store ──▶ exposure ──▶ researc
 
 | Module | Owns |
 |---|---|
-| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `Signal`, `OrderIntent`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `DashboardLink`, `OperatorConfig`, `RiskLimits`, `PaperEvidence` |
+| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `Signal`, `OrderIntent`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `DashboardLink`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea` |
 | `bot/feeds.py` | `FeedContext`, five adapters, `FEED_REGISTRY`, kind/fallback tables, `ingest_chain`, `ingest_bars`, `live_context`, `default_context` |
-| `bot/store.py` | `SnapshotStore`: snapshots plus bars, latest-reads |
+| `bot/store.py` | `SnapshotStore`: snapshots plus bars, latest-reads, underlying listing |
 | `bot/journal.py` | `Journal`: append-only timestamped event log |
 | `bot/exposure.py` | `compute_gex`, `compute_vex` |
-| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, dashboard links |
+| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, dashboard links, profile questionnaire, trade ideas, `advisory_review` |
 | `bot/risk.py` | `build_intent`, `review_intent`, `submit_paper`, halt/kill transitions |
 | `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch`, `reset_autonomy` |
 | `bot/dashboard.py` | `dashboard_view` plus panel builders |
 | `bot/replay.py` | `replay_week` |
+| `bot/models.py` | `MODEL_REGISTRY`, Spark tool loop, `ModelReceipt`, day-budget gate |
+| `bot/voice.py` | 16kHz WAV transcription into chat commands, `voice_transcript` journaling |
+| `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling |
+| `bot/profile.py` | Risk questionnaire table, answer parsing, `OperatorProfile`, suggested params |
+| `bot/ideas.py` | Timeframe and symbol parsing, ranked top-10 `TradeIdea` screener |
 
 ## Feeds
 
@@ -65,7 +74,7 @@ FINNHUB_API_KEY=<key>
 MARKETDATA_API_KEY=<key>
 ```
 
-The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages.
+The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0).
 
 ## How to run
 
@@ -143,6 +152,6 @@ journal = replay_week([snapshot_day2, snapshot_day0, snapshot_day1], Journal())
 
 ## Status and roadmap
 
-Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, 42-test offline suite.
+Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, 124-test offline suite.
 
-Not yet implemented: a chat transport (Telegram), a scheduler and persistent store (Modal), an LLM analyst (the current analyst is a deterministic flip rule), and the live order venue (`submit_live` raises until Phase 4). `live_enabled` defaults to `False`.
+Not yet implemented: a chat transport (Telegram), a scheduler and persistent store (Modal), Telegram ogg-to-WAV conversion for voice notes, options-intent gating on the saved profile, multi-leg trade structures, and the live order venue (`submit_live` raises until Phase 4). `live_enabled` defaults to `False`.

@@ -103,6 +103,16 @@ SHAPE DashboardLink
   created_utc
   expires_utc
 END SHAPE
+
+SHAPE ModelReceipt
+  model_id
+  role_name
+  prompt_hash
+  tokens_in
+  tokens_out
+  cost_usd
+  latency_ms
+END SHAPE
 ```
 
 ## Organizing structure
@@ -110,6 +120,8 @@ END SHAPE
 - Feeds use a registry table keyed by source name.
 - Risk and halt use a state machine with explicit transitions.
 - All flows pass typed shapes by name and never rebuild fields inline.
+- Models use a registry table keyed by role name, mirroring the feed registry.
+- Every model call journals a ModelReceipt. A missing key or budget selects the deterministic path.
 
 ## Ingestion
 
@@ -194,6 +206,19 @@ FUNCTION handle_chat_query WITH text
   RETURN reply
 END FUNCTION
 
+FUNCTION analyst_backend WITH text AND snapshot AND profile AND bar
+  IF model_key_set AND budget_remaining THEN RETURN spark_tool_call text WITH snapshot AND profile AND bar
+  journal APPEND event model_fallback WITH reason
+  RETURN flip_rule text WITH snapshot AND profile AND bar
+END FUNCTION
+
+FUNCTION spark_tool_call WITH text AND snapshot AND profile AND bar
+  receipt = CALL model_role analyst WITH snapshot AND profile
+  journal APPEND receipt AS model_receipt
+  signal = BUILD Signal FROM receipt thesis WITH snapshot_id
+  RETURN signal
+END FUNCTION
+
 FUNCTION scheduled_brief
   snapshot = read_latest ChainSnapshot
   profile = compute_gex snapshot
@@ -215,7 +240,28 @@ FUNCTION build_dashboard_link WITH snapshot
   link = BUILD DashboardLink WITH snapshot_id AND url AND timestamps
   RETURN link
 END FUNCTION
+
+FUNCTION handle_voice_note WITH audio
+  transcript = CALL model_role transcriber WITH audio
+  journal APPEND event voice_transcript WITH transcript
+  RETURN handle_chat_query WITH transcript
+END FUNCTION
+
+FUNCTION render_brief_card WITH signal AND profile
+  art = CALL model_role artist WITH signal regime
+  card = DRAW numbers FROM signal AND profile ONTO art
+  journal APPEND event brief_card WITH card reference
+  RETURN card
+END FUNCTION
+
+FUNCTION advisory_review WITH paper_evidence
+  note = CALL model_role reviewer WITH paper_evidence
+  journal APPEND note AS review_note
+  RETURN note
+END FUNCTION
 ```
+
+The review note is advisory only. The autonomy gate keeps its deterministic checks.
 
 The dashboard base url and link expiry are operator config. No dashboard
 framework is named, so no host is hardcoded.
@@ -310,7 +356,7 @@ Panels in order with bindings:
    fields. Quality band from spread plus OI. Explainer from Signal thesis
    plus selection reasons.
 
-Positions plus journal attach below the card per the Phase 5 scope. Signal
+The top contract card gains regime art from Muse Image, and the bot draws every number on the card. Positions plus journal attach below the card per the Phase 5 scope. Signal
 display fields of status plus trigger plus entry band plus checklist plus
 coverage derive at brief time and journal with the signal.
 
