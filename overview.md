@@ -331,7 +331,7 @@ END FUNCTION
 
 ## Dashboard
 
-Layout follows the reference card in `HVkDkv6XIAAaDgb (1).jpeg` from top to
+Layout follows the reference card from top to
 bottom. The dashboard reads the same snapshot store and journal as chat. It is
 reached only through the chat-provided link, pinned to one snapshot id.
 
