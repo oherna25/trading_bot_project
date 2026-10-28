@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import struct
+import subprocess
 from datetime import datetime
 from typing import Mapping
 
@@ -20,6 +22,37 @@ from bot.shapes import ModelReceipt
 from bot.store import SnapshotStore
 
 WAV_RATES = (16000, 24000)
+OGG_MAGIC = b"OggS"
+CONVERT_TIMEOUT_SECONDS = 30.0
+
+
+def is_ogg(data: bytes) -> bool:
+    return data[:4] == OGG_MAGIC
+
+
+def convert_ogg_to_wav(data: bytes, timeout: float = CONVERT_TIMEOUT_SECONDS) -> bytes:
+    if not is_ogg(data):
+        raise ValueError("not an ogg file")
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise ValueError("ogg conversion needs ffmpeg on PATH")
+    try:
+        completed = subprocess.run(
+            [ffmpeg, "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+             "-ac", "1", "-ar", "16000", "-sample_fmt", "s16", "-f", "wav", "pipe:1"],
+            input=data,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("ogg conversion timed out") from exc
+    if completed.returncode != 0 or not completed.stdout:
+        raise ValueError("ogg conversion failed")
+    channels, rate, bits = wav_params(completed.stdout)
+    if channels != 1 or bits != 16 or rate != 16000:
+        raise ValueError(f"ogg conversion produced wav channels={channels} rate={rate} bits={bits}")
+    return completed.stdout
 
 
 def wav_params(data: bytes) -> tuple[int, int, int]:
@@ -91,7 +124,7 @@ def transcribe(
 
 
 def handle_voice_note(
-    audio_wav: bytes,
+    audio: bytes,
     underlying: str,
     store: SnapshotStore,
     journal: Journal,
@@ -107,6 +140,9 @@ def handle_voice_note(
         journal.append(now, "voice_rejected", {"reason": "live models off"})
         return "voice notes need live models"
     try:
+        audio_wav = convert_ogg_to_wav(audio) if is_ogg(audio) else audio
+        if audio_wav is not audio:
+            journal.append(now, "voice_converted", {"from": "ogg", "to": "wav"})
         transcript = transcribe(audio_wav, journal, now, "", env, http_post_multipart)
     except ValueError as exc:
         journal.append(now, "voice_rejected", {"reason": str(exc)})

@@ -172,7 +172,7 @@ def test_route_chat_accepts_one_shot_profile():
     assert "knowledge=intermediate" in reply
     assert "options_ok=True" in reply
     assert "risk_per_trade=0.01" in reply
-    assert "options_ok gates future options filtering." in reply
+    assert "options_ok gates options intents in review plus options ideas." in reply
     entry = journal.entries()[-1]
     assert entry.kind == "profile_accepted"
     assert entry.payload["risk_tolerance"] == "moderate"

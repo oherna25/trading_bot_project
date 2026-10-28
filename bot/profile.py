@@ -159,6 +159,6 @@ def format_summary(profile: OperatorProfile, params: Mapping[str, float]) -> str
             f"account_size={params['account_size']}, "
             f"max_day_loss={params['max_day_loss']}, "
             f"max_trade_size={params['max_trade_size']}",
-            "options_ok gates future options filtering.",
+            "options_ok gates options intents in review plus options ideas.",
         ]
     )

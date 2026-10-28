@@ -406,6 +406,10 @@ def dashboard_link_response(
 
 
 def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    profile = store.read_profile()
+    if profile is not None and not profile.options_ok:
+        journal.append(now, "ideas_blocked", {"reason": "options blocked by profile"})
+        return "options ideas are disabled by your saved profile"
     max_days = parse_timeframe(text)
     entries = []
     used = []
@@ -446,6 +450,7 @@ def route_chat(
             profile = build_profile(parse_answers(text))
         except ValueError as exc:
             return f"could not save profile: {exc}"
+        store.save_profile(profile)
         params = suggest_params(profile)
         journal.append(
             now,

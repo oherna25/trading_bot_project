@@ -1,5 +1,7 @@
 import json
+import shutil
 import struct
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -9,7 +11,9 @@ from bot.models import select_backend
 from bot.research import handle_chat_query
 from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
-from bot.voice import handle_voice_note, transcribe, wav_params
+from bot.voice import convert_ogg_to_wav, handle_voice_note, is_ogg, transcribe, wav_params
+
+needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not on PATH")
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 FULL_ENV = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
@@ -254,3 +258,52 @@ def test_grounding_off_makes_no_extra_call():
 
 def test_grounding_role_selects_model():
     assert select_backend("grounding", Journal(), NOW, FULL_ENV) == ("model", "")
+
+
+def _ogg_bytes():
+    completed = subprocess.run(
+        [shutil.which("ffmpeg"), "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+         "-ac", "1", "-ar", "16000", "-f", "ogg", "pipe:1"],
+        input=_wav_bytes(nframes=8000),
+        capture_output=True,
+        timeout=30.0,
+        check=True,
+    )
+    return completed.stdout
+
+
+def test_is_ogg_detects_magic_only():
+    assert is_ogg(b"OggS" + bytes(64)) is True
+    assert is_ogg(_wav_bytes()) is False
+    assert is_ogg(b"") is False
+
+
+def test_convert_rejects_non_ogg_without_ffmpeg():
+    with pytest.raises(ValueError, match="not an ogg file"):
+        convert_ogg_to_wav(_wav_bytes())
+
+
+@needs_ffmpeg
+def test_convert_rejects_truncated_ogg():
+    with pytest.raises(ValueError, match="ogg conversion failed"):
+        convert_ogg_to_wav(b"OggS" + bytes(16))
+
+
+@needs_ffmpeg
+def test_convert_ogg_to_16k_mono_wav():
+    wav = convert_ogg_to_wav(_ogg_bytes())
+    assert wav_params(wav) == (1, 16000, 16)
+
+
+@needs_ffmpeg
+def test_voice_note_accepts_ogg_and_journals_conversion():
+    http_post = _strict_post([_tool_leg(), _final_leg("Model thesis.\nDIRECTION: short\nCONFIDENCE: 0.8")])
+    journal = Journal()
+    reply = handle_voice_note(_ogg_bytes(), "TEST", _seeded_store(), journal, NOW,
+                              live_models=True, env=FULL_ENV, http_post=http_post,
+                              http_post_multipart=_strict_multipart([_transcript_body()]))
+    assert "total exposure: -1000.0" in reply
+    kinds = [e.kind for e in journal.entries()]
+    assert "voice_converted" in kinds
+    assert "voice_transcript" in kinds
+    assert "signal" in kinds

@@ -7,6 +7,7 @@ from bot.autonomy import LiveDisabledError, check_promotion, enable_live, kill_s
 from bot.journal import Journal
 from bot.risk import review_intent
 from bot.shapes import OrderIntent, PaperEvidence, RiskLimits, RiskState
+from bot.venue import LiveAck, LiveConfigError, TradierVenue
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
@@ -60,11 +61,14 @@ def test_enable_live_needs_signature_and_clean_state():
         submit_live(_intent())
 
 
-def test_enable_live_with_signature_arms_adapter():
+def test_enable_live_with_signature_arms_adapter(monkeypatch, tmp_path):
     journal = Journal()
     assert enable_live("op-1", _state(), journal, NOW) is True
     assert journal.entries()[-1].kind == "live_enabled"
-    with pytest.raises(NotImplementedError):
+    monkeypatch.delenv("TRADIER_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TRADIER_ACCOUNT_ID", raising=False)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(LiveConfigError):
         submit_live(_intent())
 
 

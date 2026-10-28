@@ -1,6 +1,6 @@
 # Trading Bot
 
-A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and has no venue yet.
+A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and routes to a Tradier venue once the operator enables it with a signed action.
 
 The plan lives in [init.md](init.md). The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/).
 
@@ -31,18 +31,21 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 
 | Module | Owns |
 |---|---|
-| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `Signal`, `OrderIntent`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `DashboardLink`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea` |
+| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `Signal`, `OrderIntent`, `OrderLeg`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `DashboardLink`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea` |
 | `bot/feeds.py` | `FeedContext`, five adapters, `FEED_REGISTRY`, kind/fallback tables, `ingest_chain`, `ingest_bars`, `live_context`, `default_context` |
-| `bot/store.py` | `SnapshotStore`: snapshots plus bars, latest-reads, underlying listing |
+| `bot/store.py` | `SnapshotStore`: snapshots plus bars plus saved profile, latest-reads, underlying listing |
 | `bot/journal.py` | `Journal`: append-only timestamped event log |
+| `bot/persist.py` | `save_bundle`, `load_bundle`: JSON snapshots plus bars plus journal plus profile |
+| `bot/schedule.py` | `run_scheduled_session`: ingest plus brief plus persist in one job |
 | `bot/exposure.py` | `compute_gex`, `compute_vex` |
 | `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, dashboard links, profile questionnaire, trade ideas, `advisory_review` |
-| `bot/risk.py` | `build_intent`, `review_intent`, `submit_paper`, halt/kill transitions |
-| `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch`, `reset_autonomy` |
+| `bot/risk.py` | `build_intent`, `even_legs`, `review_intent` with profile gating, `submit_paper`, halt/kill transitions |
+| `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch`, `reset_autonomy`, `submit_live` |
+| `bot/venue.py` | Tradier live venue: `occ_symbol`, equity plus single-option orders, `LiveAck` |
 | `bot/dashboard.py` | `dashboard_view` plus panel builders |
 | `bot/replay.py` | `replay_week` |
 | `bot/models.py` | `MODEL_REGISTRY`, Spark tool loop, `ModelReceipt`, day-budget gate |
-| `bot/voice.py` | 16kHz WAV transcription into chat commands, `voice_transcript` journaling |
+| `bot/voice.py` | Ogg-to-WAV conversion plus 16kHz WAV transcription into chat commands, `voice_transcript` journaling |
 | `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling |
 | `bot/profile.py` | Risk questionnaire table, answer parsing, `OperatorProfile`, suggested params |
 | `bot/ideas.py` | Timeframe and symbol parsing, ranked top-10 `TradeIdea` screener |
@@ -68,6 +71,7 @@ Copy these into a `.env` file in the repo root (never commit it):
 
 ```
 TRADIER_ACCESS_TOKEN=<token>
+TRADIER_ACCOUNT_ID=<account id for live orders>
 TRADIER_BASE_URL=https://api.tradier.com/v1   # optional; default is the sandbox host
 APCA_API_KEY_ID=<id>
 APCA_API_SECRET_KEY=<secret>
@@ -92,7 +96,7 @@ Run the suite (fully offline, no network):
 .venv/bin/python -m pytest tests/ -q
 ```
 
-There is no scheduler yet; you drive the library from Python or serve the Muse chat transport with `bot.muse.serve`. Offline research brief with canned data:
+`modal_app.py` runs the scheduled session on Modal (weekdays 08:30 ET) against a persistent volume; `run_scheduled_session` in `bot/schedule.py` is the same job for local drives. Offline research brief with canned data:
 
 ```python
 from datetime import datetime, timezone
@@ -166,6 +170,6 @@ print(harness.outbox[-1]["body"])
 
 ## Status and roadmap
 
-Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, Muse chat transport with tool registry and drill harness, 138-test offline suite.
+Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, Muse chat transport with tool registry and drill harness, Modal scheduler with persistent JSON store, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, 185-test offline suite.
 
-Not yet implemented: a scheduler and persistent store (Modal), ogg-to-WAV conversion for voice notes, options-intent gating on the saved profile, multi-leg trade structures, and the live order venue (`submit_live` raises until Phase 4). `live_enabled` defaults to `False`.
+Not yet implemented: broker combo support for multi-leg live orders (`place_order` rejects combos; paper covers them). `live_enabled` defaults to `False`.

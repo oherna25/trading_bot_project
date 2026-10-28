@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from bot.shapes import Bar, ChainSnapshot
+from bot.shapes import Bar, ChainSnapshot, OperatorProfile
 
 
 def snapshot_id_for(snapshot: ChainSnapshot) -> str:
@@ -14,6 +14,7 @@ class SnapshotStore:
         self._snapshots: dict[str, ChainSnapshot] = {}
         self._order: list[str] = []
         self._bars: dict[str, list[Bar]] = {}
+        self._profile: Optional[OperatorProfile] = None
 
     def save(self, snapshot: ChainSnapshot) -> str:
         snapshot_id = snapshot_id_for(snapshot)
@@ -49,3 +50,15 @@ class SnapshotStore:
 
     def read_bars(self, underlying: str) -> list[Bar]:
         return sorted(self._bars.get(underlying, []), key=lambda b: b.timestamp_utc)
+
+    def snapshots_in_order(self) -> list[tuple[str, ChainSnapshot]]:
+        return [(snapshot_id, self._snapshots[snapshot_id]) for snapshot_id in self._order]
+
+    def all_bars(self) -> dict[str, list[Bar]]:
+        return {underlying: self.read_bars(underlying) for underlying in self._bars}
+
+    def save_profile(self, profile: OperatorProfile) -> None:
+        self._profile = profile
+
+    def read_profile(self) -> Optional[OperatorProfile]:
+        return self._profile

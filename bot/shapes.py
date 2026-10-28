@@ -95,12 +95,23 @@ class ModelReceipt:
 
 
 @dataclass(frozen=True)
+class OrderLeg:
+    symbol: str
+    side: str
+    size: float
+    strike: Optional[float] = None
+    expiry: str = ""
+    call_or_put: str = ""
+
+
+@dataclass(frozen=True)
 class OrderIntent:
     symbol: str
     side: str
     size: float
     risk_numbers: dict[str, float]
     signal_id: str
+    legs: tuple[OrderLeg, ...] = ()
 
 
 @dataclass(frozen=True)
