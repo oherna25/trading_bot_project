@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Weekday pre-market session for macOS launchd: 07:30 local (08:30 ET on a CT machine).
+  Install after replacing REPO_ROOT with the repo path:
+    sed 's|REPO_ROOT|/path/to/trading_bot_project|g' deploy/trading-bot-session.plist > ~/Library/LaunchAgents/com.tradingbot.session.plist
+    launchctl load ~/Library/LaunchAgents/com.tradingbot.session.plist
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.tradingbot.session</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>REPO_ROOT/.venv/bin/python</string>
+    <string>REPO_ROOT/run_session.py</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>REPO_ROOT</string>
+  <key>StartCalendarInterval</key>
+  <array>
+    <dict>
+      <key>Hour</key>
+      <integer>7</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+      <key>Weekday</key>
+      <integer>1</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>7</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+      <key>Weekday</key>
+      <integer>2</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>7</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+      <key>Weekday</key>
+      <integer>3</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>7</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+      <key>Weekday</key>
+      <integer>4</integer>
+    </dict>
+    <dict>
+      <key>Hour</key>
+      <integer>7</integer>
+      <key>Minute</key>
+      <integer>30</integer>
+      <key>Weekday</key>
+      <integer>5</integer>
+    </dict>
+  </array>
+  <key>StandardOutPath</key>
+  <string>REPO_ROOT/data/session.log</string>
+  <key>StandardErrorPath</key>
+  <string>REPO_ROOT/data/session.log</string>
+</dict>
+</plist>

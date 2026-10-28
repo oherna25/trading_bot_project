@@ -1,0 +1,6 @@
+# Weekday pre-market session: 07:30 machine-local (08:30 ET on a CT machine).
+# Install by appending the job line below to your crontab (`crontab -e`)
+# after replacing REPO_ROOT with the repo path.
+# Logs append to data/session.log inside the repo.
+SHELL=/bin/sh
+30 7 * * 1-5 cd REPO_ROOT && REPO_ROOT/.venv/bin/python REPO_ROOT/run_session.py >> REPO_ROOT/data/session.log 2>&1

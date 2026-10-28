@@ -82,10 +82,3 @@ def test_scheduled_session_reports_failed_chains_and_still_persists(tmp_path):
     assert reply.startswith("scheduled session failed")
     _, journal = load_bundle(str(tmp_path))
     assert journal.entries()[-1].kind == "session_failed"
-
-
-def test_modal_app_imports_without_modal_package():
-    import modal_app
-
-    assert modal_app.STORE_DIR == "/data/trading-bot"
-    assert modal_app.SCHEDULE == "30 13 * * 1-5"

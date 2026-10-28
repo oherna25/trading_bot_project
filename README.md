@@ -96,7 +96,22 @@ Run the suite (fully offline, no network):
 .venv/bin/python -m pytest tests/ -q
 ```
 
-`modal_app.py` runs the scheduled session on Modal (weekdays 08:30 ET) against a persistent volume; `run_scheduled_session` in `bot/schedule.py` is the same job for local drives. Offline research brief with canned data:
+`run_session.py` runs the scheduled session on this machine (weekdays 08:30 ET) against a local JSON bundle in `data/trading-bot`; `run_scheduled_session` in `bot/schedule.py` is the same job for library drives.
+
+Run it by hand:
+
+```bash
+.venv/bin/python run_session.py
+```
+
+Or install it once. For cron, append the job line from `deploy/session.cron` to your crontab (`crontab -e`) after replacing `REPO_ROOT`. For macOS launchd:
+
+```bash
+sed 's|REPO_ROOT|/path/to/trading_bot_project|g' deploy/trading-bot-session.plist > ~/Library/LaunchAgents/com.tradingbot.session.plist
+launchctl load ~/Library/LaunchAgents/com.tradingbot.session.plist
+```
+
+Offline research brief with canned data:
 
 ```python
 from datetime import datetime, timezone
@@ -170,6 +185,6 @@ print(harness.outbox[-1]["body"])
 
 ## Status and roadmap
 
-Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, Muse chat transport with tool registry and drill harness, Modal scheduler with persistent JSON store, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, 185-test offline suite.
+Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, Muse chat transport with tool registry and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, 188-test offline suite.
 
 Not yet implemented: broker combo support for multi-leg live orders (`place_order` rejects combos; paper covers them). `live_enabled` defaults to `False`.

@@ -22,7 +22,7 @@
 **Feeds.** Free live and delayed feeds layer around the Tradier core per Data Sources (plan decision).
 **Edge.** GEX and VEX profiles come from stored chain snapshots, not from vendor Greeks alone (plan decision).
 **LLM.** The model acts as a tool-using analyst over structured market state, not as a RAG chatbot (user idea).
-**Compute.** Scheduled jobs and persistent storage run on Modal, and chat runs first with the dashboard later (plan decision).
+**Compute.** Scheduled jobs and persistent storage run on the operator machine via cron or launchd, and chat runs first with the dashboard later (plan decision 2026-10-28, replaces the Modal plan because the operator has no Modal access).
 **Money.** No live order exists before paper evidence plus an operator approval plus a kill switch (plan decision).
 **Reuse.** No existing code is reused because the workspace holds no trading project (observed this session).
 
@@ -94,7 +94,7 @@
 
 - The Tradier spike pulls one delayed chain through the sandbox with a paper token (Sources, Tradier pages).
 - The yfinance spike records exactly which fields return for the watched symbols (Sources, yfinance README).
-- The Modal spike runs one scheduled function that writes one snapshot to persistent storage (Sources, Modal example).
+- The scheduler spike runs one scheduled job that writes one snapshot to persistent storage; it was written against Modal and now runs locally via cron or launchd (Sources, Modal example).
 - The Telegram spike sends one brief and receives one command through HTTPS calls (Sources, Telegram tutorial).
 - The LLM spike runs one tool call over a sample snapshot with the operator key (assumption).
 - The free stock spike registers Alpaca first and records latency plus limits plus feed scope (Sources, Alpaca data page).
