@@ -181,7 +181,7 @@ harness.run_once()
 print(harness.outbox[-1]["body"])
 ```
 
-`bot.muse.serve(store, journal, config)` exposes the same surface over HTTP (`POST /chat`, `POST /mcp`, `GET /openapi.json`).
+`bot.muse.serve(store, journal, config)` exposes the same surface over HTTP (`POST /chat`, `POST /mcp`, `GET /openapi.json`). It binds `0.0.0.0:8000` by default so external bots can connect over the network; pass `host`/`port` to override.
 
 ## Status and roadmap
 

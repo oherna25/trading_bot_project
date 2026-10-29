@@ -206,7 +206,7 @@ def serve(
     store: SnapshotStore,
     journal: Journal,
     config: OperatorConfig,
-    host: str = "127.0.0.1",
+    host: str = "0.0.0.0",
     port: int = 8000,
 ) -> None:
     from http.server import BaseHTTPRequestHandler, HTTPServer
