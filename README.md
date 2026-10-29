@@ -104,6 +104,24 @@ Fully offline, no network:
 .venv/bin/python -m pytest tests/ -q
 ```
 
+### Full app in one script
+
+`run_app.py` loads the JSON bundle, prints the live brief, saves, then serves the Muse HTTP surface (blocks serving). On a feed failure it prints the failure, still saves, and still serves the loaded state.
+
+```bash
+.venv/bin/python run_app.py
+.venv/bin/python run_app.py --underlying SPY --store-dir data/trading-bot --host 0.0.0.0 --port 8000
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--underlying` | `SPY` | Symbol to brief |
+| `--store-dir` | `data/trading-bot` | JSON bundle directory |
+| `--host` | `0.0.0.0` | HTTP bind host |
+| `--port` | `8000` | HTTP bind port |
+
+A Muse bot instance hooks to http://HOST:PORT/chat.
+
 ### Scheduled session by hand
 
 `run_session.py` runs the scheduled session on this machine against a local JSON bundle in `data/trading-bot`; `run_scheduled_session` in `bot/schedule.py` is the same job for library drives. It prints the brief to stdout.
