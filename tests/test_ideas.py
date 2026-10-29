@@ -93,7 +93,7 @@ def test_symbols_for_mentions_and_default():
     assert symbols_for("ideas for DEMO", store, "TEST") == ["DEMO"]
     assert symbols_for("demo ideas", store, "TEST") == ["DEMO"]
     assert symbols_for("trade ideas", store, "TEST") == ["TEST"]
-    assert symbols_for("ideas for NOPE", store, "TEST") == ["TEST"]
+    assert symbols_for("ideas for NOPE", store, "TEST") == ["NOPE"]
     assert symbols_for("TEST and DEMO ideas", store, "TEST") == ["TEST", "DEMO"]
 
 
@@ -343,12 +343,10 @@ def test_route_chat_ideas_multiple_symbols():
     assert "DEMO" in reply
 
 
-def test_route_chat_ideas_unknown_symbol_falls_back():
+def test_route_chat_ideas_unknown_symbol_errors_loudly():
     store = _seeded_store()
-    journal = Journal()
-    reply = route_chat("ideas for NOPE", "TEST", store, journal, CONFIG, NOW)
-    assert "trade ideas" in reply.lower()
-    assert journal.entries()[0].payload["symbols"] == ["TEST"]
+    with pytest.raises(ValueError, match="NOPE"):
+        route_chat("ideas for NOPE", "TEST", store, Journal(), CONFIG, NOW)
 
 
 def test_route_chat_dashboard_stays_before_ideas():
@@ -398,6 +396,56 @@ def test_rank_ideas_caps_each_direction_in_mixed_universe():
     shorts = [i for i in ideas if i.direction == "short"]
     assert len(longs) == 3
     assert len(shorts) == 7
+
+
+def _spy_only_store() -> SnapshotStore:
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="SPY",
+            timestamp_utc=NOW,
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(
+                _contract(100.0, "2026-11-20", "call", 1000.0, 0.05),
+                _contract(100.0, "2026-11-20", "put", 2000.0, 0.03),
+            ),
+        )
+    )
+    store.save_bar("SPY", Bar(interval="1d", timestamp_utc=NOW, open=100.0,
+                              high=103.0, low=99.0, close=102.0, volume=1200.0))
+    return store
+
+
+def test_symbols_for_names_requested_ticker_missing_from_store():
+    store = _spy_only_store()
+    assert symbols_for("trade ideas for QQQ", store, "SPY") == ["QQQ"]
+
+
+def test_route_chat_ideas_for_missing_ticker_errors_naming_it():
+    store = _spy_only_store()
+    with pytest.raises(ValueError, match="QQQ"):
+        route_chat("trade ideas for QQQ", "SPY", store, Journal(), CONFIG, NOW)
+
+
+def test_route_chat_ideas_mixed_known_and_missing_errors_naming_missing():
+    store = _seeded_store()
+    with pytest.raises(ValueError, match="NOPE"):
+        route_chat("ideas for TEST and NOPE", "TEST", store, Journal(), CONFIG, NOW)
+
+
+def test_route_chat_ideas_lowercase_name_after_for_errors():
+    store = _seeded_store()
+    with pytest.raises(ValueError, match="NOPE"):
+        route_chat("ideas for nope", "TEST", store, Journal(), CONFIG, NOW)
+
+
+def test_route_chat_ideas_timeframe_words_after_for_still_fall_back():
+    store = _seeded_store()
+    journal = Journal()
+    reply = route_chat("ideas for the week ahead", "TEST", store, journal, CONFIG, NOW)
+    assert "trade ideas" in reply.lower()
+    assert journal.entries()[0].payload["symbols"] == ["TEST"]
 
 
 def test_rank_ideas_orders_by_printed_confidence_not_raw_score():

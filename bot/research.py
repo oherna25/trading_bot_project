@@ -19,7 +19,7 @@ from bot.feeds import (
     ingest_chain,
     live_context,
 )
-from bot.ideas import format_ideas, parse_timeframe, rank_ideas, resolve_direction, symbols_for
+from bot.ideas import format_ideas, parse_timeframe, rank_ideas, resolve_direction, symbols_for, unknown_symbols
 from bot.journal import Journal
 from bot.profile import build_profile, format_questionnaire, format_summary, parse_answers, suggest_params
 from bot.models import (
@@ -580,6 +580,14 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
     if profile is not None and not profile.options_ok:
         journal.append(now, "ideas_blocked", {"reason": "options blocked by profile"})
         return "options ideas are disabled by your saved profile"
+    unknown = unknown_symbols(text, store)
+    if unknown:
+        missing = ", ".join(unknown)
+        available = ", ".join(store.list_underlyings()) or "none"
+        raise ValueError(
+            f"no snapshot stored for {missing} (store has: {available}); "
+            f"ingest it first, e.g. run_session.py --underlying {unknown[0]}"
+        )
     max_days = parse_timeframe(text)
     entries = []
     used = []

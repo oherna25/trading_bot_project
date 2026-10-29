@@ -33,6 +33,20 @@ TIMEFRAME = {
 }
 
 DAYS_RE = re.compile(r"(?<!\w)(\d+)\s*(?:-\s*)?(?:days?|d)\b", re.IGNORECASE)
+TICKER_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z]{1,5})(?![A-Za-z0-9_])")
+FOR_TICKER_RE = re.compile(r"\b(?:for|on)\s+([A-Za-z]{1,5})\b", re.IGNORECASE)
+
+NON_TICKER_WORDS = frozenset(
+    """
+    A I AN ME MY US OUR YOUR ITS THE AND FOR WITH FROM THIS THAT THESE THOSE
+    EACH EVERY WHAT WHICH ABOUT ABOVE BELOW OVER UNDER NEAR PER VS ON IN OF TO
+    OR AS BY AT IS ARE BE DO SHOW GIVE GET FIND NEED WANT RANK LIST TRADE
+    IDEA IDEAS BRIEF GEX VEX DEX CARD CHAIN WALL WALLS FLIP SPOT CALL CALLS
+    PUT PUTS LONG SHORT FLAT DEBIT LOSS GAIN PNL RISK ENTRY PRICE ETF DAY
+    DAYS DAILY WEEK WEEKS MONTH YEAR YEARS LEAP LEAPS TODAY NEXT LAST TOP
+    BEST NEW HOT ALL ANY SOME ONLY JUST BOTH UP DOWN OUT
+    """.split()
+)
 
 MIN_OPEN_INTEREST = 100.0
 MAX_SPREAD_PCT = 10.0
@@ -57,6 +71,33 @@ def _store_underlyings(store: SnapshotStore) -> list[str]:
     return store.list_underlyings()
 
 
+def candidate_symbols(text: str) -> list[str]:
+    """Ticker-like tokens named in the query, independent of the store.
+
+    All-caps words plus the word after for/on, minus query vocabulary.
+    """
+    found: list[tuple[int, str]] = []
+    for match in TICKER_RE.finditer(text):
+        word = match.group(1)
+        if word not in NON_TICKER_WORDS:
+            found.append((match.start(), word))
+    for match in FOR_TICKER_RE.finditer(text):
+        word = match.group(1).upper()
+        if word not in NON_TICKER_WORDS:
+            found.append((match.start(1), word))
+    found.sort(key=lambda hit: hit[0])
+    ordered = []
+    for _, symbol in found:
+        if symbol not in ordered:
+            ordered.append(symbol)
+    return ordered
+
+
+def unknown_symbols(text: str, store: SnapshotStore) -> list[str]:
+    available = set(store.list_underlyings())
+    return [symbol for symbol in candidate_symbols(text) if symbol not in available]
+
+
 def symbols_for(text: str, store: SnapshotStore, default: str) -> list[str]:
     hits = []
     for underlying in _store_underlyings(store):
@@ -67,14 +108,17 @@ def symbols_for(text: str, store: SnapshotStore, default: str) -> list[str]:
         )
         if match:
             hits.append((match.start(), underlying))
-    if not hits:
-        return [default]
-    hits.sort(key=lambda hit: hit[0])
-    ordered = []
-    for _, underlying in hits:
-        if underlying not in ordered:
-            ordered.append(underlying)
-    return ordered
+    if hits:
+        hits.sort(key=lambda hit: hit[0])
+        ordered = []
+        for _, underlying in hits:
+            if underlying not in ordered:
+                ordered.append(underlying)
+        return ordered
+    candidates = candidate_symbols(text)
+    if candidates:
+        return candidates
+    return [default]
 
 
 def _days_to_expiry(expiry: str, ref: datetime) -> Optional[int]:
