@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
+from bot.config import read_dotenv as _read_dotenv
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.shapes import ChainSnapshot, ModelReceipt
@@ -40,24 +41,6 @@ MODEL_REGISTRY = {
     "transcriber": ModelSpec("muse-voice-transcribe-1.0", "/asr/transcribe", "minute", 0.003, 0.0, "reject voice"),
     "artist": ModelSpec("muse-image-1.0", "/images/generations", "image", 0.01, 0.0, "skip card"),
 }
-
-
-def _read_dotenv(path: str = ".env") -> dict[str, str]:
-    values: dict[str, str] = {}
-    try:
-        with open(path) as handle:
-            lines = handle.readlines()
-    except OSError:
-        return values
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key, value = key.strip(), value.strip().strip("'\"")
-        if key and value:
-            values.setdefault(key, value)
-    return values
 
 
 def _read_model_env(env: Mapping[str, str] | None = None) -> dict[str, str]:

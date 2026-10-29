@@ -17,3 +17,15 @@ class Journal:
 
     def entries(self) -> list[JournalEntry]:
         return list(self._entries)
+
+    def restore(self, other: Journal) -> None:
+        self._entries = list(other._entries)
+
+    def merge(self, other: Journal) -> int:
+        added = 0
+        for entry in other.entries():
+            if entry not in self._entries:
+                self._entries.append(entry)
+                added += 1
+        self._entries.sort(key=lambda e: e.timestamp_utc)
+        return added

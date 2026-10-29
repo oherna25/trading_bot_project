@@ -31,7 +31,9 @@ def run(underlying: str = "SPY", store_dir: str = STORE_DIR) -> str:
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run one scheduled trading session.")
-    parser.add_argument("--underlying", default="SPY", help="Symbol to brief (default: SPY).")
+    parser.add_argument(
+        "--underlying", default="SPY", help="Comma-separated symbols to brief (default: SPY)."
+    )
     parser.add_argument(
         "--store-dir",
         default=STORE_DIR,

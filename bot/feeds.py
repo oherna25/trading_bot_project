@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
+from bot.config import env_value, read_dotenv as _read_dotenv
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
@@ -76,6 +77,7 @@ def _canned_get(url: str, headers: dict[str, str] | None, params: dict[str, Any]
             "openInterest": [500.0],
             "gamma": [0.05],
             "vega": [0.11],
+            "delta": [0.55],
             "bid": [2.40],
             "ask": [2.60],
             "last": [2.50],
@@ -152,24 +154,6 @@ CREDENTIAL_NAMES = (
 )
 
 
-def _read_dotenv(path: str = ".env") -> dict[str, str]:
-    values: dict[str, str] = {}
-    try:
-        with open(path) as handle:
-            lines = handle.readlines()
-    except OSError:
-        return values
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key, value = key.strip(), value.strip().strip("'\"")
-        if key and value:
-            values.setdefault(key, value)
-    return values
-
-
 def _read_env(dotenv_path: str = ".env") -> dict[str, str]:
     file_values = _read_dotenv(dotenv_path)
     return {
@@ -180,7 +164,7 @@ def _read_env(dotenv_path: str = ".env") -> dict[str, str]:
 
 
 def _tradier_base() -> str:
-    return os.environ.get("TRADIER_BASE_URL") or _read_dotenv().get("TRADIER_BASE_URL") or TRADIER_SANDBOX_URL
+    return env_value("TRADIER_BASE_URL", TRADIER_SANDBOX_URL)
 
 
 def default_context(underlying: str = "SPY") -> FeedContext:
@@ -232,6 +216,7 @@ def _tradier_sandbox(ctx: FeedContext) -> dict[str, Any]:
                     "open_interest": float(item.get("open_interest") or 0.0),
                     "gamma": greek_values.get("gamma"),
                     "vega": greek_values.get("vega"),
+                    "delta": greek_values.get("delta"),
                     "price": item.get("last"),
                     "bid": item.get("bid"),
                     "ask": item.get("ask"),
@@ -334,6 +319,7 @@ def _marketdata_eod(ctx: FeedContext) -> dict[str, Any]:
                 "open_interest": float(at("openInterest") or 0.0),
                 "gamma": at("gamma"),
                 "vega": at("vega"),
+                "delta": at("delta"),
                 "price": at("last"),
                 "bid": at("bid"),
                 "ask": at("ask"),
@@ -422,6 +408,7 @@ def ingest_chain(
                 open_interest=c["open_interest"],
                 gamma=c.get("gamma"),
                 vega=c.get("vega"),
+                delta=c.get("delta"),
                 price=c.get("price"),
                 bid=c.get("bid"),
                 ask=c.get("ask"),

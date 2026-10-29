@@ -1,6 +1,6 @@
 # Trading Bot
 
-A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and routes to a Tradier venue once the operator enables it with a signed action.
+A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX/DEX exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and routes to a Tradier venue once the operator enables it with a signed action.
 
 The plan lives in [init.md](init.md). The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/).
 
@@ -19,37 +19,38 @@ market APIs ──▶ feeds ──▶ store ──▶ exposure ──▶ researc
 Meta Model API serves a Spark analyst behind research, plus voice input, card art, and a Wonder advisory review; every model call journals a ModelReceipt (Phases M0-M4 in init.md, all implemented).
 
 1. **Feeds** (`bot/feeds.py`) pull options chains and daily bars from five sources through a registry table keyed by source name. Each adapter normalizes vendor JSON into `ChainSnapshot` or `Bar` records stamped with source name and latency.
-2. **Store** (`bot/store.py`) is an in-memory snapshot and bar store. `read_latest` serves the research loop.
-3. **Exposure** (`bot/exposure.py`) computes GEX and VEX from stored chains: signed Greek × open interest × multiplier per contract, summed per strike, plus the flip point where cumulative exposure changes sign. No vendor GEX feed is required.
-4. **Research** (`bot/research.py`) is the chat loop. It reads the latest snapshot, computes the profile, runs the analyst tool, derives display fields (status, trigger, entry band, checklist, coverage), and returns a text brief. Dashboard requests route to a snapshot-pinned link builder instead. The analyst tool routes to a Muse Spark backend behind a role registry when live_models=True; otherwise the deterministic rule runs as the offline fallback (Phase M1). Grounding appends a web-searched note to theses when grounding=True, and voice notes transcribe through bot/voice.py and route as chat queries (Phase M2). Brief cards append a card line when cards=True, and advisory_review gives a standalone Wonder pre-promotion read (Phase M3). Profile messages print a four-question risk questionnaire or save a one-shot OperatorProfile with suggested risk params. Idea requests return up to 10 ranked TradeIdeas filtered by timeframe words and named stocks.
-5. **Risk** (`bot/risk.py`) sizes intents from account size × risk per trade (1% default), validates every intent against schema, halt/kill flags, and trade/day targets, and submits fills to the paper venue. A daily-loss breach halts the day.
+2. **Store** (`bot/store.py`) is an in-memory snapshot and bar store with bar dedupe, indexed latest-reads, per-underlying retention, and previous-snapshot lookup. `read_latest` serves the research loop.
+3. **Exposure** (`bot/exposure.py`) computes GEX, VEX, and DEX from stored chains: signed Greek × open interest × multiplier per contract, summed per strike, plus the interpolated flip point where cumulative exposure crosses zero. With spot it reports $GEX per 1% move with a front-expiry split. No vendor GEX feed is required.
+4. **Research** (`bot/research.py`) is the chat loop. It reads the latest snapshot, computes the profile, runs the analyst tool, derives display fields (status, trigger, entry band, checklist, coverage), and returns a compact text brief with snapshot age, top walls, and change versus the previous snapshot. Dashboard requests route to a snapshot-pinned link builder instead. VEX and DEX requests get their own briefs. The analyst tool routes to a Muse Spark backend behind a role registry when live_models=True; otherwise the deterministic rule runs as the offline fallback (Phase M1). Grounding appends a web-searched note to theses when grounding=True, and voice notes transcribe through bot/voice.py and route as chat queries (Phase M2). Brief cards append a card line when cards=True, and advisory_review gives a standalone Wonder pre-promotion read (Phase M3). Profile messages print a four-question risk questionnaire or save a one-shot OperatorProfile with suggested risk params. Idea requests return up to 10 ranked defined-risk verticals filtered by timeframe words and named stocks. Scheduled briefs append flip-cross, regime-flip, and stale-snapshot alerts.
+5. **Risk** (`bot/risk.py`) sizes intents from account size × risk per trade (1% default), or by max loss per contract for options, and returns no intent for flat signals. It validates every intent against schema, halt/kill flags, and trade/day targets, and submits fills to the paper venue at the touch with slippage and fees. Day PnL accumulates unrealized moves plus realized closes. A daily-loss breach halts the day.
 6. **Autonomy** (`bot/autonomy.py`) gates promotion: clean paper days plus bounded drawdown plus passed halt drills yields `ready_for_checklist`. Live ordering ships disabled and needs an explicit signed action. The kill switch flattens auto-ordering and needs an operator reset.
-7. **Dashboard** (`bot/dashboard.py`) builds a read-only screen (header, alignment strip, conviction grid, options strip, top contract card, positions, journal) from the same store and journal as chat. It has no entry point of its own; chat hands out the link.
-8. **Replay** (`bot/replay.py`) replays stored snapshots in time order with no lookahead for backtests.
+7. **Dashboard** (`bot/dashboard.py`) builds a read-only screen (header, alignment strip, conviction grid, options strip, top contract card, positions, journal) from the same store and journal as chat. Chat mints the pinned link; the HTTP server renders it at `/dashboard/<snapshot_id>`.
+8. **Replay** (`bot/replay.py`) replays stored snapshots in time order with no lookahead, either as journaled totals or as a full signal-to-paper-fill backtest that generates its own `PaperEvidence`.
 
 ## Modules
 
 | Module | Owns |
 |---|---|
-| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `Signal`, `OrderIntent`, `OrderLeg`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `DashboardLink`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea` |
+| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `DexProfile`, `Signal`, `OrderIntent`, `OrderLeg`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `DashboardLink`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea` |
 | `bot/feeds.py` | `FeedContext`, five adapters, `FEED_REGISTRY`, kind/fallback tables, `ingest_chain`, `ingest_bars`, `live_context`, `default_context` |
-| `bot/store.py` | `SnapshotStore`: snapshots plus bars plus saved profile, latest-reads, underlying listing |
+| `bot/store.py` | `SnapshotStore`: snapshots plus bars plus saved profile, latest/previous reads, underlying listing, dedupe, `prune`, `restore` |
 | `bot/journal.py` | `Journal`: append-only timestamped event log |
-| `bot/persist.py` | `save_bundle`, `load_bundle`: JSON snapshots plus bars plus journal plus profile |
-| `bot/schedule.py` | `run_scheduled_session`: ingest plus brief plus persist in one job |
-| `bot/exposure.py` | `compute_gex`, `compute_vex` |
-| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, dashboard links, profile questionnaire, trade ideas, `advisory_review` |
-| `bot/risk.py` | `build_intent`, `even_legs`, `review_intent` with profile gating, `submit_paper`, halt/kill transitions |
+| `bot/persist.py` | `save_bundle`, `load_bundle`: JSON snapshots plus bars plus journal plus profile, retention caps, `refresh_bundle` for live reload |
+| `bot/schedule.py` | `run_scheduled_session`: multi-underlying ingest plus brief plus persist in one job |
+| `bot/exposure.py` | `compute_gex` ($GEX per 1% move with spot, interpolated flip), `compute_vex`, `compute_dex` |
+| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, dashboard links, VEX/DEX briefs, change alerts, `journal_tail_text`, `paper_pnl_text`, profile questionnaire, trade ideas, `advisory_review` |
+| `bot/risk.py` | `build_intent`, `even_legs`, `review_intent` with profile gating, `submit_paper`, `paper_fill_price`, `realized_pnl`, halt/kill transitions |
 | `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch`, `reset_autonomy`, `submit_live` |
-| `bot/venue.py` | Tradier live venue: `occ_symbol`, equity plus single-option orders, `LiveAck` |
+| `bot/venue.py` | Tradier live venue: `occ_symbol`, equity, single-option, and combo orders, `LiveAck` |
 | `bot/dashboard.py` | `dashboard_view` plus panel builders |
-| `bot/replay.py` | `replay_week` |
+| `bot/replay.py` | `replay_week` (totals or signal-to-fill backtest), `paper_evidence_from_journal` |
 | `bot/models.py` | `MODEL_REGISTRY`, Spark tool loop, `ModelReceipt`, day-budget gate |
 | `bot/voice.py` | Ogg-to-WAV conversion plus 16kHz WAV transcription into chat commands, `voice_transcript` journaling |
 | `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling |
 | `bot/profile.py` | Risk questionnaire table, answer parsing, `OperatorProfile`, suggested params |
-| `bot/ideas.py` | Timeframe and symbol parsing, ranked top-10 `TradeIdea` screener |
-| `bot/muse.py` | Muse chat transport: `parse_chat_payload`, `handle_chat`, `TOOL_REGISTRY`, `dispatch_tool`, `openapi_spec`, `route_http`, `serve`, drill `Harness` |
+| `bot/ideas.py` | Timeframe and symbol parsing, ranked top-10 `TradeIdea` screener with defined-risk verticals |
+| `bot/config.py` | Single dotenv plus environment reader, dashboard base URL, bearer token, profile-to-limits `operator_config` |
+| `bot/muse.py` | Muse chat transport: `parse_chat_payload`, `handle_chat`, `TOOL_REGISTRY`, `dispatch_tool`, `openapi_spec`, `route_http`, `create_server`, `serve`, drill `Harness` |
 
 ## Feeds
 
@@ -77,9 +78,11 @@ APCA_API_KEY_ID=<id>
 APCA_API_SECRET_KEY=<secret>
 FINNHUB_API_KEY=<key>
 MARKETDATA_API_KEY=<key>
+DASHBOARD_BASE_URL=https://bot.example.internal   # optional; base URL for pinned dashboard links (default: http://127.0.0.1:$PORT)
+MUSE_AUTH_TOKEN=<secret>   # optional; when set, chat/mcp/dashboard need `Authorization: Bearer <secret>`
 ```
 
-The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0).
+The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Pinned dashboard links use `DASHBOARD_BASE_URL` under the same env-over-file lookup. Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0).
 
 ## How to run
 
@@ -94,7 +97,7 @@ python -m venv .venv
 
 ### Configuration
 
-Copy the keys from the [Configuration](#configuration) section into a `.env` file in the repo root (never commit it): `TRADIER_ACCESS_TOKEN`, `TRADIER_ACCOUNT_ID`, `TRADIER_BASE_URL` (optional), `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `FINNHUB_API_KEY`, `MARKETDATA_API_KEY`, plus `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` for the model phases. The bot reads `.env` from the working directory automatically; real environment variables win over file values. Without keys, the suite and every offline flow still run on canned fixtures with no network.
+Copy the keys from the [Configuration](#configuration) section into a `.env` file in the repo root (never commit it): `TRADIER_ACCESS_TOKEN`, `TRADIER_ACCOUNT_ID`, `TRADIER_BASE_URL` (optional), `DASHBOARD_BASE_URL` (optional), `MUSE_AUTH_TOKEN` (optional), `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `FINNHUB_API_KEY`, `MARKETDATA_API_KEY`, plus `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` for the model phases. The bot reads `.env` from the working directory automatically; real environment variables win over file values. Without keys, the suite and every offline flow still run on canned fixtures with no network.
 
 ### Test suite
 
@@ -115,12 +118,12 @@ Fully offline, no network:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--underlying` | `SPY` | Symbol to brief |
+| `--underlying` | `SPY` | Comma-separated symbols to brief |
 | `--store-dir` | `data/trading-bot` | JSON bundle directory |
 | `--host` | `0.0.0.0` | HTTP bind host |
 | `--port` | `8000` | HTTP bind port |
 
-A Muse bot instance hooks to http://HOST:PORT/chat.
+Saved profiles drive the served limits: `max_day_loss` and `max_trade_size` come from the profile's suggested params when one is stored, otherwise the built-in defaults apply. A Muse bot instance hooks to http://HOST:PORT/chat, with an `Authorization: Bearer` header when `MUSE_AUTH_TOKEN` is set.
 
 ### Scheduled session by hand
 
@@ -134,7 +137,7 @@ A Muse bot instance hooks to http://HOST:PORT/chat.
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--underlying` | `SPY` | Symbol to brief |
+| `--underlying` | `SPY` | Comma-separated symbols to brief |
 | `--store-dir` | `data/trading-bot` | JSON bundle directory |
 
 ### Scheduled session on a timer
@@ -172,9 +175,14 @@ tail data/session.log
 |---|---|---|
 | `/chat` | POST | `{"text": "...", "underlying": "SPY"}` (`live_models`, `grounding`, `cards` optional, default false) |
 | `/mcp` | POST | `{"method": "tools/list"}` or `{"method": "tools/call", "params": {"name": "...", "arguments": {}, "underlying": "SPY"}}` |
+| `/dashboard/<snapshot_id>[.json]` | GET | none; minted links expire per `dashboard_link_expiry_seconds` (410 past expiry) |
+| `/health` | GET | none; last ingest time, feed used, snapshot age, underlyings (always open) |
+| `/healthz` | GET | none; minimal `{"ok": true}` probe (always open) |
 | `/openapi.json` | GET | none |
 
-MCP tools: `get_gex_brief`, `get_dashboard_link`, `get_trade_ideas`.
+MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_dashboard_link`, `get_trade_ideas`, `journal_tail`, `paper_pnl`.
+
+When `store_dir` is passed to `serve` (as `run_app.py` does), the server reloads the JSON bundle whenever the scheduled session rewrites it, so briefs never go stale until a restart.
 
 Start it (seeded with canned data so `/chat` answers immediately; blocks serving):
 
@@ -187,7 +195,7 @@ from bot.store import SnapshotStore
 
 store, journal = SnapshotStore(), Journal()
 config = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
+    dashboard_base_url="https://bot.example.internal",
     dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
@@ -222,7 +230,7 @@ from bot.store import SnapshotStore
 now = datetime.now(timezone.utc)
 store, journal = SnapshotStore(), Journal()
 config = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
+    dashboard_base_url="https://bot.example.internal",
     dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
@@ -257,15 +265,20 @@ state = RiskState(account_size=100000.0, risk_per_trade=0.01, day_pnl=0.0,
                   halt_active=False, kill_active=False)
 limits = RiskLimits(max_trade_size=5000.0, day_profit_target=500.0, max_day_loss=1000.0)
 intent = build_intent(signal, "signal-1", state, journal, now)
-if review_intent(intent, state, limits, journal, now) == "approved":
-    fill, position, state = submit_paper(intent, 769.7, 769.7, state, None, limits, journal, now)
+if intent is not None and review_intent(intent, state, limits, journal, now) == "approved":
+    fill, position, state = submit_paper(intent, 769.7, state, None, limits, journal, now,
+                                         bid=769.6, ask=769.8, slippage_bps=5.0, fees=1.30)
 ```
 
-Backtest replay over stored snapshots:
+(`build_intent` returns `None` for flat signals, and `submit_paper` fills at the touch when quotes are given, falling back to the mark price.)
+
+Backtest replay over stored snapshots (totals only, or a full signal-to-fill backtest with bars):
 
 ```python
-from bot.replay import replay_week
+from bot.replay import paper_evidence_from_journal, replay_week
 journal = replay_week([snapshot_day2, snapshot_day0, snapshot_day1], Journal())
+journal = replay_week([snapshot_day2, snapshot_day0, snapshot_day1], Journal(), bars=bars)
+evidence = paper_evidence_from_journal(journal)
 ```
 
 Chat through the Muse transport (self-seeded drill harness):
@@ -281,7 +294,7 @@ print(harness.outbox[-1]["body"])
 
 ### Persistence
 
-`save_bundle(store_dir, store, journal)` writes four JSON files into the store directory: `snapshots.json`, `bars.json`, `journal.json`, and `profile.json`. Each write goes to a `.tmp` file first and is renamed into place, so a crash never leaves a half-written bundle. `load_bundle(store_dir)` returns a `(store, journal)` pair and tolerates missing files, so a fresh directory just yields empty state. Every scheduled run persists to `data/trading-bot`. Inspect the journal any time via `journal.entries()`:
+`save_bundle(store_dir, store, journal)` writes four JSON files into the store directory: `snapshots.json`, `bars.json`, `journal.json`, and `profile.json`. Each write goes to a `.tmp` file first and is renamed into place, so a crash never leaves a half-written bundle. Retention caps keep the newest 500 snapshots and bars per underlying and the newest 20000 journal entries (tunable via `keep_snapshots`, `keep_bars`, `keep_journal`). `load_bundle(store_dir)` returns a `(store, journal)` pair and tolerates missing files, so a fresh directory just yields empty state. Every scheduled run persists to `data/trading-bot`. Inspect the journal any time via `journal.entries()`:
 
 ```python
 from bot.persist import load_bundle, save_bundle
@@ -327,7 +340,7 @@ print(route_chat("profile: risk_tolerance=moderate, portfolio_size=50000, "
 
 ### Trade ideas
 
-Any chat containing `"idea"` returns up to 10 ranked ideas. Filter by timeframe words (`weekly`, `monthly`, `quarterly`, or `"N days"`) or by naming a stored underlying:
+Any chat containing `"idea"` returns up to 10 ranked ideas. Each idea needs a direction, passes minimum-OI and maximum-spread filters, and is structured as a defined-risk vertical with max loss and breakeven when quotes exist. Filter by timeframe words (`weekly`, `monthly`, `quarterly`, or `"N days"`) or by naming a stored underlying:
 
 ```python
 print(route_chat("weekly trade ideas", "SPY", store, journal, config, now))
@@ -336,7 +349,7 @@ print(route_chat("trade ideas for QQQ", "SPY", store, journal, config, now))
 
 ### Paper to live
 
-Paper trade first (see the snippet above), then walk the promotion gate. `check_promotion` reads a `PaperEvidence` record and returns `"ready_for_checklist"` or `"stay_paper"`; `advisory_review` adds a standalone Wonder pre-promotion read when the model backend is available:
+Paper trade first (see the snippet above), then walk the promotion gate. `check_promotion` reads a `PaperEvidence` record and returns `"ready_for_checklist"` or `"stay_paper"`; build it by hand or generate it from a backtest with `paper_evidence_from_journal`. `advisory_review` adds a standalone Wonder pre-promotion read when the model backend is available:
 
 ```python
 from bot.autonomy import check_promotion
@@ -373,13 +386,14 @@ from bot.risk import even_legs, review_intent
 legs = even_legs(10.0, [("SPY", "buy", 770.0, "2026-12-18", "call"),
                         ("SPY", "sell", 780.0, "2026-12-18", "call")])
 intent = build_intent(signal, "signal-1", state, journal, now, legs=legs)
-print(review_intent(intent, state, limits, journal, now, profile=store.read_profile()))
+if intent is not None:
+    print(review_intent(intent, state, limits, journal, now, profile=store.read_profile()))
 ```
 
-Options legs need the saved profile at review (`options_ok` must be yes); without it `review_intent` vetoes the combo. Paper covers combos end to end. Live `place_order` rejects multi-leg intents until broker combo support lands.
+Options legs need the saved profile at review (`options_ok` must be yes); without it `review_intent` vetoes the combo. Paper covers combos end to end. Live `place_order` places each combo leg as its own day option order and reports the legs as one net-premium fill.
 
 ## Status and roadmap
 
-Implemented: five live feeds with fallback, GEX/VEX engine, research chat loop plus scheduled briefs, snapshot-pinned dashboard links, dashboard view models, paper trading with halt logic, autonomy gate with kill switch, replay harness, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, ranked trade-ideas screener, Muse chat transport with tool registry and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, 188-test offline suite.
+Implemented: five live feeds with fallback, GEX/VEX/DEX engine with dollar GEX and interpolated flip, research chat loop plus scheduled briefs with change alerts, served snapshot-pinned dashboard with expiring links, dashboard view models, paper trading with quote fills and halt logic, autonomy gate with kill switch, signal-to-fill replay backtest with generated paper evidence, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, defined-risk trade-ideas screener, Muse chat transport with bearer auth, health endpoints, tool registry, and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, bundle reload in the live server, multi-underlying briefs, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, broker combo support for multi-leg live orders, CI pytest workflow, 249-test suite with a socket-level server smoke test.
 
-Not yet implemented: broker combo support for multi-leg live orders (`place_order` rejects combos; paper covers them). `live_enabled` defaults to `False`.
+Not yet implemented: `live_enabled` defaults to `False`.

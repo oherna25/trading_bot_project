@@ -51,6 +51,7 @@ def _freeze_contract(contract: OptionContract) -> dict[str, Any]:
         "open_interest": contract.open_interest,
         "gamma": contract.gamma,
         "vega": contract.vega,
+        "delta": contract.delta,
         "price": contract.price,
         "bid": contract.bid,
         "ask": contract.ask,
@@ -66,6 +67,7 @@ def _thaw_contract(raw: dict[str, Any]) -> OptionContract:
         open_interest=float(raw["open_interest"]),
         gamma=raw.get("gamma"),
         vega=raw.get("vega"),
+        delta=raw.get("delta"),
         price=raw.get("price"),
         bid=raw.get("bid"),
         ask=raw.get("ask"),
@@ -159,23 +161,44 @@ def _read_json(path: str) -> Any:
         return json.load(handle)
 
 
-def save_bundle(store_dir: str, store: SnapshotStore, journal: Journal) -> None:
+KEEP_SNAPSHOTS_PER_UNDERLYING = 500
+KEEP_BARS_PER_UNDERLYING = 500
+KEEP_JOURNAL_ENTRIES = 20000
+
+
+def save_bundle(
+    store_dir: str,
+    store: SnapshotStore,
+    journal: Journal,
+    keep_snapshots: int = KEEP_SNAPSHOTS_PER_UNDERLYING,
+    keep_bars: int = KEEP_BARS_PER_UNDERLYING,
+    keep_journal: int = KEEP_JOURNAL_ENTRIES,
+) -> None:
     os.makedirs(store_dir, exist_ok=True)
+    counts: dict[str, int] = {}
+    kept: list[tuple[str, ChainSnapshot]] = []
+    for snapshot_id, snapshot in reversed(store.snapshots_in_order()):
+        seen = counts.get(snapshot.underlying, 0)
+        if seen >= keep_snapshots:
+            continue
+        counts[snapshot.underlying] = seen + 1
+        kept.append((snapshot_id, snapshot))
+    kept.reverse()
     _write_json(
         os.path.join(store_dir, SNAPSHOTS_FILE),
-        [_freeze_snapshot(snapshot_id, snapshot) for snapshot_id, snapshot in store.snapshots_in_order()],
+        [_freeze_snapshot(snapshot_id, snapshot) for snapshot_id, snapshot in kept],
     )
     _write_json(
         os.path.join(store_dir, BARS_FILE),
         [
             _freeze_bar(underlying, bar)
             for underlying, bars in store.all_bars().items()
-            for bar in bars
+            for bar in bars[-keep_bars:]
         ],
     )
     _write_json(
         os.path.join(store_dir, JOURNAL_FILE),
-        [_freeze_entry(entry) for entry in journal.entries()],
+        [_freeze_entry(entry) for entry in journal.entries()[-keep_journal:]],
     )
     profile = store.read_profile()
     _write_json(
@@ -207,3 +230,27 @@ def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
         if raw_profile is not None:
             store.save_profile(_thaw_profile(raw_profile))
     return store, journal
+
+
+BUNDLE_FILES = (SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE)
+
+
+def bundle_mtimes(store_dir: str) -> dict[str, float]:
+    mtimes: dict[str, float] = {}
+    for name in BUNDLE_FILES:
+        path = os.path.join(store_dir, name)
+        try:
+            mtimes[name] = os.path.getmtime(path)
+        except OSError:
+            continue
+    return mtimes
+
+
+def refresh_bundle(store_dir: str, store: SnapshotStore, journal: Journal) -> bool:
+    try:
+        fresh_store, fresh_journal = load_bundle(store_dir)
+    except (OSError, ValueError):
+        return False
+    store.restore(fresh_store)
+    journal.merge(fresh_journal)
+    return True

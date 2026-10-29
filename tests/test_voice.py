@@ -199,7 +199,7 @@ def test_voice_brief_matches_typed_brief_numbers():
     reply = handle_voice_note(_wav_bytes(), "TEST", _seeded_store(), journal, NOW,
                               live_models=True, env=FULL_ENV, http_post=http_post,
                               http_post_multipart=_strict_multipart([_transcript_body()]))
-    for line in ("total exposure: -1000.0", "strike 100.0: -1000.0"):
+    for line in ("total exposure: $-104,040", "walls: 100 $-104,040"):
         assert line in typed_reply
         assert line in reply
     assert [e.kind for e in journal.entries()].count("model_receipt") == 3
@@ -302,7 +302,7 @@ def test_voice_note_accepts_ogg_and_journals_conversion():
     reply = handle_voice_note(_ogg_bytes(), "TEST", _seeded_store(), journal, NOW,
                               live_models=True, env=FULL_ENV, http_post=http_post,
                               http_post_multipart=_strict_multipart([_transcript_body()]))
-    assert "total exposure: -1000.0" in reply
+    assert "total exposure: $-104,040" in reply
     kinds = [e.kind for e in journal.entries()]
     assert "voice_converted" in kinds
     assert "voice_transcript" in kinds

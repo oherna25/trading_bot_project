@@ -124,7 +124,7 @@ def test_paper_fill_journals_combo_legs():
     journal = Journal()
     state = _state()
     intent = build_intent(_signal(), "sig-1", state, journal, NOW, _spread())
-    fill, _, _ = submit_paper(intent, 2.5, 2.5, state, None, LIMITS, journal, NOW)
+    fill, _, _ = submit_paper(intent, 2.5, state, None, LIMITS, journal, NOW)
     assert fill.venue == "paper"
     assert fill.size == pytest.approx(1000.0)
     entry = next(e for e in journal.entries() if e.kind == "fill")

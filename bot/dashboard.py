@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+import html
+from dataclasses import asdict, dataclass, is_dataclass
+from datetime import datetime
+from typing import Any, Optional
 
 from bot.exposure import compute_gex
 from bot.journal import Journal
@@ -135,8 +137,7 @@ def build_top_contract(snapshot: ChainSnapshot, signal: Signal) -> Optional[TopC
     quality = "tight" if spread_pct is not None and spread_pct < 5.0 else ("wide" if spread_pct is not None else "unknown")
     return TopContractView(
         header=f"{top.strike} {top.expiry} {top.call_or_put}",
-        # OptionContract carries no delta field yet, so the card reports none until the shape grows one.
-        delta=None,
+        delta=top.delta,
         open_interest=top.open_interest,
         spread_pct=spread_pct,
         crossed=crossed,
@@ -168,3 +169,83 @@ def dashboard_view(
         positions=tuple(positions),
         journal_view=tuple(journal.entries()),
     )
+
+
+JOURNAL_ROWS_SHOWN = 50
+
+
+def _to_json_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if is_dataclass(value):
+        return {key: _to_json_value(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): _to_json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_json_value(item) for item in value]
+    return str(value)
+
+
+def screen_to_json(screen: DashboardScreen) -> dict:
+    return {
+        "header": _to_json_value(screen.header),
+        "strip": _to_json_value(screen.strip),
+        "grid": _to_json_value(screen.grid),
+        "options": _to_json_value(screen.options),
+        "card": _to_json_value(screen.card),
+        "positions": _to_json_value(screen.positions),
+        "journal_view": _to_json_value(screen.journal_view),
+    }
+
+
+def _esc(value: object) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def dashboard_html(screen: DashboardScreen) -> str:
+    header = screen.header
+    strip = screen.strip
+    grid = screen.grid
+    options = screen.options
+    rows = []
+    rows.append("<!doctype html>")
+    rows.append(f"<html><head><meta charset=\"utf-8\"><title>{_esc(header.symbol)} dashboard</title></head><body>")
+    rows.append(
+        f"<h1>{_esc(header.scan_name)} #{header.rank} {_esc(header.symbol)} {_esc(header.status)}</h1>"
+    )
+    rows.append(f"<p>price {_esc(header.price)} day change {_esc(header.day_change)}</p>")
+    rows.append(
+        f"<p>aligned {strip.aligned_count}/{strip.checklist_total} coverage {_esc(strip.coverage_pct)}</p>"
+    )
+    rows.append(
+        f"<p>conviction {_esc(grid.conviction)} trigger {_esc(grid.trigger)} "
+        f"confirmation {_esc(grid.confirmation_score)} ({_esc(grid.confirmation_band)}) "
+        f"entry {_esc(grid.entry_band)}</p>"
+    )
+    rows.append(
+        f"<p>options {options.qualifying_count} qualifying regime {_esc(options.regime)}</p>"
+    )
+    if screen.card is not None:
+        card = screen.card
+        rows.append(
+            f"<p>top {_esc(card.header)} delta {_esc(card.delta)} oi {_esc(card.open_interest)} "
+            f"spread {_esc(card.spread_pct)} crossed {_esc(card.crossed)} iv {_esc(card.iv)} "
+            f"{_esc(card.quality)} {_esc(card.explainer)}</p>"
+        )
+    rows.append("<table><tr><th>symbol</th><th>size</th><th>avg</th><th>pnl</th></tr>")
+    for position in screen.positions:
+        rows.append(
+            f"<tr><td>{_esc(position.symbol)}</td><td>{_esc(position.net_size)}</td>"
+            f"<td>{_esc(position.average_price)}</td><td>{_esc(position.unrealized_pnl)}</td></tr>"
+        )
+    rows.append("</table>")
+    rows.append("<table><tr><th>time</th><th>kind</th><th>payload</th></tr>")
+    for entry in screen.journal_view[-JOURNAL_ROWS_SHOWN:]:
+        rows.append(
+            f"<tr><td>{_esc(entry.timestamp_utc.isoformat())}</td><td>{_esc(entry.kind)}</td>"
+            f"<td>{_esc(entry.payload)}</td></tr>"
+        )
+    rows.append("</table></body></html>")
+    return "".join(rows)

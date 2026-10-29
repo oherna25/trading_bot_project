@@ -159,7 +159,7 @@ def test_chat_with_cards_appends_card_line():
     journal = Journal()
     reply, _ = handle_chat_query("brief", "TEST", _seeded_store(), journal, NOW,
                                  live_models=True, cards=True, env=FULL_ENV, http_post=http_post)
-    assert "total exposure: -1000.0" in reply
+    assert "total exposure: $-104,040" in reply
     assert "\ncard: TEST:" in reply
     assert "short-gamma" in reply
     assert any(e.kind == "brief_card" for e in journal.entries())

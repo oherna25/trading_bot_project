@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bot.journal import Journal
-from bot.risk import fire_halt, fire_kill, operator_reset, update_day_pnl, update_position
+from bot.risk import fire_halt, fire_kill, operator_reset, realized_pnl, update_day_pnl, update_position
 from bot.shapes import Fill, OrderIntent, PaperEvidence, Position, RiskLimits, RiskState
 from bot.venue import TradierVenue
 
@@ -74,8 +74,8 @@ def submit_live(
         )
     if state is None or limits is None:
         return fill, position, state
-    updated_position = update_position(position, intent, fill)
-    updated_state = update_day_pnl(state, updated_position, fill.price)
+    updated_position = update_position(position, intent, fill, fill.price)
+    updated_state = update_day_pnl(state, position, updated_position, realized_pnl(position, intent, fill))
     if updated_state.day_pnl <= -limits.max_day_loss:
         updated_state = fire_halt(updated_state)
         if journal is not None:

@@ -5,9 +5,11 @@ import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Optional, Sequence
+from urllib.parse import quote
 
 from bot.cards import render_brief_card
-from bot.exposure import compute_gex
+from bot.dashboard import DashboardScreen, dashboard_view
+from bot.exposure import compute_dex, compute_gex, compute_vex
 from bot.feeds import (
     BAR_FEEDS,
     CHAIN_FEEDS,
@@ -35,12 +37,15 @@ from bot.shapes import (
     Bar,
     ChainSnapshot,
     DashboardLink,
+    DexProfile,
     GexProfile,
     OperatorConfig,
     PaperEvidence,
+    Position,
     Signal,
+    VexProfile,
 )
-from bot.store import SnapshotStore
+from bot.store import SnapshotId, SnapshotStore
 
 
 def analyst_tool(text: str, snapshot: ChainSnapshot, profile: GexProfile, bar: Optional[Bar]) -> Signal:
@@ -321,15 +326,94 @@ def derive_display(signal: Signal, snapshot: ChainSnapshot, profile: GexProfile,
     )
 
 
-def format_brief(profile: GexProfile, signal: Signal) -> str:
+def _money(value: float) -> str:
+    return f"${value:,.0f}"
+
+
+def _format_age(age: timedelta) -> str:
+    seconds = max(0, int(age.total_seconds()))
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes = seconds // 60
+    if days:
+        return f"{days}d{hours:02d}h"
+    if hours:
+        return f"{hours}h{minutes:02d}m"
+    return f"{minutes}m"
+
+
+def format_brief(
+    profile: GexProfile,
+    signal: Signal,
+    snapshot: ChainSnapshot,
+    bar: Optional[Bar] = None,
+    now: Optional[datetime] = None,
+    previous: Optional[GexProfile] = None,
+) -> str:
+    spot = bar.close if bar is not None else None
+    age = _format_age(now - snapshot.timestamp_utc) if now is not None else "unknown"
+    regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
+    units = "$GEX per 1% move" if profile.spot else "raw gamma x OI (no spot)"
+    spot_text = f"{spot:.2f}" if spot is not None else "unknown"
     lines = [
-        f"total exposure: {profile.total_exposure:.1f}",
-        f"flip point: {profile.flip_point}",
-        f"direction: {signal.direction} confidence: {signal.confidence:.2f}",
-        f"status: {signal.status} trigger: {signal.trigger}",
+        f"{snapshot.underlying} GEX brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
+        f"spot {spot_text} | coverage {signal.coverage * 100.0:.0f}% | regime {regime}",
     ]
-    for strike in sorted(profile.per_strike_exposure):
-        lines.append(f"strike {strike}: {profile.per_strike_exposure[strike]:.1f}")
+    front = f"; front {profile.front_expiry}: {_money(profile.front_exposure)}" if profile.front_expiry else ""
+    lines.append(f"total exposure: {_money(profile.total_exposure)} ({units}{front})")
+    if profile.flip_point is not None and spot:
+        pct = (profile.flip_point - spot) / spot * 100.0
+        side = "above" if profile.flip_point >= spot else "below"
+        lines.append(f"flip {profile.flip_point:.1f} ({abs(pct):.1f}% {side} spot)")
+    elif profile.flip_point is not None:
+        lines.append(f"flip {profile.flip_point:.1f} (no spot)")
+    else:
+        lines.append("flip none found")
+    lines.append(f"calls {_money(profile.call_exposure)} / puts {_money(profile.put_exposure)}")
+    walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:10]
+    lines.append("walls: " + "; ".join(f"{strike:g} {_money(value)}" for strike, value in walls))
+    if previous is None:
+        lines.append("change vs previous: n/a (first snapshot)")
+    else:
+        delta = profile.total_exposure - previous.total_exposure
+        if previous.total_exposure != 0:
+            pct = delta / abs(previous.total_exposure) * 100.0
+            lines.append(f"change vs previous: {_money(delta)} ({pct:+.1f}%)")
+        else:
+            lines.append(f"change vs previous: {_money(delta)}")
+    lines.append(f"direction: {signal.direction} confidence: {signal.confidence:.2f}")
+    lines.append(f"status: {signal.status} trigger: {signal.trigger}")
+    return "\n".join(lines)
+
+
+def previous_profile(
+    store: SnapshotStore, underlying: str, snapshot_id: str, spot: Optional[float] = None
+) -> Optional[GexProfile]:
+    found = store.read_previous(underlying, snapshot_id)
+    if found is None:
+        return None
+    prev_id, prev_snapshot = found
+    return compute_gex(prev_snapshot, prev_id, spot=spot)
+
+
+def format_exposure_brief(
+    kind: str,
+    profile: VexProfile | DexProfile,
+    snapshot: ChainSnapshot,
+    bar: Optional[Bar],
+    now: datetime,
+) -> str:
+    spot = bar.close if bar is not None else None
+    age = _format_age(now - snapshot.timestamp_utc)
+    units = "$ per vol point" if kind == "VEX" else "delta x OI x 100"
+    spot_text = f"{spot:.2f}" if spot is not None else "unknown"
+    walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:10]
+    lines = [
+        f"{snapshot.underlying} {kind} brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
+        f"spot {spot_text}",
+        f"total exposure: {profile.total_exposure:.1f} ({units})",
+        "walls: " + "; ".join(f"{strike:g} {value:.1f}" for strike, value in walls),
+    ]
     return "\n".join(lines)
 
 
@@ -349,8 +433,9 @@ def handle_chat_query(
     if found is None:
         raise ValueError(f"no snapshot stored for {underlying}")
     snapshot_id, snapshot = found
-    profile = compute_gex(snapshot, snapshot_id)
     bar = store.read_latest_bar(underlying)
+    spot = bar.close if bar is not None else None
+    profile = compute_gex(snapshot, snapshot_id, spot=spot)
     signal = replace(
         analyst_backend(
             text, snapshot_id, snapshot, profile, bar, journal, now, live_models, grounding, env, http_post
@@ -359,12 +444,46 @@ def handle_chat_query(
     )
     signal = derive_display(signal, snapshot, profile, bar)
     journal.append(now, "signal", {"snapshot_id": snapshot_id, "direction": signal.direction, "thesis": signal.thesis})
-    reply = format_brief(profile, signal)
+    prev = previous_profile(store, underlying, snapshot_id, spot)
+    reply = format_brief(profile, signal, snapshot, bar, now, prev)
     if cards:
         card = render_brief_card(signal, snapshot, profile, journal, now, snapshot_id, env, http_post)
         if card is not None:
             reply += f"\ncard: {snapshot_id} {card['regime']} {card['art_hash'][:12]}"
     return reply, signal
+
+
+STALE_SNAPSHOT_SECONDS = 6 * 3600
+
+
+def change_alerts(
+    underlying: str, store: SnapshotStore, journal: Journal, now: datetime
+) -> list[str]:
+    found = store.read_latest(underlying)
+    if found is None:
+        return []
+    snapshot_id, snapshot = found
+    bar = store.read_latest_bar(underlying)
+    spot = bar.close if bar is not None else None
+    profile = compute_gex(snapshot, snapshot_id, spot=spot)
+    alerts = []
+    age_seconds = (now - snapshot.timestamp_utc).total_seconds()
+    if age_seconds > STALE_SNAPSHOT_SECONDS:
+        alerts.append(f"ALERT: snapshot is stale (age {_format_age(now - snapshot.timestamp_utc)})")
+    prev = previous_profile(store, underlying, snapshot_id, spot)
+    if prev is not None:
+        regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
+        prev_regime = "long-gamma" if prev.total_exposure >= 0.0 else "short-gamma"
+        if regime != prev_regime:
+            alerts.append(f"ALERT: regime flipped {prev_regime} -> {regime}")
+        if bar is not None and profile.flip_point is not None and prev.flip_point is not None:
+            before = bar.close - prev.flip_point
+            after = bar.close - profile.flip_point
+            if before == 0 or after == 0 or (before > 0) != (after > 0):
+                alerts.append(f"ALERT: spot crossed the flip ({prev.flip_point:.1f} -> {profile.flip_point:.1f})")
+    for alert in alerts:
+        journal.append(now, "alert", {"underlying": underlying, "text": alert})
+    return alerts
 
 
 def scheduled_brief(
@@ -379,18 +498,65 @@ def scheduled_brief(
     reply, _ = handle_chat_query(
         "scheduled session brief", underlying, store, journal, now, live_models, grounding, cards
     )
+    alerts = change_alerts(underlying, store, journal, now)
+    if alerts:
+        reply += "\n" + "\n".join(alerts)
     journal.append(now, "brief_sent", {"underlying": underlying})
     return reply
 
 
 def build_dashboard_link(snapshot_id: str, config: OperatorConfig, now: datetime) -> DashboardLink:
-    path = f"/dashboard/{snapshot_id}"
+    path = "/dashboard/" + quote(snapshot_id, safe="")
     return DashboardLink(
         snapshot_id=snapshot_id,
         url=config.dashboard_base_url + path,
         created_utc=now,
         expires_utc=now + timedelta(seconds=config.dashboard_link_expiry_seconds),
     )
+
+
+PINNED_RENDER_QUERY = "dashboard pin"
+
+
+class UnknownDashboard(ValueError):
+    pass
+
+
+class ExpiredDashboard(UnknownDashboard):
+    pass
+
+
+def _mint_time(journal: Journal, snapshot_id: str) -> Optional[datetime]:
+    latest: Optional[datetime] = None
+    for entry in journal.entries():
+        if entry.kind == "dashboard_link_sent" and entry.payload.get("snapshot_id") == snapshot_id:
+            latest = entry.timestamp_utc
+    return latest
+
+
+def serve_pinned_screen(
+    snapshot_id: SnapshotId,
+    store: SnapshotStore,
+    journal: Journal,
+    config: OperatorConfig,
+    now: datetime,
+    positions: tuple[Position, ...] = (),
+) -> DashboardScreen:
+    snapshot = store.read_snapshot(snapshot_id)
+    if snapshot is None:
+        raise UnknownDashboard(f"unknown snapshot {snapshot_id}")
+    minted = _mint_time(journal, snapshot_id)
+    if minted is not None and (now - minted).total_seconds() > config.dashboard_link_expiry_seconds:
+        raise ExpiredDashboard(f"dashboard link for {snapshot_id} expired")
+    profile = compute_gex(snapshot, snapshot_id)
+    bar = store.read_latest_bar(snapshot.underlying)
+    signal = derive_display(
+        replace(analyst_tool(PINNED_RENDER_QUERY, snapshot, profile, bar), snapshot_id=snapshot_id),
+        snapshot,
+        profile,
+        bar,
+    )
+    return dashboard_view(snapshot_id, signal, store, journal, list(positions))
 
 
 def dashboard_link_response(
@@ -433,6 +599,69 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
     return format_ideas(ideas)
 
 
+def vex_brief_response(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    found = store.read_latest(underlying)
+    if found is None:
+        raise ValueError(f"no snapshot stored for {underlying}")
+    snapshot_id, snapshot = found
+    bar = store.read_latest_bar(underlying)
+    profile = compute_vex(snapshot, snapshot_id)
+    journal.append(now, "exposure_brief", {"kind": "VEX", "snapshot_id": snapshot_id})
+    return format_exposure_brief("VEX", profile, snapshot, bar, now)
+
+
+def dex_brief_response(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    found = store.read_latest(underlying)
+    if found is None:
+        raise ValueError(f"no snapshot stored for {underlying}")
+    snapshot_id, snapshot = found
+    bar = store.read_latest_bar(underlying)
+    profile = compute_dex(snapshot, snapshot_id)
+    journal.append(now, "exposure_brief", {"kind": "DEX", "snapshot_id": snapshot_id})
+    return format_exposure_brief("DEX", profile, snapshot, bar, now)
+
+
+def journal_tail_text(journal: Journal, count: int = 20) -> str:
+    entries = journal.entries()[-max(1, count):]
+    if not entries:
+        return "journal: empty"
+    lines = [f"journal tail ({len(entries)}):"]
+    for entry in entries:
+        lines.append(f"{entry.timestamp_utc.isoformat()} {entry.kind} {json.dumps(entry.payload, default=str)}")
+    return "\n".join(lines)
+
+
+def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
+    net: dict[str, float] = {}
+    cost: dict[str, float] = {}
+    for entry in journal.entries():
+        if entry.kind != "fill":
+            continue
+        symbol = entry.payload.get("symbol")
+        price = entry.payload.get("price")
+        size = entry.payload.get("size")
+        if not symbol or price is None or size is None:
+            continue
+        side = entry.payload.get("side", "buy")
+        signed = float(size) if side == "buy" else -float(size)
+        net[symbol] = net.get(symbol, 0.0) + signed
+        cost[symbol] = cost.get(symbol, 0.0) + signed * float(price)
+    if not net:
+        return "paper pnl: no fills journaled"
+    lines = []
+    total = 0.0
+    for symbol in sorted(net):
+        bar = store.read_latest_bar(symbol)
+        if bar is None or net[symbol] == 0:
+            continue
+        average = cost[symbol] / net[symbol]
+        pnl = (bar.close - average) * net[symbol]
+        total += pnl
+        lines.append(f"{symbol}: size {net[symbol]:.0f} avg {average:.2f} mark {bar.close:.2f} pnl {pnl:+.2f}")
+    lines.append(f"total paper pnl: {total:+.2f}")
+    return "\n".join(lines)
+
+
 def route_chat(
     text: str,
     underlying: str,
@@ -470,6 +699,10 @@ def route_chat(
         return dashboard_link_response(underlying, store, journal, config, now)
     if "idea" in lowered:
         return ideas_response(text, underlying, store, journal, now)
+    if re.search(r"\bvex\b", lowered) or "vega exposure" in lowered:
+        return vex_brief_response(underlying, store, journal, now)
+    if re.search(r"\bdex\b", lowered) or "delta exposure" in lowered:
+        return dex_brief_response(underlying, store, journal, now)
     reply, _ = handle_chat_query(text, underlying, store, journal, now, live_models, grounding, cards)
     return reply
 

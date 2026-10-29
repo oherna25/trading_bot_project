@@ -15,47 +15,70 @@ still starts so the bot endpoint stays up.
 from __future__ import annotations
 
 import argparse
+import os
 from datetime import datetime, timezone
+from typing import Optional
 
+from bot.config import operator_config
 from bot.feeds import FeedUnavailableError
-from bot.muse import serve
+from bot.muse import default_dashboard_base_url, resolve_port, serve
 from bot.persist import load_bundle, save_bundle
 from bot.research import live_brief
-from bot.shapes import OperatorConfig
+from bot.schedule import normalize_underlyings
 
 STORE_DIR = "data/trading-bot"
 HOST = "0.0.0.0"
 PORT = 8000
+SECRETS_DIR = "/secrets"
 
 
-def run(underlying: str = "SPY", store_dir: str = STORE_DIR, host: str = HOST, port: int = PORT) -> str:
+def materialize_file_secrets(secrets_dir: str = SECRETS_DIR) -> None:
+    if not os.path.isdir(secrets_dir):
+        return
+    for name in os.listdir(secrets_dir):
+        path = os.path.join(secrets_dir, name)
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as handle:
+            os.environ.setdefault(name, handle.read().strip())
+
+
+def run(
+    underlying: str = "SPY",
+    store_dir: str = STORE_DIR,
+    host: str = HOST,
+    port: Optional[int] = None,
+) -> str:
+    materialize_file_secrets()
+    port = resolve_port(port)
     store, journal = load_bundle(store_dir)
-    config = OperatorConfig(
-        dashboard_base_url="https://ops.example.internal",
-        dashboard_link_expiry_seconds=3600,
-        max_day_loss=1000.0,
-        day_profit_target=500.0,
-        max_trade_size=5000.0,
-    )
-    try:
-        brief = live_brief(underlying, store, journal, datetime.now(timezone.utc))
-    except FeedUnavailableError as exc:
-        failure = f"live brief failed: {exc}"
-        print(failure)
-        save_bundle(store_dir, store, journal)
-        print(f"serving on {host}:{port}")
-        serve(store, journal, config, host, port)
-        return failure
-    print(brief)
+    config = operator_config(default_dashboard_base_url(), store.read_profile())
+    briefs = []
+    failures = []
+    for symbol in normalize_underlyings(underlying):
+        try:
+            briefs.append(live_brief(symbol, store, journal, datetime.now(timezone.utc)))
+        except FeedUnavailableError as exc:
+            failures.append(f"live brief failed for {symbol}: {exc}")
+    for line in briefs + failures:
+        print(line)
     save_bundle(store_dir, store, journal)
+    print(
+        f"limits max_day_loss={config.max_day_loss} "
+        f"day_profit_target={config.day_profit_target} max_trade_size={config.max_trade_size}"
+    )
     print(f"serving on {host}:{port}")
-    serve(store, journal, config, host, port)
-    return brief
+    serve(store, journal, config, host, port, store_dir)
+    if failures and not briefs:
+        return "\n".join(failures)
+    return "\n---\n".join(briefs + failures)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the live brief once, then serve the bot over HTTP.")
-    parser.add_argument("--underlying", default="SPY", help="Symbol to brief (default: SPY).")
+    parser.add_argument(
+        "--underlying", default="SPY", help="Comma-separated symbols to brief (default: SPY)."
+    )
     parser.add_argument(
         "--store-dir",
         default=STORE_DIR,
@@ -69,8 +92,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--port",
         type=int,
-        default=PORT,
-        help=f"HTTP bind port (default: {PORT}).",
+        default=None,
+        help=f"HTTP bind port (default: $PORT, else {PORT}).",
     )
     return parser.parse_args(argv)
 

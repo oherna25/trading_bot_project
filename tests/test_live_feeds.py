@@ -286,8 +286,9 @@ def test_live_brief_falls_back_and_matches_profile():
 
     reply = live_brief("SPY", store, journal, NOW, context_factory=factory)
     snapshot_id, snapshot = store.read_latest("SPY")
-    profile = compute_gex(snapshot, snapshot_id)
-    assert f"total exposure: {profile.total_exposure:.1f}" in reply
+    bar = store.read_latest_bar("SPY")
+    profile = compute_gex(snapshot, snapshot_id, spot=bar.close if bar else None)
+    assert f"total exposure: ${profile.total_exposure:,.0f}" in reply
     kinds = [e.kind for e in journal.entries()]
     assert "feed_failed" in kinds
     signal_entry = next(e for e in journal.entries() if e.kind == "signal")

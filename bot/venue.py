@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
+from bot.config import read_dotenv as _read_dotenv
 from bot.feeds import TRADIER_SANDBOX_URL
 from bot.risk import is_options_leg
 from bot.shapes import OrderIntent
@@ -63,24 +64,6 @@ def _urllib_get_json(url: str, headers: dict[str, str], timeout: float) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
-def _read_dotenv(path: str = ".env") -> dict[str, str]:
-    values: dict[str, str] = {}
-    try:
-        with open(path) as handle:
-            lines = handle.readlines()
-    except OSError:
-        return values
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key, value = key.strip(), value.strip().strip("'\"")
-        if key and value:
-            values.setdefault(key, value)
-    return values
-
-
 @dataclass(frozen=True)
 class TradierVenue:
     account_id: str
@@ -111,24 +94,15 @@ class TradierVenue:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}", "Accept": "application/json"}
 
-    def place_order(self, intent: OrderIntent, reference_price: float) -> LiveAck:
-        if reference_price <= 0:
-            raise LiveOrderError("live order needs a positive reference price for sizing")
-        if len(intent.legs) > 1:
-            raise LiveOrderError("multi-leg combos need broker combo support")
-        if intent.legs:
-            leg = intent.legs[0]
-            if not is_options_leg(leg):
-                raise LiveOrderError("live venue takes one equity order or one option leg")
-            symbol = occ_symbol(leg.symbol, leg.expiry, leg.call_or_put, leg.strike or 0.0)
-            order_class = "option"
-            quantity = max(1, int(leg.size // (reference_price * 100.0)))
-            side = leg.side
-        else:
-            symbol = intent.symbol
-            order_class = "equity"
-            quantity = max(1, int(intent.size // reference_price))
-            side = intent.side
+    def _place_and_verify(
+        self,
+        *,
+        symbol: str,
+        order_class: str,
+        side: str,
+        quantity: int,
+        reference_price: float,
+    ) -> LiveAck:
         payload: dict[str, Any] = {
             "class": order_class,
             "symbol": symbol,
@@ -164,3 +138,72 @@ class TradierVenue:
         if fill_price <= 0:
             raise LiveOrderError(f"order {order_id} filled without a price")
         return LiveAck(order_id=order_id, status=status, fill_price=fill_price, quantity=quantity)
+
+    def _place_combo(self, intent: OrderIntent, reference_price: float) -> LiveAck:
+        for index, leg in enumerate(intent.legs):
+            if not is_options_leg(leg):
+                raise LiveOrderError(
+                    f"combo leg {index + 1} ({leg.symbol} {leg.side}) is not an option leg"
+                )
+        specs = [
+            (
+                occ_symbol(leg.symbol, leg.expiry, leg.call_or_put, leg.strike or 0.0),
+                leg.side,
+                max(1, int(leg.size // (reference_price * 100.0))),
+            )
+            for leg in intent.legs
+        ]
+        order_ids: list[str] = []
+        net_premium = 0.0
+        total_quantity = 0
+        for index, (symbol, side, quantity) in enumerate(specs):
+            try:
+                ack = self._place_and_verify(
+                    symbol=symbol,
+                    order_class="option",
+                    side=side,
+                    quantity=quantity,
+                    reference_price=reference_price,
+                )
+            except LiveOrderError as exc:
+                filled = ", ".join(order_ids) if order_ids else "none"
+                raise LiveOrderError(
+                    f"combo leg {index + 1}/{len(specs)} ({side} {symbol}) failed: {exc}; "
+                    f"filled orders [{filled}] need manual management"
+                ) from None
+            order_ids.append(ack.order_id)
+            total_quantity += ack.quantity
+            net_premium += ack.fill_price if side == "buy" else -ack.fill_price
+        return LiveAck(
+            order_id="+".join(order_ids),
+            status="filled",
+            fill_price=net_premium,
+            quantity=total_quantity,
+        )
+
+    def place_order(self, intent: OrderIntent, reference_price: float) -> LiveAck:
+        if reference_price <= 0:
+            raise LiveOrderError("live order needs a positive reference price for sizing")
+        if intent.legs:
+            if len(intent.legs) > 1:
+                return self._place_combo(intent, reference_price)
+            leg = intent.legs[0]
+            if not is_options_leg(leg):
+                raise LiveOrderError("live venue takes one equity order or one option leg")
+            symbol = occ_symbol(leg.symbol, leg.expiry, leg.call_or_put, leg.strike or 0.0)
+            quantity = max(1, int(leg.size // (reference_price * 100.0)))
+            return self._place_and_verify(
+                symbol=symbol,
+                order_class="option",
+                side=leg.side,
+                quantity=quantity,
+                reference_price=reference_price,
+            )
+        quantity = max(1, int(intent.size // reference_price))
+        return self._place_and_verify(
+            symbol=intent.symbol,
+            order_class="equity",
+            side=intent.side,
+            quantity=quantity,
+            reference_price=reference_price,
+        )

@@ -27,6 +27,7 @@ class OptionContract:
     open_interest: float
     gamma: Optional[float] = None
     vega: Optional[float] = None
+    delta: Optional[float] = None
     price: Optional[float] = None
     bid: Optional[float] = None
     ask: Optional[float] = None
@@ -48,10 +49,22 @@ class GexProfile:
     per_strike_exposure: dict[float, float]
     total_exposure: float
     flip_point: Optional[float]
+    spot: Optional[float] = None
+    front_expiry: Optional[str] = None
+    front_exposure: float = 0.0
+    call_exposure: float = 0.0
+    put_exposure: float = 0.0
 
 
 @dataclass(frozen=True)
 class VexProfile:
+    snapshot_id: str
+    per_strike_exposure: dict[float, float]
+    total_exposure: float
+
+
+@dataclass(frozen=True)
+class DexProfile:
     snapshot_id: str
     per_strike_exposure: dict[float, float]
     total_exposure: float
@@ -81,6 +94,12 @@ class TradeIdea:
     call_or_put: str
     confidence: float
     snapshot_id: str
+    hedge_strike: Optional[float] = None
+    spread: str = ""
+    max_loss: Optional[float] = None
+    breakeven: Optional[float] = None
+    net_debit: Optional[float] = None
+    spread_pct: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -161,6 +180,16 @@ class OperatorConfig:
     max_day_loss: float
     day_profit_target: float
     max_trade_size: float
+
+
+def default_operator_config(dashboard_base_url: str) -> OperatorConfig:
+    return OperatorConfig(
+        dashboard_base_url=dashboard_base_url,
+        dashboard_link_expiry_seconds=3600,
+        max_day_loss=1000.0,
+        day_profit_target=500.0,
+        max_trade_size=5000.0,
+    )
 
 
 @dataclass(frozen=True)

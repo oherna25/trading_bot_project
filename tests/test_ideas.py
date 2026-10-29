@@ -153,7 +153,7 @@ def test_rank_ideas_direction_follows_flip():
     )
     snapshot_id = f"DIR:{NOW.isoformat()}"
     profile = compute_gex(snapshot, snapshot_id)
-    assert profile.flip_point == 110.0
+    assert profile.flip_point == pytest.approx(106.6667, abs=0.01)
 
     def bar_at(close):
         return Bar(interval="1d", timestamp_utc=NOW, open=close, high=close,
@@ -161,25 +161,41 @@ def test_rank_ideas_direction_follows_flip():
 
     assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, bar_at(115.0))])} == {"long"}
     assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, bar_at(102.0))])} == {"short"}
-    assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, None)])} == {"flat"}
+    assert {i.direction for i in rank_ideas([(snapshot_id, snapshot, profile, None)])} == {"short"}
 
 
-def test_rank_ideas_flat_when_flip_unknown():
+def test_rank_ideas_direction_falls_back_to_regime_without_flip():
     store = _seeded_store()
     ideas = rank_ideas([_entry(store, "DEMO")])
     assert len(ideas) == 1
-    assert ideas[0].direction == "flat"
+    assert ideas[0].direction == "long"
 
 
-def test_rank_ideas_confidence_share_capped():
+def test_rank_ideas_skips_flat_entries():
+    snapshot = ChainSnapshot(
+        underlying="FLAT",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            _contract(100.0, "2026-11-20", "call", 1000.0, 0.05),
+            _contract(100.0, "2026-11-20", "put", 1000.0, 0.05),
+        ),
+    )
+    snapshot_id = f"FLAT:{NOW.isoformat()}"
+    profile = compute_gex(snapshot, snapshot_id)
+    assert profile.total_exposure == 0.0
+    assert rank_ideas([(snapshot_id, snapshot, profile, None)]) == []
+
+
+def test_rank_ideas_confidence_rewards_top_score_and_tight_spread():
     store = _seeded_store()
     ideas = rank_ideas([_entry(store, "TEST")])
-    total = 1000.0 + 2000.0 + 500.0 + 3000.0
-    by_key = {(i.strike, i.call_or_put): i for i in ideas}
-    assert by_key[(100.0, "put")].confidence == pytest.approx(2000.0 / total)
+    assert ideas[0].confidence == pytest.approx(0.75)
     assert all(i.confidence <= 0.9 for i in ideas)
+    assert [i.confidence for i in ideas] == sorted([i.confidence for i in ideas], reverse=True)
     single = rank_ideas([_entry(store, "DEMO")])
-    assert single[0].confidence == pytest.approx(0.9)
+    assert single[0].confidence == pytest.approx(0.75)
 
 
 def test_rank_ideas_thesis_and_trigger_name_fields():
@@ -197,10 +213,55 @@ def test_rank_ideas_thesis_and_trigger_name_fields():
         assert str(idea.strike) in idea.thesis
         assert idea.expiry in idea.thesis
         assert f"{exposure:.1f}" in idea.thesis
-        assert "flip" in idea.thesis
-        assert str(idea.strike) in idea.trigger
-        assert idea.expiry in idea.trigger
         assert "flip" in idea.trigger
+        assert idea.thesis != idea.trigger
+
+
+def test_rank_ideas_builds_defined_risk_vertical():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=2000.0, gamma=0.09, price=2.50, bid=2.40, ask=2.60),
+            OptionContract(strike=105.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.04, price=1.50, bid=1.40, ask=1.50),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    bar = Bar(interval="1d", timestamp_utc=NOW, open=100.0, high=103.0,
+              low=99.0, close=102.0, volume=1200.0)
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), bar)])
+    assert len(ideas) == 2
+    top = ideas[0]
+    assert top.spread == "100/105 call vertical"
+    assert top.hedge_strike == 105.0
+    assert top.max_loss == pytest.approx(120.0)
+    assert top.breakeven == pytest.approx(101.2)
+    assert "max loss $120" in top.thesis
+    assert top.direction in ("long", "short")
+
+
+def test_rank_ideas_filters_wide_spread_and_thin_oi():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.05, price=2.50, bid=2.40, ask=2.60),
+            OptionContract(strike=105.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.09, price=2.50, bid=1.00, ask=4.00),
+            OptionContract(strike=110.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=10.0, gamma=0.09, price=2.50, bid=2.40, ask=2.60),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    assert [(i.strike, i.call_or_put) for i in ideas] == [(100.0, "call")]
 
 
 def test_rank_ideas_empty_without_qualifying_contracts():

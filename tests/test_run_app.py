@@ -9,7 +9,7 @@ def test_parse_args_defaults():
     assert args.underlying == "SPY"
     assert args.store_dir == "data/trading-bot"
     assert args.host == "0.0.0.0"
-    assert args.port == 8000
+    assert args.port is None
 
 
 def test_parse_args_overrides():
@@ -23,6 +23,8 @@ def test_parse_args_overrides():
 
 
 def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    monkeypatch.chdir(tmp_path)
     seen = {}
 
     def fake_live_brief(underlying, store, journal, now):
@@ -31,12 +33,13 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
         seen["journal"] = journal
         return "brief text"
 
-    def fake_serve(store, journal, config, host, port):
+    def fake_serve(store, journal, config, host, port, store_dir):
         seen["serve_store"] = store
         seen["serve_journal"] = journal
         seen["config"] = config
         seen["host"] = host
         seen["port"] = port
+        seen["store_dir"] = store_dir
 
     monkeypatch.setattr(run_app, "live_brief", fake_live_brief)
     monkeypatch.setattr(run_app, "serve", fake_serve)
@@ -47,7 +50,8 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
     assert seen["underlying"] == "QQQ"
     assert seen["serve_store"] is seen["store"]
     assert seen["serve_journal"] is seen["journal"]
-    assert seen["config"].dashboard_base_url == "https://ops.example.internal"
+    assert seen["store_dir"] == str(tmp_path)
+    assert seen["config"].dashboard_base_url == "http://127.0.0.1:8000"
     assert seen["config"].dashboard_link_expiry_seconds == 3600
     assert seen["config"].max_day_loss == 1000.0
     assert seen["config"].day_profit_target == 500.0
@@ -61,12 +65,15 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
 
 
 def test_main_feed_failure_still_serves(monkeypatch, capsys, tmp_path):
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+    monkeypatch.chdir(tmp_path)
     seen = {}
 
     def failing_live_brief(underlying, store, journal, now):
         raise FeedUnavailableError("all chain feeds failed for QQQ")
 
-    def fake_serve(store, journal, config, host, port):
+    def fake_serve(store, journal, config, host, port, store_dir):
         seen["called"] = True
         seen["host"] = host
         seen["port"] = port
@@ -80,3 +87,81 @@ def test_main_feed_failure_still_serves(monkeypatch, capsys, tmp_path):
     assert "all chain feeds failed for QQQ" in out
     assert "0.0.0.0" in out and "8000" in out
     assert os.path.exists(tmp_path / "journal.json")
+
+
+def test_main_port_env_flows_to_serve(monkeypatch, tmp_path):
+    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
+    monkeypatch.setenv("PORT", "9002")
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def fake_serve(store, journal, config, host, port, store_dir):
+        seen["host"] = host
+        seen["port"] = port
+
+    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "serve", fake_serve)
+    run_app.main(["--store-dir", str(tmp_path)])
+    assert seen == {"host": "0.0.0.0", "port": 9002}
+
+
+def test_main_wires_saved_profile_into_limits(monkeypatch, tmp_path):
+    from bot.journal import Journal
+    from bot.persist import save_bundle
+    from bot.profile import build_profile
+    from bot.store import SnapshotStore
+
+    monkeypatch.chdir(tmp_path)
+    store = SnapshotStore()
+    store.save_profile(
+        build_profile(
+            {
+                "risk_tolerance": "moderate",
+                "portfolio_size": "50000",
+                "knowledge": "intermediate",
+                "options_ok": "yes",
+            }
+        )
+    )
+    save_bundle(str(tmp_path), store, Journal())
+    seen = {}
+
+    def fake_serve(store, journal, config, host, port, store_dir):
+        seen["config"] = config
+
+    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "serve", fake_serve)
+    run_app.main(["--store-dir", str(tmp_path)])
+    assert seen["config"].max_day_loss == 1000.0
+    assert seen["config"].max_trade_size == 2500.0
+
+
+def test_main_briefs_multiple_underlyings(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    seen = []
+
+    def fake_live_brief(underlying, store, journal, now):
+        seen.append(underlying)
+        return f"brief {underlying}"
+
+    monkeypatch.setattr(run_app, "live_brief", fake_live_brief)
+    monkeypatch.setattr(run_app, "serve", lambda *args: None)
+    result = run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path)])
+    assert seen == ["SPY", "QQQ"]
+    assert result == "brief SPY\n---\nbrief QQQ"
+
+
+def test_materialize_file_secrets_prefers_real_env(monkeypatch, tmp_path):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    (secrets / "FROM_FILE").write_text("file-value\n")
+    (secrets / "FROM_BOTH").write_text("file-value\n")
+    monkeypatch.setenv("FROM_BOTH", "env-value")
+    monkeypatch.delenv("FROM_FILE", raising=False)
+    run_app.materialize_file_secrets(str(secrets))
+    assert os.environ["FROM_FILE"] == "file-value"
+    assert os.environ["FROM_BOTH"] == "env-value"
+
+
+def test_materialize_file_secrets_missing_dir_skips(tmp_path):
+    run_app.materialize_file_secrets(str(tmp_path / "no-secrets-here"))

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from bot.exposure import compute_gex, compute_vex
+from bot.exposure import compute_dex, compute_gex, compute_vex
 from bot.shapes import ChainSnapshot, OptionContract
 
 STAMP = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -44,9 +44,25 @@ def test_gex_per_strike_and_total():
     assert profile.total_exposure == pytest.approx(7000.0)
 
 
-def test_gex_flip_point_is_first_cumulative_sign_change():
+def test_gex_flip_point_interpolates_between_strikes():
     profile = compute_gex(_gex_snapshot(), "TEST:snap-1")
-    assert profile.flip_point == 105.0
+    assert profile.flip_point == pytest.approx(101.5)
+
+
+def test_gex_dollar_scales_by_spot_squared_per_one_percent():
+    profile = compute_gex(_gex_snapshot(), "TEST:snap-1", spot=100.0)
+    assert profile.spot == 100.0
+    assert profile.total_exposure == pytest.approx(7000.0 * 100.0 * 100.0 * 0.01)
+    assert profile.per_strike_exposure[105.0] == pytest.approx(10000.0 * 100.0 * 100.0 * 0.01)
+    assert profile.flip_point == pytest.approx(101.5)
+
+
+def test_gex_front_expiry_and_call_put_split():
+    profile = compute_gex(_gex_snapshot(), "TEST:snap-1")
+    assert profile.front_expiry == "2026-11-20"
+    assert profile.front_exposure == pytest.approx(7000.0)
+    assert profile.call_exposure == pytest.approx(15000.0)
+    assert profile.put_exposure == pytest.approx(-8000.0)
 
 
 def test_gex_missing_gamma_contributes_zero():
@@ -68,5 +84,22 @@ def test_gex_missing_gamma_contributes_zero():
 def test_vex_per_strike_and_total():
     profile = compute_vex(_vex_snapshot(), "TEST:snap-1")
     assert profile.snapshot_id == "TEST:snap-1"
+    assert profile.per_strike_exposure == pytest.approx({100.0: 1000.0})
+    assert profile.total_exposure == pytest.approx(1000.0)
+
+
+def test_dex_uses_signed_delta_times_open_interest():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=STAMP,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call", open_interest=100.0, delta=0.55),
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put", open_interest=100.0, delta=-0.45),
+            OptionContract(strike=105.0, expiry="2026-11-20", call_or_put="call", open_interest=50.0, delta=None),
+        ),
+    )
+    profile = compute_dex(snapshot, "TEST:snap-1")
     assert profile.per_strike_exposure == pytest.approx({100.0: 1000.0})
     assert profile.total_exposure == pytest.approx(1000.0)

@@ -38,6 +38,56 @@ def test_bundle_round_trip_preserves_snapshots_bars_journal_profile(tmp_path):
     assert loaded_store.read_profile() == store.read_profile()
 
 
+def test_bundle_round_trip_preserves_delta(tmp_path):
+    from bot.shapes import ChainSnapshot, OptionContract
+
+    store, journal = SnapshotStore(), Journal()
+    store.save(
+        ChainSnapshot(
+            underlying="TEST",
+            timestamp_utc=NOW,
+            source_name="marketdata_eod",
+            latency_ms=1.0,
+            contracts_list=(
+                OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                               open_interest=100.0, gamma=0.05, delta=0.55),
+            ),
+        )
+    )
+    save_bundle(str(tmp_path), store, journal)
+    loaded, _ = load_bundle(str(tmp_path))
+    _, snapshot = loaded.read_latest("TEST")
+    assert snapshot.contracts_list[0].delta == 0.55
+
+
+def test_save_bundle_applies_retention(tmp_path):
+    from datetime import timedelta
+
+    from bot.shapes import ChainSnapshot, OptionContract
+
+    store, journal = SnapshotStore(), Journal()
+    for day in range(5):
+        store.save(
+            ChainSnapshot(
+                underlying="TEST",
+                timestamp_utc=NOW + timedelta(days=day),
+                source_name="tradier_sandbox",
+                latency_ms=1.0,
+                contracts_list=(
+                    OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                                   open_interest=100.0, gamma=0.05),
+                ),
+            )
+        )
+    for n in range(5):
+        journal.append(NOW, "note", {"n": n})
+    save_bundle(str(tmp_path), store, journal, keep_snapshots=2, keep_journal=3)
+    loaded, loaded_journal = load_bundle(str(tmp_path))
+    assert len(loaded.snapshots_in_order()) == 2
+    assert loaded.read_latest("TEST")[1].timestamp_utc == NOW + timedelta(days=4)
+    assert [e.payload["n"] for e in loaded_journal.entries()] == [2, 3, 4]
+
+
 def test_load_missing_dir_returns_empty_bundle(tmp_path):
     store, journal = load_bundle(str(tmp_path / "fresh"))
     assert store.snapshots_in_order() == []
@@ -71,6 +121,16 @@ def test_scheduled_session_accumulates_across_runs(tmp_path):
     run_scheduled_session("TEST", str(tmp_path), NOW, context_factory=default_context)
     _, journal = load_bundle(str(tmp_path))
     assert len(journal.entries()) > first_count
+
+
+def test_scheduled_session_briefs_multiple_underlyings(tmp_path):
+    reply = run_scheduled_session(
+        "SPY,QQQ", str(tmp_path), NOW, context_factory=lambda symbol: default_context(symbol)
+    )
+    assert "SPY GEX brief" in reply
+    assert "QQQ GEX brief" in reply
+    store, _ = load_bundle(str(tmp_path))
+    assert store.list_underlyings() == ["QQQ", "SPY"]
 
 
 def test_scheduled_session_reports_failed_chains_and_still_persists(tmp_path):

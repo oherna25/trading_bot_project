@@ -62,15 +62,26 @@ def build_intent(
     journal: Journal,
     now: datetime,
     legs: Sequence[OrderLeg] = (),
-) -> OrderIntent:
-    size = state.account_size * state.risk_per_trade
-    leg_tuple = tuple(legs)
-    total = sum(leg.size for leg in leg_tuple) if leg_tuple else size
+    max_loss_per_contract: Optional[float] = None,
+) -> Optional[OrderIntent]:
+    if signal.direction not in ("long", "short"):
+        journal.append(now, "intent_skipped", {"signal_id": signal_id, "reason": f"direction {signal.direction}"})
+        return None
+    budget = state.account_size * state.risk_per_trade
     risk_numbers = {
         "account_size": state.account_size,
         "risk_per_trade": state.risk_per_trade,
-        "size": total,
     }
+    if max_loss_per_contract is not None and max_loss_per_contract > 0:
+        contracts = max(1, int(budget // max_loss_per_contract))
+        size = contracts * max_loss_per_contract
+        risk_numbers["max_loss_per_contract"] = max_loss_per_contract
+        risk_numbers["contracts"] = float(contracts)
+    else:
+        size = budget
+    leg_tuple = tuple(legs)
+    total = sum(leg.size for leg in leg_tuple) if leg_tuple else size
+    risk_numbers["size"] = total
     if leg_tuple:
         risk_numbers["legs"] = float(len(leg_tuple))
     intent = OrderIntent(
@@ -155,42 +166,86 @@ def review_intent(
     return "approved"
 
 
-def update_position(position: Optional[Position], intent: OrderIntent, fill: Fill) -> Position:
+def update_position(
+    position: Optional[Position], intent: OrderIntent, fill: Fill, mark_price: Optional[float] = None
+) -> Position:
     signed = fill.size if intent.side == "buy" else -fill.size
     if position is None:
-        return Position(symbol=intent.symbol, net_size=signed, average_price=fill.price, unrealized_pnl=0.0)
-    net = position.net_size + signed
-    average = (position.average_price * position.net_size + fill.price * signed) / net if net != 0 else 0.0
-    return Position(symbol=intent.symbol, net_size=net, average_price=average, unrealized_pnl=0.0)
+        average = fill.price
+        net = signed
+    else:
+        net = position.net_size + signed
+        average = (position.average_price * position.net_size + fill.price * signed) / net if net != 0 else 0.0
+    mark = mark_price if mark_price is not None else fill.price
+    return Position(symbol=intent.symbol, net_size=net, average_price=average, unrealized_pnl=(mark - average) * net)
 
 
-def update_day_pnl(state: RiskState, position: Position, mark_price: float) -> RiskState:
-    return replace(state, day_pnl=(mark_price - position.average_price) * position.net_size)
+def realized_pnl(position: Optional[Position], intent: OrderIntent, fill: Fill) -> float:
+    if position is None or position.net_size == 0:
+        return 0.0
+    signed = fill.size if intent.side == "buy" else -fill.size
+    if (position.net_size > 0) == (signed > 0):
+        return 0.0
+    closed = min(abs(position.net_size), abs(signed))
+    direction = 1.0 if position.net_size > 0 else -1.0
+    return (fill.price - position.average_price) * closed * direction
+
+
+def update_day_pnl(
+    state: RiskState,
+    old_position: Optional[Position],
+    new_position: Position,
+    realized: float = 0.0,
+    fees: float = 0.0,
+) -> RiskState:
+    old_unrealized = old_position.unrealized_pnl if old_position is not None else 0.0
+    return replace(state, day_pnl=state.day_pnl + (new_position.unrealized_pnl - old_unrealized) + realized - fees)
+
+
+def paper_fill_price(side: str, mark_price: float, bid: Optional[float], ask: Optional[float]) -> float:
+    if side == "buy" and ask is not None and ask > 0:
+        return ask
+    if side == "sell" and bid is not None and bid > 0:
+        return bid
+    return mark_price
 
 
 def submit_paper(
     intent: OrderIntent,
-    fill_price: float,
     mark_price: float,
     state: RiskState,
     position: Optional[Position],
     limits: RiskLimits,
     journal: Journal,
     now: datetime,
+    bid: Optional[float] = None,
+    ask: Optional[float] = None,
+    slippage_bps: float = 0.0,
+    fees: float = 0.0,
 ) -> tuple[Fill, Position, RiskState]:
+    touch = paper_fill_price(intent.side, mark_price, bid, ask)
+    slip = touch * slippage_bps / 10000.0
+    fill_price = touch + slip if intent.side == "buy" else touch - slip
     fill = Fill(price=fill_price, size=intent.size, timestamp_utc=now, venue="paper")
     journal.append(
         now,
         "fill",
         {
+            "symbol": intent.symbol,
+            "side": intent.side,
             "price": fill.price,
             "size": fill.size,
             "venue": "paper",
+            "mark_price": mark_price,
+            "bid": bid,
+            "ask": ask,
+            "slippage_bps": slippage_bps,
+            "fees": fees,
             "legs": [_leg_summary(leg) for leg in intent.legs],
         },
     )
-    updated_position = update_position(position, intent, fill)
-    updated_state = update_day_pnl(state, updated_position, mark_price)
+    updated_position = update_position(position, intent, fill, mark_price)
+    updated_state = update_day_pnl(state, position, updated_position, realized_pnl(position, intent, fill), fees)
     if updated_state.day_pnl <= -limits.max_day_loss:
         updated_state = fire_halt(updated_state)
         journal.append(now, "halt", {"day_pnl": updated_state.day_pnl})

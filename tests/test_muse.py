@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -59,8 +60,8 @@ def test_chat_brief_carries_profile_numbers():
     reply = handle_chat(request, store, Journal(), CONFIG, NOW)
     assert reply.ok is True
     assert reply.error == ""
-    assert "total exposure: -1000.0" in reply.reply
-    assert "strike 100.0: -1000.0" in reply.reply
+    assert "total exposure: $-104,040" in reply.reply
+    assert "strike 100.0:" not in reply.reply
     assert "direction: flat" in reply.reply
 
 
@@ -70,7 +71,7 @@ def test_dashboard_text_returns_pinned_link():
     reply = handle_chat(request, store, Journal(), CONFIG, NOW)
     assert reply.ok is True
     assert reply.reply.startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST:" in reply.reply
+    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in reply.reply
 
 
 def test_blank_text_payload_raises():
@@ -95,19 +96,34 @@ def test_unknown_tool_names_tool():
 
 
 def test_registry_tools_answer():
-    assert set(TOOL_REGISTRY) == {"get_gex_brief", "get_dashboard_link", "get_trade_ideas"}
+    assert set(TOOL_REGISTRY) == {
+        "get_gex_brief", "get_dashboard_link", "get_trade_ideas",
+        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl",
+    }
     store = _seeded_store()
     journal = Journal()
     brief = dispatch_tool("get_gex_brief", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert brief.ok is True
-    assert "total exposure: -1000.0" in brief.reply
+    assert "total exposure: $-104,040" in brief.reply
     link = dispatch_tool("get_dashboard_link", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert link.ok is True
     assert link.reply.startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST:" in link.reply
+    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in link.reply
     ideas = dispatch_tool("get_trade_ideas", {"query": "weekly trade ideas"}, store, journal, CONFIG, NOW, underlying="TEST")
     assert ideas.ok is True
     assert "trade ideas" in ideas.reply
+    vex = dispatch_tool("get_vex_brief", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert vex.ok is True
+    assert "VEX brief" in vex.reply
+    dex = dispatch_tool("get_dex_brief", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert dex.ok is True
+    assert "DEX brief" in dex.reply
+    tail = dispatch_tool("journal_tail", {"count": 2}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert tail.ok is True
+    assert "journal tail" in tail.reply
+    pnl = dispatch_tool("paper_pnl", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert pnl.ok is True
+    assert "paper pnl" in pnl.reply
 
 
 def test_openapi_spec_lists_both_paths():
@@ -118,52 +134,109 @@ def test_openapi_spec_lists_both_paths():
     assert "/mcp" in spec["paths"]
 
 
+def _json_body(response):
+    assert response.content_type == "application/json"
+    return json.loads(response.body.decode("utf-8"))
+
+
 def test_route_chat_round_trip_carries_profile_numbers():
-    status, body = route_http(
+    response = route_http(
         "POST", "/chat",
         {"text": "give me the gex brief", "underlying": "TEST"},
         _seeded_store(), Journal(), CONFIG, NOW,
     )
-    assert status == 200
+    assert response.status == 200
+    body = _json_body(response)
     assert body["ok"] is True
-    assert "total exposure: -1000.0" in body["reply"]
+    assert "total exposure: $-104,040" in body["reply"]
 
 
 def test_route_chat_rejects_non_dict_and_blank_payloads():
-    status, body = route_http("POST", "/chat", ["not", "a", "dict"], _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 400
-    assert body["ok"] is False
-    status, body = route_http("POST", "/chat", {"text": "   ", "underlying": "TEST"}, _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 400
-    assert body["ok"] is False
+    response = route_http("POST", "/chat", ["not", "a", "dict"], _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 400
+    assert _json_body(response)["ok"] is False
+    response = route_http("POST", "/chat", {"text": "   ", "underlying": "TEST"}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 400
+    assert _json_body(response)["ok"] is False
 
 
 def test_route_mcp_tools_list_names_registry():
-    status, body = route_http("POST", "/mcp", {"method": "tools/list"}, _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 200
-    assert {tool["name"] for tool in body["tools"]} == {"get_gex_brief", "get_dashboard_link", "get_trade_ideas"}
+    response = route_http("POST", "/mcp", {"method": "tools/list"}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 200
+    body = _json_body(response)
+    assert {tool["name"] for tool in body["tools"]} == {
+        "get_gex_brief", "get_dashboard_link", "get_trade_ideas",
+        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl",
+    }
 
 
 def test_route_mcp_tools_call_dashboard_link_pinned():
     payload = {"method": "tools/call", "params": {"name": "get_dashboard_link", "arguments": {}, "underlying": "TEST"}}
-    status, body = route_http("POST", "/mcp", payload, _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 200
+    response = route_http("POST", "/mcp", payload, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 200
+    body = _json_body(response)
     assert body["ok"] is True
     assert body["reply"].startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST:" in body["reply"]
+    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in body["reply"]
 
 
 def test_route_mcp_unknown_method_names_it():
-    status, body = route_http("POST", "/mcp", {"method": "tools/nope"}, _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 400
-    assert "tools/nope" in body["error"]
+    response = route_http("POST", "/mcp", {"method": "tools/nope"}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 400
+    assert "tools/nope" in _json_body(response)["error"]
+
+
+def test_route_http_enforces_bearer_token_when_set():
+    store = _seeded_store()
+    journal = Journal()
+    denied = route_http(
+        "POST", "/chat", {"text": "gex brief", "underlying": "TEST"},
+        store, journal, CONFIG, NOW, auth_token="secret",
+    )
+    assert denied.status == 401
+    wrong = route_http(
+        "POST", "/chat", {"text": "gex brief", "underlying": "TEST"},
+        store, journal, CONFIG, NOW, auth_token="secret", authorization="Bearer nope",
+    )
+    assert wrong.status == 401
+    allowed = route_http(
+        "POST", "/chat", {"text": "gex brief", "underlying": "TEST"},
+        store, journal, CONFIG, NOW, auth_token="secret", authorization="Bearer secret",
+    )
+    assert allowed.status == 200
+    assert _json_body(allowed)["ok"] is True
+
+
+def test_health_endpoints_stay_open_behind_auth():
+    store = _seeded_store()
+    journal = Journal()
+    for path in ("/healthz", "/health", "/openapi.json"):
+        response = route_http("GET", path, {}, store, journal, CONFIG, NOW, auth_token="secret")
+        assert response.status == 200
+
+
+def test_health_reports_last_ingest_and_feed():
+    store = _seeded_store()
+    journal = Journal()
+    journal.append(NOW - timedelta(minutes=5), "snapshot_ingested",
+                   {"snapshot_id": "TEST:snap-1", "source_name": "marketdata_eod"})
+    journal.append(NOW - timedelta(minutes=4), "bars_ingested",
+                   {"source_name": "alpaca", "underlying": "TEST", "count": 2})
+    response = route_http("GET", "/health", {}, store, journal, CONFIG, NOW)
+    assert response.status == 200
+    body = _json_body(response)
+    assert body["ok"] is True
+    assert body["feed_used"] == "alpaca"
+    assert body["last_ingest_utc"] == (NOW - timedelta(minutes=4)).isoformat()
+    assert body["snapshot_age_seconds"] == pytest.approx(240.0)
+    assert body["underlyings"] == ["TEST"]
 
 
 def test_route_unknown_path_returns_404():
-    status, _ = route_http("GET", "/missing", {}, _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 404
-    status, _ = route_http("POST", "/missing", {}, _seeded_store(), Journal(), CONFIG, NOW)
-    assert status == 404
+    response = route_http("GET", "/missing", {}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 404
+    response = route_http("POST", "/missing", {}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 404
 
 
 def test_harness_routes_text_voice_dashboard_push():
