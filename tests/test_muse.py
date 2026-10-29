@@ -62,7 +62,7 @@ def test_chat_brief_carries_profile_numbers():
     assert reply.error == ""
     assert "total exposure: $-104,040" in reply.reply
     assert "strike 100.0:" not in reply.reply
-    assert "direction: flat" in reply.reply
+    assert "direction: short confidence: 0.50 (regime fallback)" in reply.reply
 
 
 def test_dashboard_text_returns_pinned_link():

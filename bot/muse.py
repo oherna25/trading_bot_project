@@ -6,11 +6,11 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional, Sequence
 
 from bot.config import auth_token as _auth_token, dashboard_base_url as _dashboard_base_url
 from bot.dashboard import dashboard_html, screen_to_json
-from bot.feeds import default_context, ingest_bars, ingest_chain
+from bot.feeds import FeedContext, default_context, ingest_bars, ingest_chain, live_context
 from bot.journal import Journal
 from bot.persist import bundle_mtimes, refresh_bundle
 from bot.research import (
@@ -356,6 +356,48 @@ def resolve_port(explicit: Optional[int]) -> int:
     return int(raw)
 
 
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def open_server_warning(host: str, auth_token: Optional[str]) -> Optional[str]:
+    if host not in LOOPBACK_HOSTS and not auth_token:
+        return f"warning: serving unauthenticated on {host}; set MUSE_AUTH_TOKEN or bind 127.0.0.1"
+    return None
+
+
+def start_refresh_loop(
+    store: SnapshotStore,
+    journal: Journal,
+    symbols: Sequence[str],
+    store_dir: str,
+    interval_seconds: float,
+    lock: threading.Lock,
+    context_factory: Callable[[str], FeedContext] = live_context,
+    stop: Optional[threading.Event] = None,
+) -> threading.Event:
+    from bot.schedule import normalize_underlyings, refresh_store
+
+    halt = stop or threading.Event()
+    fixed = normalize_underlyings(symbols) if symbols else []
+
+    def _loop() -> None:
+        while not halt.wait(interval_seconds):
+            try:
+                with lock:
+                    refresh_store(
+                        fixed or store.list_underlyings() or ["SPY"],
+                        store,
+                        journal,
+                        store_dir,
+                        context_factory=context_factory,
+                    )
+            except Exception as exc:
+                print(json.dumps({"refresh": "failed", "error": type(exc).__name__}), flush=True)
+
+    threading.Thread(target=_loop, name="refresh-loop", daemon=True).start()
+    return halt
+
+
 def create_server(
     store: SnapshotStore,
     journal: Journal,
@@ -364,12 +406,18 @@ def create_server(
     port: Optional[int] = None,
     store_dir: Optional[str] = None,
     token: Optional[str] = None,
+    refresh_seconds: float = 0,
+    refresh_symbols: Sequence[str] = (),
+    refresh_context_factory: Callable[[str], FeedContext] = live_context,
 ):  # -> ThreadingHTTPServer
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     bound = resolve_port(port)
     lock = threading.Lock()
     expected = token if token is not None else _auth_token()
+    warning = open_server_warning(host, expected)
+    if warning is not None:
+        print(warning, flush=True)
     mtimes = bundle_mtimes(store_dir) if store_dir else {}
 
     class _Handler(BaseHTTPRequestHandler):
@@ -437,7 +485,13 @@ def create_server(
         def do_HEAD(self) -> None:
             self._handle()
 
-    return ThreadingHTTPServer((host, bound), _Handler)
+    server = ThreadingHTTPServer((host, bound), _Handler)
+    if refresh_seconds and refresh_seconds > 0 and store_dir:
+        server.refresh_stop = start_refresh_loop(  # type: ignore[attr-defined]
+            store, journal, refresh_symbols, store_dir, refresh_seconds, lock,
+            context_factory=refresh_context_factory,
+        )
+    return server
 
 
 def serve(
@@ -447,8 +501,16 @@ def serve(
     host: str = "0.0.0.0",
     port: Optional[int] = None,
     store_dir: Optional[str] = None,
+    refresh_seconds: float = 0,
+    refresh_symbols: Sequence[str] = (),
+    refresh_context_factory: Callable[[str], FeedContext] = live_context,
 ) -> None:
-    create_server(store, journal, config, host, port, store_dir).serve_forever()
+    create_server(
+        store, journal, config, host, port, store_dir,
+        refresh_seconds=refresh_seconds,
+        refresh_symbols=refresh_symbols,
+        refresh_context_factory=refresh_context_factory,
+    ).serve_forever()
 
 
 def default_dashboard_base_url(env: Mapping[str, str] | None = None) -> str:

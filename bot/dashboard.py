@@ -77,7 +77,12 @@ class DashboardScreen:
 
 def build_header(signal: Signal, snapshot: ChainSnapshot, bars: list[Bar]) -> HeaderView:
     price = bars[-1].close if bars else None
-    day_change = bars[-1].close - bars[-2].close if len(bars) >= 2 else None
+    if len(bars) >= 2:
+        day_change = bars[-1].close - bars[-2].close
+    elif bars:
+        day_change = bars[-1].close - bars[-1].open
+    else:
+        day_change = None
     return HeaderView(
         rank=1,
         scan_name=f"{snapshot.underlying} scan",
@@ -111,20 +116,41 @@ def build_conviction(signal: Signal, bar: Optional[Bar]) -> ConvictionView:
     )
 
 
-def _qualifies(contract: OptionContract) -> bool:
-    return contract.open_interest > 0
+MAX_SPOT_DISTANCE_PCT = 20.0
+MAX_QUALIFYING_SPREAD_PCT = 50.0
 
 
-def build_options(snapshot: ChainSnapshot, profile: GexProfile) -> OptionsView:
-    qualifying = [c for c in snapshot.contracts_list if _qualifies(c)]
+def _quote_spread_pct(contract: OptionContract) -> Optional[float]:
+    if contract.bid is None or contract.ask is None or not contract.price:
+        return None
+    return (contract.ask - contract.bid) / contract.price * 100.0
+
+
+def _qualifies(contract: OptionContract, spot: Optional[float] = None) -> bool:
+    if contract.open_interest <= 0:
+        return False
+    pct = _quote_spread_pct(contract)
+    if pct is not None and pct > MAX_QUALIFYING_SPREAD_PCT:
+        return False
+    if spot:
+        return abs(contract.strike - spot) / spot * 100.0 <= MAX_SPOT_DISTANCE_PCT
+    return True
+
+
+def build_options(
+    snapshot: ChainSnapshot, profile: GexProfile, spot: Optional[float] = None
+) -> OptionsView:
+    qualifying = [c for c in snapshot.contracts_list if _qualifies(c, spot)]
     return OptionsView(
         qualifying_count=len(qualifying),
         regime="long-gamma" if profile.total_exposure >= 0.0 else "short-gamma",
     )
 
 
-def build_top_contract(snapshot: ChainSnapshot, signal: Signal) -> Optional[TopContractView]:
-    qualifying = [c for c in snapshot.contracts_list if _qualifies(c)]
+def build_top_contract(
+    snapshot: ChainSnapshot, signal: Signal, spot: Optional[float] = None
+) -> Optional[TopContractView]:
+    qualifying = [c for c in snapshot.contracts_list if _qualifies(c, spot)]
     if not qualifying:
         return None
     top = max(qualifying, key=lambda c: c.open_interest)
@@ -160,12 +186,13 @@ def dashboard_view(
     profile = compute_gex(snapshot, snapshot_id)
     bars = store.read_bars(snapshot.underlying)
     bar = bars[-1] if bars else None
+    spot = bar.close if bar is not None else None
     return DashboardScreen(
         header=build_header(signal, snapshot, bars),
         strip=build_alignment(signal, snapshot),
         grid=build_conviction(signal, bar),
-        options=build_options(snapshot, profile),
-        card=build_top_contract(snapshot, signal),
+        options=build_options(snapshot, profile, spot),
+        card=build_top_contract(snapshot, signal, spot),
         positions=tuple(positions),
         journal_view=tuple(journal.entries()),
     )

@@ -1,7 +1,9 @@
 """Local entry point: live brief plus persistent store plus HTTP server.
 
 Runs the live brief once against the local JSON bundle, prints it, then
-serves the same store and journal over HTTP (this call blocks)::
+serves the same store and journal over HTTP (this call blocks), re-ingesting
+on a timer (``--refresh-seconds``, default 900, 0 disables) so snapshots stay
+fresh without restarts::
 
     .venv/bin/python run_app.py
     .venv/bin/python run_app.py --underlying SPY --store-dir data/trading-bot --host 0.0.0.0 --port 8000
@@ -30,6 +32,7 @@ STORE_DIR = "data/trading-bot"
 HOST = "0.0.0.0"
 PORT = 8000
 SECRETS_DIR = "/secrets"
+REFRESH_SECONDS = 900.0
 
 
 def materialize_file_secrets(secrets_dir: str = SECRETS_DIR) -> None:
@@ -48,14 +51,16 @@ def run(
     store_dir: str = STORE_DIR,
     host: str = HOST,
     port: Optional[int] = None,
+    refresh_seconds: float = REFRESH_SECONDS,
 ) -> str:
     materialize_file_secrets()
     port = resolve_port(port)
     store, journal = load_bundle(store_dir)
     config = operator_config(default_dashboard_base_url(), store.read_profile())
+    symbols = normalize_underlyings(underlying)
     briefs = []
     failures = []
-    for symbol in normalize_underlyings(underlying):
+    for symbol in symbols:
         try:
             briefs.append(live_brief(symbol, store, journal, datetime.now(timezone.utc)))
         except FeedUnavailableError as exc:
@@ -67,8 +72,11 @@ def run(
         f"limits max_day_loss={config.max_day_loss} "
         f"day_profit_target={config.day_profit_target} max_trade_size={config.max_trade_size}"
     )
+    if refresh_seconds > 0:
+        print(f"refreshing {','.join(symbols)} every {refresh_seconds:g}s")
     print(f"serving on {host}:{port}")
-    serve(store, journal, config, host, port, store_dir)
+    serve(store, journal, config, host, port, store_dir,
+          refresh_seconds=refresh_seconds, refresh_symbols=symbols)
     if failures and not briefs:
         return "\n".join(failures)
     return "\n---\n".join(briefs + failures)
@@ -95,12 +103,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help=f"HTTP bind port (default: $PORT, else {PORT}).",
     )
+    parser.add_argument(
+        "--refresh-seconds",
+        type=float,
+        default=REFRESH_SECONDS,
+        help=f"Re-ingest interval while serving; 0 disables (default: {REFRESH_SECONDS:g}).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> str:
     args = parse_args(argv)
-    return run(args.underlying, args.store_dir, args.host, args.port)
+    return run(args.underlying, args.store_dir, args.host, args.port, args.refresh_seconds)
 
 
 if __name__ == "__main__":

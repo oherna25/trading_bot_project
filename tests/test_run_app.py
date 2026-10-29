@@ -10,16 +10,19 @@ def test_parse_args_defaults():
     assert args.store_dir == "data/trading-bot"
     assert args.host == "0.0.0.0"
     assert args.port is None
+    assert args.refresh_seconds == 900.0
 
 
 def test_parse_args_overrides():
     args = run_app.parse_args(
-        ["--underlying", "QQQ", "--store-dir", "/tmp/bundle", "--host", "127.0.0.1", "--port", "9001"]
+        ["--underlying", "QQQ", "--store-dir", "/tmp/bundle", "--host", "127.0.0.1", "--port", "9001",
+         "--refresh-seconds", "60"]
     )
     assert args.underlying == "QQQ"
     assert args.store_dir == "/tmp/bundle"
     assert args.host == "127.0.0.1"
     assert args.port == 9001
+    assert args.refresh_seconds == 60.0
 
 
 def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
@@ -33,7 +36,7 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
         seen["journal"] = journal
         return "brief text"
 
-    def fake_serve(store, journal, config, host, port, store_dir):
+    def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen["serve_store"] = store
         seen["serve_journal"] = journal
         seen["config"] = config
@@ -73,7 +76,7 @@ def test_main_feed_failure_still_serves(monkeypatch, capsys, tmp_path):
     def failing_live_brief(underlying, store, journal, now):
         raise FeedUnavailableError("all chain feeds failed for QQQ")
 
-    def fake_serve(store, journal, config, host, port, store_dir):
+    def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen["called"] = True
         seen["host"] = host
         seen["port"] = port
@@ -95,7 +98,7 @@ def test_main_port_env_flows_to_serve(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     seen = {}
 
-    def fake_serve(store, journal, config, host, port, store_dir):
+    def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen["host"] = host
         seen["port"] = port
 
@@ -126,7 +129,7 @@ def test_main_wires_saved_profile_into_limits(monkeypatch, tmp_path):
     save_bundle(str(tmp_path), store, Journal())
     seen = {}
 
-    def fake_serve(store, journal, config, host, port, store_dir):
+    def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen["config"] = config
 
     monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
@@ -145,10 +148,23 @@ def test_main_briefs_multiple_underlyings(monkeypatch, tmp_path):
         return f"brief {underlying}"
 
     monkeypatch.setattr(run_app, "live_brief", fake_live_brief)
-    monkeypatch.setattr(run_app, "serve", lambda *args: None)
+    monkeypatch.setattr(run_app, "serve", lambda *args, **kwargs: None)
     result = run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path)])
     assert seen == ["SPY", "QQQ"]
     assert result == "brief SPY\n---\nbrief QQQ"
+
+
+def test_main_passes_refresh_to_serve(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
+        seen.update(kwargs)
+
+    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "serve", fake_serve)
+    run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path), "--refresh-seconds", "60"])
+    assert seen == {"refresh_seconds": 60.0, "refresh_symbols": ["SPY", "QQQ"]}
 
 
 def test_materialize_file_secrets_prefers_real_env(monkeypatch, tmp_path):

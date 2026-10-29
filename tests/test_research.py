@@ -57,7 +57,7 @@ def test_chat_brief_carries_profile_numbers():
     assert "coverage 100%" in reply
     assert "calls $520,200 / puts $-624,240" in reply
     assert "change vs previous: n/a (first snapshot)" in reply
-    assert "direction: flat" in reply
+    assert "direction: short confidence: 0.50 (regime fallback)" in reply
 
 
 def test_chat_brief_shows_change_vs_previous_snapshot():
@@ -189,6 +189,58 @@ def test_scheduled_brief_alerts_on_regime_flip_and_stale_snapshot():
     assert "ALERT: snapshot is stale" in reply
     assert "ALERT: regime flipped short-gamma -> long-gamma" in reply
     assert [e.kind for e in journal.entries() if e.kind == "alert"] == ["alert", "alert"]
+
+
+def test_brief_direction_matches_ideas_and_regime_without_flip():
+    store = _seeded_store()
+    journal = Journal()
+    reply = route_chat("give me the gex brief", "TEST", store, journal, CONFIG, NOW)
+    assert "direction: short" in reply
+    assert "regime short-gamma" in reply
+    ideas_reply = route_chat("show me trade ideas", "TEST", store, journal, CONFIG, NOW)
+    assert "TEST short" in ideas_reply
+    assert "TEST long" not in ideas_reply
+
+
+def test_change_line_labels_negative_previous_direction():
+    store = _seeded_store()
+    journal = Journal()
+    route_chat("gex brief", "TEST", store, journal, CONFIG, NOW)
+    store.save(
+        ChainSnapshot(
+            underlying="TEST",
+            timestamp_utc=NOW + timedelta(hours=1),
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(
+                OptionContract(
+                    strike=100.0, expiry="2026-11-20", call_or_put="call", open_interest=1000.0,
+                    gamma=0.05, price=2.50, bid=2.40, ask=2.60, iv=0.30,
+                ),
+            ),
+        )
+    )
+    less = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
+    assert "change vs previous: $624,240 (+600.0%, less negative)" in less
+    store = _seeded_store()
+    journal = Journal()
+    route_chat("gex brief", "TEST", store, journal, CONFIG, NOW)
+    store.save(
+        ChainSnapshot(
+            underlying="TEST",
+            timestamp_utc=NOW + timedelta(hours=1),
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(
+                OptionContract(
+                    strike=100.0, expiry="2026-11-20", call_or_put="put", open_interest=1000.0,
+                    gamma=0.03, price=3.00, bid=2.90, ask=3.10, iv=0.32,
+                ),
+            ),
+        )
+    )
+    more = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
+    assert "change vs previous: $-208,080 (-200.0%, more negative)" in more
 
 
 def test_dashboard_numbers_match_chat_numbers_on_same_snapshot():

@@ -113,7 +113,7 @@ def test_rank_ideas_orders_by_gamma_open_interest():
     assert (ideas[0].strike, ideas[0].call_or_put) in {(100.0, "put"), (95.0, "put")}
 
 
-def test_rank_ideas_caps_at_ten():
+def test_rank_ideas_caps_total_and_per_direction():
     snapshot = ChainSnapshot(
         underlying="WIDE",
         timestamp_utc=NOW,
@@ -125,8 +125,8 @@ def test_rank_ideas_caps_at_ten():
     )
     snapshot_id = f"WIDE:{NOW.isoformat()}"
     ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
-    assert len(ideas) == 10
-    assert {idea.strike for idea in ideas} == {82.0 + n for n in range(10)}
+    assert len(ideas) == 7
+    assert {idea.strike for idea in ideas} == {85.0 + n for n in range(7)}
 
 
 def test_rank_ideas_timeframe_filters_by_expiry():
@@ -355,3 +355,67 @@ def test_route_chat_dashboard_stays_before_ideas():
     store = _seeded_store()
     reply = route_chat("dashboard idea", "TEST", store, Journal(), CONFIG, NOW)
     assert reply.startswith("dashboard for snapshot TEST:")
+
+
+def test_rank_ideas_excludes_same_day_and_expired_contracts():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            _contract(100.0, "2026-10-27", "call", 5000.0, 0.20),
+            _contract(101.0, "2026-10-26", "call", 5000.0, 0.20),
+            _contract(102.0, "2026-10-28", "call", 5000.0, 0.20),
+            _contract(103.0, "2026-11-20", "call", 5000.0, 0.20),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)], now=NOW)
+    assert {i.strike for i in ideas} == {102.0, 103.0}
+
+
+def test_rank_ideas_caps_each_direction_in_mixed_universe():
+    def _snapshot(symbol, side, sign):
+        contracts = tuple(
+            OptionContract(
+                strike=100.0 + n, expiry="2026-11-20", call_or_put=side,
+                open_interest=1000.0, gamma=0.05,
+            )
+            for n in range(8)
+        )
+        snapshot = ChainSnapshot(
+            underlying=symbol, timestamp_utc=NOW, source_name="tradier_sandbox",
+            latency_ms=1.0, contracts_list=contracts,
+        )
+        snapshot_id = f"{symbol}:{NOW.isoformat()}"
+        assert (compute_gex(snapshot, snapshot_id).total_exposure > 0) == (sign > 0)
+        return (snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)
+
+    ideas = rank_ideas([_snapshot("UP", "call", 1), _snapshot("DOWN", "put", -1)])
+    assert len(ideas) == 10
+    longs = [i for i in ideas if i.direction == "long"]
+    shorts = [i for i in ideas if i.direction == "short"]
+    assert len(longs) == 3
+    assert len(shorts) == 7
+
+
+def test_rank_ideas_orders_by_printed_confidence_not_raw_score():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.10,
+                           price=2.50, bid=2.40, ask=2.60),
+            OptionContract(strike=100.0, expiry="2026-12-18", call_or_put="call",
+                           open_interest=900.0, gamma=0.10,
+                           price=5.00, bid=4.95, ask=5.05),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    assert [i.expiry for i in ideas] == ["2026-12-18", "2026-11-20"]
+    assert [i.confidence for i in ideas] == sorted([i.confidence for i in ideas], reverse=True)

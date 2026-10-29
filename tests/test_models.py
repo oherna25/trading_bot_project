@@ -160,13 +160,13 @@ def test_backend_runs_tool_loop_and_journals_receipts():
     assert json.loads(tool_messages[0]["content"])["total_exposure"] == pytest.approx(-1000.0)
 
 
-def test_backend_missing_markers_use_flip_defaults():
+def test_backend_missing_markers_use_regime_fallback():
     store = _seeded_store()
     snapshot_id, snapshot, profile, bar = _snapshot_parts(store)
     http_post = _canned_post([_final_leg("A plain thesis with no markers.")])
     signal = analyst_backend("brief", snapshot_id, snapshot, profile, bar, Journal(), NOW,
                              live_models=True, env=FULL_ENV, http_post=http_post)
-    assert signal.direction == "flat"
+    assert signal.direction == "short"
     assert signal.confidence == pytest.approx(0.5)
     assert signal.thesis == "A plain thesis with no markers."
 
@@ -177,7 +177,7 @@ def test_backend_bad_direction_and_big_confidence_clamp():
     http_post = _canned_post([_final_leg("Thesis.\nDIRECTION: sideways\nCONFIDENCE: 9")])
     signal = analyst_backend("brief", snapshot_id, snapshot, profile, bar, Journal(), NOW,
                              live_models=True, env=FULL_ENV, http_post=http_post)
-    assert signal.direction == "flat"
+    assert signal.direction == "short"
     assert signal.confidence == pytest.approx(1.0)
 
 

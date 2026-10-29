@@ -112,14 +112,78 @@ def test_place_single_option_leg_uses_occ_symbol():
     assert payload["symbol"] == "TEST  261120C00100000"
 
 
-def test_place_order_rejects_multi_leg_combo():
-    venue = _canned_venue({}, {}, [])
+def _combo_venue(fills, log):
+    state = {"next": 0}
+
+    def http_post(url, headers, payload, timeout):
+        log.append(("POST", url, payload))
+        order_id = fills[state["next"]][0]
+        state["next"] += 1
+        return {"order": {"id": order_id, "status": "ok"}}
+
+    def http_get(url, headers, timeout):
+        log.append(("GET", url, None))
+        wanted = url.rsplit("/", 1)[-1]
+        for order_id, price, status in fills:
+            if str(order_id) == wanted:
+                node = {"id": order_id, "status": status}
+                if price is not None:
+                    node["avg_fill_price"] = price
+                return {"order": node}
+        raise AssertionError(f"unexpected url {url}")
+
+    return TradierVenue(account_id="acc", token="tok", http_post=http_post, http_get=http_get)
+
+
+def _combo_intent():
     legs = even_legs(1000.0, [("TEST", "buy", 100.0, "2026-11-20", "call"),
                               ("TEST", "sell", 105.0, "2026-11-20", "call")])
+    return OrderIntent(symbol="TEST", side="buy", size=1000.0,
+                       risk_numbers={"size": 1000.0}, signal_id="sig-1", legs=legs)
+
+
+def test_place_combo_fills_each_leg_and_nets_premium():
+    log = []
+    venue = _combo_venue([(11, 2.5, "filled"), (12, 1.0, "filled")], log)
+    ack = venue.place_order(_combo_intent(), 2.5)
+    assert ack == LiveAck(order_id="11+12", status="filled", fill_price=pytest.approx(1.5), quantity=4)
+    posts = [entry for entry in log if entry[0] == "POST"]
+    assert len(posts) == 2
+    assert posts[0][2]["class"] == "option"
+    assert posts[0][2]["symbol"] == "TEST  261120C00100000"
+    assert posts[0][2]["side"] == "buy"
+    assert posts[0][2]["quantity"] == 2
+    assert posts[0][2]["duration"] == "day"
+    assert posts[1][2]["class"] == "option"
+    assert posts[1][2]["symbol"] == "TEST  261120C00105000"
+    assert posts[1][2]["side"] == "sell"
+    assert posts[1][2]["quantity"] == 2
+    assert posts[1][2]["duration"] == "day"
+
+
+def test_place_combo_partial_fill_names_filled_and_failed_leg():
+    log = []
+    venue = _combo_venue([(21, 2.5, "filled"), (22, None, "open")], log)
+    with pytest.raises(LiveOrderError) as excinfo:
+        venue.place_order(_combo_intent(), 2.5)
+    message = str(excinfo.value)
+    assert "21" in message
+    assert "combo leg 2/2" in message
+    assert "TEST  261120C00105000" in message
+    assert "manual" in message
+
+
+def test_place_combo_rejects_non_option_leg():
+    venue = _canned_venue({}, {}, [])
+    legs = (
+        OrderLeg(symbol="TEST", side="buy", size=500.0, strike=100.0,
+                 expiry="2026-11-20", call_or_put="call"),
+        OrderLeg(symbol="TEST", side="sell", size=500.0),
+    )
     intent = OrderIntent(symbol="TEST", side="buy", size=1000.0,
                          risk_numbers={"size": 1000.0}, signal_id="sig-1", legs=legs)
-    with pytest.raises(LiveOrderError, match="combo"):
-        venue.place_order(intent, 100.0)
+    with pytest.raises(LiveOrderError, match="not an option leg"):
+        venue.place_order(intent, 2.5)
 
 
 def test_place_order_rejects_missing_reference_price():

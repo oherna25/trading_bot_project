@@ -19,7 +19,7 @@ from bot.feeds import (
     ingest_chain,
     live_context,
 )
-from bot.ideas import format_ideas, parse_timeframe, rank_ideas, symbols_for
+from bot.ideas import format_ideas, parse_timeframe, rank_ideas, resolve_direction, symbols_for
 from bot.journal import Journal
 from bot.profile import build_profile, format_questionnaire, format_summary, parse_answers, suggest_params
 from bot.models import (
@@ -49,13 +49,7 @@ from bot.store import SnapshotId, SnapshotStore
 
 
 def analyst_tool(text: str, snapshot: ChainSnapshot, profile: GexProfile, bar: Optional[Bar]) -> Signal:
-    flip = profile.flip_point
-    if flip is None or bar is None:
-        direction = "flat"
-    elif bar.close > flip:
-        direction = "long"
-    else:
-        direction = "short"
+    direction = resolve_direction(bar, profile.flip_point, profile.total_exposure)
     return Signal(
         direction=direction,
         thesis=f"analyst read on {snapshot.underlying} for query: {text}",
@@ -378,10 +372,19 @@ def format_brief(
         delta = profile.total_exposure - previous.total_exposure
         if previous.total_exposure != 0:
             pct = delta / abs(previous.total_exposure) * 100.0
-            lines.append(f"change vs previous: {_money(delta)} ({pct:+.1f}%)")
+            note = ""
+            if previous.total_exposure < 0:
+                if delta > 0:
+                    note = ", less negative"
+                elif delta < 0:
+                    note = ", more negative"
+            lines.append(f"change vs previous: {_money(delta)} ({pct:+.1f}%{note})")
         else:
             lines.append(f"change vs previous: {_money(delta)}")
-    lines.append(f"direction: {signal.direction} confidence: {signal.confidence:.2f}")
+    basis = ""
+    if (profile.flip_point is None or bar is None) and signal.direction != "flat":
+        basis = " (regime fallback)"
+    lines.append(f"direction: {signal.direction} confidence: {signal.confidence:.2f}{basis}")
     lines.append(f"status: {signal.status} trigger: {signal.trigger}")
     return "\n".join(lines)
 
@@ -436,14 +439,15 @@ def handle_chat_query(
     bar = store.read_latest_bar(underlying)
     spot = bar.close if bar is not None else None
     profile = compute_gex(snapshot, snapshot_id, spot=spot)
+    stamp = max(now, snapshot.timestamp_utc)
     signal = replace(
         analyst_backend(
-            text, snapshot_id, snapshot, profile, bar, journal, now, live_models, grounding, env, http_post
+            text, snapshot_id, snapshot, profile, bar, journal, stamp, live_models, grounding, env, http_post
         ),
         snapshot_id=snapshot_id,
     )
     signal = derive_display(signal, snapshot, profile, bar)
-    journal.append(now, "signal", {"snapshot_id": snapshot_id, "direction": signal.direction, "thesis": signal.thesis})
+    journal.append(stamp, "signal", {"snapshot_id": snapshot_id, "direction": signal.direction, "thesis": signal.thesis})
     prev = previous_profile(store, underlying, snapshot_id, spot)
     reply = format_brief(profile, signal, snapshot, bar, now, prev)
     if cards:
@@ -707,7 +711,7 @@ def route_chat(
     return reply
 
 
-def _ingest_first_working(
+def ingest_first_working(
     feed_names: Sequence[str],
     ingest: Callable[..., object],
     underlying: str,
@@ -740,8 +744,8 @@ def live_brief(
 ) -> str:
     chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
     bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
-    if _ingest_first_working(chains, ingest_chain, underlying, store, journal, now, context_factory) is None:
+    if ingest_first_working(chains, ingest_chain, underlying, store, journal, now, context_factory) is None:
         raise FeedUnavailableError(f"all chain feeds failed for {underlying}")
-    _ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
+    ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
     reply, _ = handle_chat_query("live session brief", underlying, store, journal, now, live_models, grounding, cards)
     return reply

@@ -18,6 +18,12 @@ class Journal:
     def entries(self) -> list[JournalEntry]:
         return list(self._entries)
 
+    def prune(self, keep: int = 20000) -> int:
+        dropped = max(0, len(self._entries) - keep)
+        if dropped:
+            del self._entries[:dropped]
+        return dropped
+
     def restore(self, other: Journal) -> None:
         self._entries = list(other._entries)
 

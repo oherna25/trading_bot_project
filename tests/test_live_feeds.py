@@ -323,3 +323,23 @@ def test_live_brief_tolerates_bar_failure():
     reply = live_brief("SPY", store, journal, NOW, context_factory=factory)
     assert "total exposure:" in reply
     assert "direction: flat" in reply
+
+
+def test_live_brief_journals_signal_after_snapshot():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": TRADIER_EXPIRATIONS,
+                "chains": TRADIER_CHAIN,
+                "/bars": ALPACA_BARS,
+            },
+        )
+
+    live_brief("SPY", store, journal, NOW, context_factory=factory)
+    ingested = next(e for e in journal.entries() if e.kind == "snapshot_ingested")
+    for entry in journal.entries():
+        if entry.kind in ("signal", "model_fallback"):
+            assert entry.timestamp_utc >= ingested.timestamp_utc

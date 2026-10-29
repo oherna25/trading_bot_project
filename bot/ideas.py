@@ -38,6 +38,8 @@ MIN_OPEN_INTEREST = 100.0
 MAX_SPREAD_PCT = 10.0
 TIGHT_SPREAD_PCT = 5.0
 MAX_IDEAS = 10
+MAX_PER_DIRECTION = 7
+MIN_DAYS_TO_EXPIRY = 1
 
 
 def parse_timeframe(text: str) -> Optional[int]:
@@ -83,7 +85,12 @@ def _days_to_expiry(expiry: str, ref: datetime) -> Optional[int]:
     return (parsed.date() - ref.date()).days
 
 
-def _direction(bar: Optional[Bar], flip: Optional[float], total_exposure: float) -> str:
+def resolve_direction(bar: Optional[Bar], flip: Optional[float], total_exposure: float) -> str:
+    """Single direction rule shared by the brief and the ideas screener.
+
+    Spot versus flip when both exist, otherwise the regime sign, flat only
+    when total exposure is exactly zero.
+    """
     if flip is not None and bar is not None:
         return "long" if bar.close > flip else "short"
     if total_exposure > 0:
@@ -152,7 +159,7 @@ def rank_ideas(
     candidates = []
     for snapshot_id, snapshot, profile, bar in entries:
         ref = now if now is not None else snapshot.timestamp_utc
-        direction = _direction(bar, profile.flip_point, profile.total_exposure)
+        direction = resolve_direction(bar, profile.flip_point, profile.total_exposure)
         if direction == "flat":
             continue
         for contract in snapshot.contracts_list:
@@ -161,18 +168,18 @@ def rank_ideas(
             pct = spread_pct(contract)
             if pct is not None and pct > max_spread_pct:
                 continue
-            if max_days is not None:
-                days = _days_to_expiry(contract.expiry, ref)
-                if days is None or days < 0 or days > max_days:
-                    continue
+            days = _days_to_expiry(contract.expiry, ref)
+            if days is None or days < MIN_DAYS_TO_EXPIRY:
+                continue
+            if max_days is not None and days > max_days:
+                continue
             score = abs(contract.gamma * contract.open_interest)
             candidates.append((score, snapshot_id, snapshot, profile, bar, direction, contract, pct))
     if not candidates:
         return []
     top_score = max(score for score, *_ in candidates)
-    candidates.sort(key=lambda c: (-c[0], c[2].underlying, c[6].strike, c[6].expiry, c[6].call_or_put))
-    ideas = []
-    for score, snapshot_id, snapshot, profile, bar, direction, contract, pct in candidates[:MAX_IDEAS]:
+    ranked = []
+    for score, snapshot_id, snapshot, profile, bar, direction, contract, pct in candidates:
         exposure = _contract_exposure(contract)
         regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
         hedge_strike = _hedge_strike(contract, snapshot)
@@ -204,6 +211,57 @@ def rank_ideas(
             confidence += 0.10
         if max_loss is not None:
             confidence += 0.05
+        confidence = min(0.9, confidence)
+        ranked.append(
+            (
+                confidence,
+                score,
+                snapshot_id,
+                snapshot,
+                profile,
+                bar,
+                direction,
+                contract,
+                pct,
+                exposure,
+                regime,
+                hedge_strike,
+                spread_label,
+                debit,
+                max_loss,
+                breakeven,
+            )
+        )
+    ranked.sort(
+        key=lambda c: (-c[0], -c[1], c[3].underlying, c[7].strike, c[7].expiry, c[7].call_or_put)
+    )
+    ideas = []
+    per_direction: dict[str, int] = {}
+    for row in ranked:
+        (
+            confidence,
+            _score,
+            snapshot_id,
+            snapshot,
+            profile,
+            bar,
+            direction,
+            contract,
+            pct,
+            exposure,
+            regime,
+            hedge_strike,
+            spread_label,
+            debit,
+            max_loss,
+            breakeven,
+        ) = row
+        if len(ideas) >= MAX_IDEAS:
+            break
+        seen = per_direction.get(direction, 0)
+        if seen >= MAX_PER_DIRECTION:
+            continue
+        per_direction[direction] = seen + 1
         if profile.flip_point is not None:
             where = "above" if direction == "long" else "below"
             trigger = f"enter on spot holding {where} flip {profile.flip_point:.1f}"
