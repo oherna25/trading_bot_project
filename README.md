@@ -83,33 +83,113 @@ The bot reads `.env` from the working directory automatically; real environment 
 
 ## How to run
 
-Prerequisites: Python 3.11+.
+### Prerequisites
+
+Python 3.11+. All commands run from the repo root. Create the venv and install the test runner:
 
 ```bash
 python -m venv .venv
 .venv/bin/pip install pytest
 ```
 
-Run the suite (fully offline, no network):
+### Configuration
+
+Copy the keys from the [Configuration](#configuration) section into a `.env` file in the repo root (never commit it): `TRADIER_ACCESS_TOKEN`, `TRADIER_ACCOUNT_ID`, `TRADIER_BASE_URL` (optional), `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `FINNHUB_API_KEY`, `MARKETDATA_API_KEY`, plus `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` for the model phases. The bot reads `.env` from the working directory automatically; real environment variables win over file values. Without keys, the suite and every offline flow still run on canned fixtures with no network.
+
+### Test suite
+
+Fully offline, no network:
 
 ```bash
 .venv/bin/python -m pytest tests/ -q
 ```
 
-`run_session.py` runs the scheduled session on this machine (weekdays 08:30 ET) against a local JSON bundle in `data/trading-bot`; `run_scheduled_session` in `bot/schedule.py` is the same job for library drives.
+### Scheduled session by hand
 
-Run it by hand:
+`run_session.py` runs the scheduled session on this machine against a local JSON bundle in `data/trading-bot`; `run_scheduled_session` in `bot/schedule.py` is the same job for library drives. It prints the brief to stdout.
 
 ```bash
 .venv/bin/python run_session.py
+.venv/bin/python run_session.py --underlying SPY --store-dir data/trading-bot
+.venv/bin/python run_session.py --help
 ```
 
-Or install it once. For cron, append the job line from `deploy/session.cron` to your crontab (`crontab -e`) after replacing `REPO_ROOT`. For macOS launchd:
+| Flag | Default | Meaning |
+|---|---|---|
+| `--underlying` | `SPY` | Symbol to brief |
+| `--store-dir` | `data/trading-bot` | JSON bundle directory |
+
+### Scheduled session on a timer
+
+Both timers run `run_session.py` at 07:30 machine-local on weekdays (08:30 ET on a CT machine) and append stdout plus stderr to `data/session.log`. Install once, replacing `REPO_ROOT` with the repo path.
+
+Cron (`deploy/session.cron`): append the job line to your crontab (`crontab -e`):
+
+```bash
+crontab -e
+```
+
+```
+30 7 * * 1-5 cd REPO_ROOT && REPO_ROOT/.venv/bin/python REPO_ROOT/run_session.py >> REPO_ROOT/data/session.log 2>&1
+```
+
+macOS launchd (`deploy/trading-bot-session.plist`):
 
 ```bash
 sed 's|REPO_ROOT|/path/to/trading_bot_project|g' deploy/trading-bot-session.plist > ~/Library/LaunchAgents/com.tradingbot.session.plist
 launchctl load ~/Library/LaunchAgents/com.tradingbot.session.plist
 ```
+
+Check the log after a run:
+
+```bash
+tail data/session.log
+```
+
+### HTTP server
+
+`bot.muse.serve(store, journal, config)` exposes the same surface as the drill harness over HTTP. It binds `0.0.0.0:8000` by default so external bots can connect over the network; pass `host`/`port` to override.
+
+| Endpoint | Method | Body |
+|---|---|---|
+| `/chat` | POST | `{"text": "...", "underlying": "SPY"}` (`live_models`, `grounding`, `cards` optional, default false) |
+| `/mcp` | POST | `{"method": "tools/list"}` or `{"method": "tools/call", "params": {"name": "...", "arguments": {}, "underlying": "SPY"}}` |
+| `/openapi.json` | GET | none |
+
+MCP tools: `get_gex_brief`, `get_dashboard_link`, `get_trade_ideas`.
+
+Start it (seeded with canned data so `/chat` answers immediately; blocks serving):
+
+```python
+from bot.feeds import ingest_bars, ingest_chain
+from bot.journal import Journal
+from bot.muse import serve
+from bot.shapes import OperatorConfig
+from bot.store import SnapshotStore
+
+store, journal = SnapshotStore(), Journal()
+config = OperatorConfig(
+    dashboard_base_url="https://ops.example.internal",
+    dashboard_link_expiry_seconds=3600,
+    max_day_loss=1000.0,
+    day_profit_target=500.0,
+    max_trade_size=5000.0,
+)
+ingest_chain("tradier_sandbox", store, journal)
+ingest_bars("alpaca", store, journal)
+serve(store, journal, config)
+```
+
+Query it:
+
+```bash
+curl -s localhost:8000/openapi.json
+curl -s -X POST localhost:8000/chat -d '{"text": "give me the gex brief", "underlying": "SPY"}'
+curl -s -X POST localhost:8000/mcp -d '{"method": "tools/list"}'
+curl -s -X POST localhost:8000/mcp -d '{"method": "tools/call", "params": {"name": "get_gex_brief", "arguments": {}, "underlying": "SPY"}}'
+```
+
+### Interactive snippets
 
 Offline research brief with canned data:
 
@@ -181,7 +261,104 @@ harness.run_once()
 print(harness.outbox[-1]["body"])
 ```
 
-`bot.muse.serve(store, journal, config)` exposes the same surface over HTTP (`POST /chat`, `POST /mcp`, `GET /openapi.json`). It binds `0.0.0.0:8000` by default so external bots can connect over the network; pass `host`/`port` to override.
+### Persistence
+
+`save_bundle(store_dir, store, journal)` writes four JSON files into the store directory: `snapshots.json`, `bars.json`, `journal.json`, and `profile.json`. Each write goes to a `.tmp` file first and is renamed into place, so a crash never leaves a half-written bundle. `load_bundle(store_dir)` returns a `(store, journal)` pair and tolerates missing files, so a fresh directory just yields empty state. Every scheduled run persists to `data/trading-bot`. Inspect the journal any time via `journal.entries()`:
+
+```python
+from bot.persist import load_bundle, save_bundle
+
+save_bundle("data/trading-bot", store, journal)
+store, journal = load_bundle("data/trading-bot")
+for entry in journal.entries():
+    print(entry.timestamp_utc, entry.kind)
+```
+
+### Chat options
+
+`route_chat` and `handle_chat_query` take `live_models`, `grounding`, and `cards` flags (all default `False`); the same flags work on the HTTP `/chat` payload. With `live_models=True` the analyst routes to the Spark backend through `MODEL_REGISTRY` when `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` are set, otherwise the deterministic rule runs and the fallback is journaled as `model_fallback`. `grounding=True` appends a web-searched note to the thesis and `cards=True` appends a regime card line:
+
+```python
+print(route_chat("give me the gex brief", "SPY", store, journal, config, now,
+                 live_models=True, grounding=True, cards=True))
+```
+
+### Voice notes
+
+`handle_voice_note(audio, underlying, store, journal, now, live_models=True)` transcribes WAV bytes and routes the transcript as a chat query. Ogg input converts automatically when `ffmpeg` is on `PATH`. Voice needs live models plus the model keys; without them it returns `"voice notes need live models"`, and bad audio is journaled as `voice_rejected`:
+
+```python
+from bot.voice import handle_voice_note
+
+audio = open("note.ogg", "rb").read()
+print(handle_voice_note(audio, "SPY", store, journal, now, live_models=True))
+```
+
+### Operator profile
+
+Chatting `"profile"` prints the four-question risk questionnaire. Answer in one message to save the profile and get suggested risk params:
+
+```python
+print(route_chat("profile", "SPY", store, journal, config, now))
+print(route_chat("profile: risk_tolerance=moderate, portfolio_size=50000, "
+                 "knowledge=intermediate, options_ok=yes",
+                 "SPY", store, journal, config, now))
+```
+
+`risk_tolerance` is `conservative`, `moderate`, or `aggressive`; `knowledge` is `beginner`, `intermediate`, or `advanced`; `options_ok` is `yes` or `no`. `suggest_params` maps the answers to `risk_per_trade`, `account_size`, `max_day_loss`, and `max_trade_size`. The profile persists in `profile.json`, and `options_ok=no` blocks options trade ideas plus options intents at `review_intent`.
+
+### Trade ideas
+
+Any chat containing `"idea"` returns up to 10 ranked ideas. Filter by timeframe words (`weekly`, `monthly`, `quarterly`, or `"N days"`) or by naming a stored underlying:
+
+```python
+print(route_chat("weekly trade ideas", "SPY", store, journal, config, now))
+print(route_chat("trade ideas for QQQ", "SPY", store, journal, config, now))
+```
+
+### Paper to live
+
+Paper trade first (see the snippet above), then walk the promotion gate. `check_promotion` reads a `PaperEvidence` record and returns `"ready_for_checklist"` or `"stay_paper"`; `advisory_review` adds a standalone Wonder pre-promotion read when the model backend is available:
+
+```python
+from bot.autonomy import check_promotion
+from bot.research import advisory_review
+from bot.shapes import PaperEvidence
+
+evidence = PaperEvidence(clean_days=20, clean_days_target=20, max_drawdown=0.01,
+                         drawdown_bound=0.05, halt_drills_passed=True)
+print(check_promotion(evidence))
+print(advisory_review(evidence, journal, now, live_models=True))
+```
+
+`advisory_review` needs `live_models=True` plus the model keys, and returns an empty string (journaled as `review_skipped`) when the backend is unavailable.
+
+Live ordering ships disabled. `enable_live` flips it on with a non-empty operator signature unless the kill flag is active, and `submit_live` routes the intent through `TradierVenue.from_env()` (credentials from `.env`, host from `TRADIER_BASE_URL`). A positive `reference_price` is required for sizing:
+
+```python
+from bot.autonomy import enable_live, submit_live
+
+print(enable_live("operator-smith-2026-10-29", state, journal, now))
+fill, position, state = submit_live(intent, state, position, limits, journal, now,
+                                    reference_price=769.7)
+```
+
+`kill_switch(state, journal, now)` disables live ordering and fires the kill flag; `reset_autonomy(state, journal, now)` clears halt and kill after an operator review. Both journal their transitions.
+
+### Multi-leg intents
+
+`even_legs(total_size, specs)` splits size evenly across leg specs of `(symbol, side, strike, expiry, call_or_put)` and returns `OrderLeg` tuples for `build_intent`:
+
+```python
+from bot.risk import even_legs, review_intent
+
+legs = even_legs(10.0, [("SPY", "buy", 770.0, "2026-12-18", "call"),
+                        ("SPY", "sell", 780.0, "2026-12-18", "call")])
+intent = build_intent(signal, "signal-1", state, journal, now, legs=legs)
+print(review_intent(intent, state, limits, journal, now, profile=store.read_profile()))
+```
+
+Options legs need the saved profile at review (`options_ok` must be yes); without it `review_intent` vetoes the combo. Paper covers combos end to end. Live `place_order` rejects multi-leg intents until broker combo support lands.
 
 ## Status and roadmap
 
