@@ -17,7 +17,14 @@ from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
-ENV = {"BASETEN_API_KEY": "key-1", "BASETEN_REASON_MODEL_ID": "model-1"}
+ENV = {"META_MODEL_API_KEY": "key-1"}
+
+
+def _chat_stub(*args):
+    return {
+        "choices": [{"message": {"content": "Model says go."}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+    }
 
 JSON_KEYS = [
     "symbol", "direction", "spread", "strike", "expiry", "call_or_put", "hedge_strike",
@@ -199,14 +206,14 @@ def test_card_wall_matches_ideas_wall_on_same_snapshot():
     assert entry.payload["cards"] == 0
 
 
-def test_baseten_stub_success_journals_model_reason():
+def test_meta_stub_success_journals_model_reason():
     journal = Journal()
     cards = build_trade_cards(
         _entries(_seeded_store()), None, NOW, journal,
-        env=dict(ENV), http_post=lambda *args: {"reason": "Model says go."},
+        env=dict(ENV), http_post=_chat_stub,
     )
     assert [card.reason for card in cards] == ["Model says go.", "Model says go."]
-    assert {card.reason_source for card in cards} == {"baseten"}
+    assert {card.reason_source for card in cards} == {"meta"}
     kinds = [entry.kind for entry in journal.entries()]
     assert kinds == ["trade_card_reason", "trade_card_reason"]
     payload = journal.entries()[0].payload
@@ -215,7 +222,7 @@ def test_baseten_stub_success_journals_model_reason():
     assert isinstance(payload["latency_ms"], float)
 
 
-def test_baseten_exception_falls_back_and_journals():
+def test_meta_exception_falls_back_and_journals():
     def failing(*args):
         raise RuntimeError("boom")
 
@@ -237,7 +244,7 @@ def test_missing_env_falls_back_without_calling_http():
     cards = build_trade_cards(_entries(_seeded_store()), None, NOW, journal, env={}, http_post=exploding)
     assert {card.reason_source for card in cards} == {"fallback"}
     payload = journal.entries()[0].payload
-    assert payload["reason"] == "missing BASETEN_API_KEY"
+    assert payload["reason"] == "missing META_MODEL_API_KEY"
 
 
 def test_cards_response_journals_ideas_with_card_count():

@@ -84,9 +84,11 @@ def _canned_get(url: str, headers: dict[str, str] | None, params: dict[str, Any]
             "iv": [0.30],
         }
     if "/bars" in url:
+        parts = url.split("?")[0].rstrip("/").split("/")
+        symbol = parts[parts.index("stocks") + 1] if "stocks" in parts else "SPY"
         return {
             "bars": {
-                "SPY": [
+                symbol or "SPY": [
                     {"t": "2026-10-26T00:00:00Z", "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.5, "v": 1000.0},
                     {"t": "2026-10-27T00:00:00Z", "o": 100.5, "h": 103.0, "l": 100.0, "c": 102.0, "v": 1200.0},
                 ]
@@ -442,6 +444,8 @@ def ingest_bars(feed_name: str, store: SnapshotStore, journal: Journal, ctx: Fee
         )
         for b in raw["bars"]
     ]
+    if not bars:
+        raise FeedUnavailableError(f"feed {feed_name} returned no bars")
     for bar in bars:
         store.save_bar(raw["underlying"], bar)
     journal.append(

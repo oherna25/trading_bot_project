@@ -17,9 +17,19 @@ from bot.feeds import (
     ingest_chain,
     live_context,
 )
-from bot.ideas import format_ideas, parse_timeframe, rank_ideas, resolve_direction, symbols_for, unknown_symbols
+from bot.ideas import (
+    cached_earnings,
+    format_ideas,
+    parse_timeframe,
+    rank_ideas,
+    resolve_direction,
+    symbols_for,
+    unknown_symbols,
+)
+from bot.ivrank import histories_for
 from bot.journal import Journal
 from bot.profile import build_profile, format_questionnaire, format_summary, parse_answers, suggest_params
+from bot.risk import build_intent, review_intent, submit_paper
 from bot.models import (
     MODEL_REGISTRY,
     HttpPost,
@@ -38,6 +48,8 @@ from bot.shapes import (
     GexProfile,
     OperatorConfig,
     PaperEvidence,
+    RiskLimits,
+    RiskState,
     Signal,
     VexProfile,
 )
@@ -347,6 +359,8 @@ def format_brief(
     regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
     units = "$GEX per 1% move" if profile.spot else "raw gamma x OI (no spot)"
     spot_text = f"{spot:.2f}" if spot is not None else "unknown"
+    if spot is not None and bar is not None and now is not None:
+        spot_text += f" (quote {_format_age(now - bar.timestamp_utc)})"
     lines = [
         f"{snapshot.underlying} GEX brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
         f"spot {spot_text} | coverage {signal.coverage * 100.0:.0f}% | regime {regime}",
@@ -384,6 +398,58 @@ def format_brief(
         basis = " (regime fallback)"
     lines.append(f"direction: {signal.direction} confidence: {signal.confidence:.2f}{basis}")
     lines.append(f"status: {signal.status} trigger: {signal.trigger}")
+    return "\n".join(lines)
+
+
+SPARK_LEVELS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: list[float]) -> str:
+    if not values:
+        return ""
+    low, high = min(values), max(values)
+    if high == low:
+        return SPARK_LEVELS[0] * len(values)
+    return "".join(
+        SPARK_LEVELS[min(7, int((value - low) / (high - low) * 7))] for value in values
+    )
+
+
+def wall_migration_text(underlying: str, store: SnapshotStore, now: datetime) -> str:
+    snaps = [
+        (snapshot_id, snapshot)
+        for snapshot_id, snapshot in store.snapshots_in_order()
+        if snapshot.underlying == underlying and snapshot.timestamp_utc.date() == now.date()
+    ]
+    if len(snaps) < 2:
+        return ""
+    bar = store.read_latest_bar(underlying)
+    spot = bar.close if bar is not None else None
+    profiles = [compute_gex(snapshot, snapshot_id, spot=spot) for snapshot_id, snapshot in snaps]
+    first, last = profiles[0], profiles[-1]
+    deltas = sorted(
+        (
+            (
+                strike,
+                last.per_strike_exposure.get(strike, 0.0) - first.per_strike_exposure.get(strike, 0.0),
+            )
+            for strike in set(first.per_strike_exposure) | set(last.per_strike_exposure)
+        ),
+        key=lambda item: -abs(item[1]),
+    )[:3]
+    lines = []
+    movers = [(strike, delta) for strike, delta in deltas if delta != 0.0]
+    if movers:
+        lines.append("walls since the open:")
+        for strike, delta in movers:
+            before = first.per_strike_exposure.get(strike, 0.0)
+            after = last.per_strike_exposure.get(strike, 0.0)
+            lines.append(f"  {strike:g}: {_money(before)} -> {_money(after)} ({delta:+,.0f})")
+    flips = [profile.flip_point for profile in profiles if profile.flip_point is not None]
+    if flips:
+        lines.append("flip path: " + " -> ".join(f"{flip:.1f}" for flip in flips))
+    totals = [profile.total_exposure for profile in profiles]
+    lines.append(f"day exposure: {_sparkline(totals)} {_money(totals[0])} -> {_money(totals[-1])}")
     return "\n".join(lines)
 
 
@@ -448,6 +514,9 @@ def handle_chat_query(
     journal.append(stamp, "signal", {"snapshot_id": snapshot_id, "direction": signal.direction, "thesis": signal.thesis})
     prev = previous_profile(store, underlying, snapshot_id, spot)
     reply = format_brief(profile, signal, snapshot, bar, now, prev)
+    migration = wall_migration_text(underlying, store, now)
+    if migration:
+        reply += f"\n{migration}"
     if cards:
         card = render_brief_card(signal, snapshot, profile, journal, now, snapshot_id, env, http_post)
         if card is not None:
@@ -534,7 +603,13 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
         snapshot_ids.append(snapshot_id)
     if not entries:
         raise ValueError(f"no snapshot stored for {underlying}")
-    ideas = rank_ideas(entries, max_days, now=now)
+    ideas = rank_ideas(
+        entries,
+        max_days,
+        now=now,
+        iv_history=histories_for(store, used),
+        earnings=cached_earnings(used, now),
+    )
     journal.append(
         now,
         "ideas",
@@ -575,6 +650,46 @@ def journal_tail_text(journal: Journal, count: int = 20) -> str:
     return "\n".join(lines)
 
 
+PAPER_TRADE_STATE = RiskState(
+    account_size=100000.0, risk_per_trade=0.01, day_pnl=0.0, halt_active=False, kill_active=False
+)
+PAPER_TRADE_LIMITS = RiskLimits(max_trade_size=5000.0, day_profit_target=500.0, max_day_loss=1000.0)
+
+
+def open_trade_size(journal: Journal, symbol: str) -> float:
+    net = 0.0
+    for entry in journal.entries():
+        if entry.kind != "fill" or entry.payload.get("symbol") != symbol:
+            continue
+        size = entry.payload.get("size")
+        if size is None:
+            continue
+        net += float(size) if entry.payload.get("side", "buy") == "buy" else -float(size)
+    return net
+
+
+def paper_trade_step(
+    symbol: str,
+    signal: Signal,
+    bar: Optional[Bar],
+    journal: Journal,
+    now: datetime,
+) -> str:
+    if bar is None:
+        journal.append(now, "trade_skipped", {"underlying": symbol, "reason": "no bar"})
+        return ""
+    if open_trade_size(journal, symbol) != 0:
+        journal.append(now, "trade_skipped", {"underlying": symbol, "reason": "position open"})
+        return ""
+    intent = build_intent(signal, f"live-{signal.snapshot_id}", PAPER_TRADE_STATE, journal, now)
+    if intent is None:
+        return ""
+    if review_intent(intent, PAPER_TRADE_STATE, PAPER_TRADE_LIMITS, journal, now) != "approved":
+        return ""
+    fill, _, _ = submit_paper(intent, bar.close, PAPER_TRADE_STATE, None, PAPER_TRADE_LIMITS, journal, now)
+    return f"paper trade: {intent.side} {intent.size:.0f} {symbol} @ {fill.price:.2f}"
+
+
 def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
     net: dict[str, float] = {}
     cost: dict[str, float] = {}
@@ -599,7 +714,7 @@ def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
         if bar is None or net[symbol] == 0:
             continue
         average = cost[symbol] / net[symbol]
-        pnl = (bar.close - average) * net[symbol]
+        pnl = (bar.close - average) * net[symbol] + 0.0
         total += pnl
         lines.append(f"{symbol}: size {net[symbol]:.0f} avg {average:.2f} mark {bar.close:.2f} pnl {pnl:+.2f}")
     lines.append(f"total paper pnl: {total:+.2f}")
@@ -637,7 +752,7 @@ def route_chat(
             },
         )
         return format_summary(profile, params)
-    if "profile" in lowered:
+    if "profile" in lowered or "questionnaire" in lowered:
         return format_questionnaire()
     if re.search(r"\bwheels?\b", lowered):
         return wheel_response(text, underlying, store, journal, now)
@@ -649,6 +764,10 @@ def route_chat(
         return vex_brief_response(underlying, store, journal, now)
     if re.search(r"\bdex\b", lowered) or "delta exposure" in lowered:
         return dex_brief_response(underlying, store, journal, now)
+    if re.search(r"\breplay\b", lowered):
+        from bot.replay import replay_response
+
+        return replay_response(underlying, store, journal, now)
     reply, _ = handle_chat_query(text, underlying, store, journal, now, live_models, grounding, cards)
     return reply
 
@@ -683,11 +802,18 @@ def live_brief(
     live_models: bool = False,
     grounding: bool = False,
     cards: bool = False,
+    paper_trade: bool = False,
 ) -> str:
     chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
     bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
     if ingest_first_working(chains, ingest_chain, underlying, store, journal, now, context_factory) is None:
         raise FeedUnavailableError(f"all chain feeds failed for {underlying}")
     ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
-    reply, _ = handle_chat_query("live session brief", underlying, store, journal, now, live_models, grounding, cards)
+    reply, signal = handle_chat_query(
+        "live session brief", underlying, store, journal, now, live_models, grounding, cards
+    )
+    if paper_trade:
+        note = paper_trade_step(underlying, signal, store.read_latest_bar(underlying), journal, now)
+        if note:
+            reply += f"\n{note}"
     return reply

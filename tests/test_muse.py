@@ -64,8 +64,8 @@ def test_chat_brief_carries_profile_numbers():
 
 
 def test_trade_cards_text_returns_cards_with_reasons(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     request = parse_chat_payload({"text": "show me trade cards", "underlying": "TEST"})
     reply = handle_chat(request, store, Journal(), CONFIG, NOW)
@@ -96,11 +96,11 @@ def test_unknown_tool_names_tool():
 
 
 def test_registry_tools_answer(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     assert set(TOOL_REGISTRY) == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
-        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session",
+        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
     }
     store = _seeded_store()
     journal = Journal()
@@ -171,13 +171,13 @@ def test_route_mcp_tools_list_names_registry():
     body = _json_body(response)
     assert {tool["name"] for tool in body["tools"]} == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
-        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session",
+        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
     }
 
 
 def test_route_mcp_tools_call_trade_cards(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     payload = {"method": "tools/call", "params": {"name": "get_trade_cards", "arguments": {"query": "trade cards"}, "underlying": "TEST"}}
     response = route_http("POST", "/mcp", payload, _seeded_store(), Journal(), CONFIG, NOW)
     assert response.status == 200
@@ -236,7 +236,25 @@ def test_health_reports_last_ingest_and_feed():
     assert body["feed_used"] == "alpaca"
     assert body["last_ingest_utc"] == (NOW - timedelta(minutes=4)).isoformat()
     assert body["snapshot_age_seconds"] == pytest.approx(240.0)
+    assert body["quote_age_seconds"] == {"TEST": pytest.approx(0.0)}
     assert body["underlyings"] == ["TEST"]
+
+
+def test_iv_rank_tool_reports_histories():
+    store = _seeded_store()
+    for day in range(12):
+        store.save_iv("TEST", f"2026-09-{day + 1:02d}", 0.0)
+    for day in range(12):
+        store.save_iv("TEST", f"2026-10-{day + 1:02d}", 100.0)
+    store.save_iv("TEST", "2026-10-27", 50.0)
+    reply = dispatch_tool("get_iv_rank", {}, store, Journal(), CONFIG, NOW, underlying="TEST")
+    assert reply.ok is True
+    assert reply.reply == "iv ranks:\nTEST: 50.0 (25 points)"
+
+
+def test_iv_rank_tool_empty_store():
+    reply = dispatch_tool("get_iv_rank", {}, SnapshotStore(), Journal(), CONFIG, NOW)
+    assert reply.reply == "iv ranks: none stored"
 
 
 def test_route_unknown_path_returns_404():
@@ -247,8 +265,8 @@ def test_route_unknown_path_returns_404():
 
 
 def test_harness_routes_text_voice_cards_push(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     harness = Harness()
     harness.post("give me the gex brief", kind="text")
     harness.post("give me the gex brief", kind="voice_transcript")

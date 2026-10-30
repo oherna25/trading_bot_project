@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Callable, Sequence
 
+from bot.alerts import push_alerts
 from bot.feeds import BAR_FEEDS, CHAIN_FEEDS, FeedContext, FeedUnavailableError, ingest_bars, ingest_chain, live_context
 from bot.journal import Journal
 from bot.persist import load_bundle, save_bundle
@@ -45,6 +46,7 @@ def run_session_core(
     live_models: bool = False,
     grounding: bool = False,
     cards: bool = False,
+    paper_trade: bool = False,
 ) -> str:
     """Ingest plus brief plus session journals against loaded state.
 
@@ -69,8 +71,10 @@ def run_session_core(
                     live_models,
                     grounding,
                     cards,
+                    paper_trade,
                 )
             )
+            push_alerts(symbol, store, journal, moment)
         except FeedUnavailableError as exc:
             journal.append(moment, "session_failed", {"underlying": symbol, "reason": str(exc)})
             failures.append(f"scheduled session failed for {symbol}: {exc}")
@@ -91,6 +95,7 @@ def run_scheduled_session(
     live_models: bool = False,
     grounding: bool = False,
     cards: bool = False,
+    paper_trade: bool = False,
 ) -> str:
     store, journal = load_bundle(store_dir)
     text = run_session_core(
@@ -105,6 +110,7 @@ def run_scheduled_session(
         live_models,
         grounding,
         cards,
+        paper_trade,
     )
     save_bundle(store_dir, store, journal)
     return text

@@ -263,6 +263,14 @@ def test_ingest_bars_persists_and_journals():
     assert journal.entries()[-1].kind == "bars_ingested"
 
 
+def test_ingest_bars_empty_raises_unavailable():
+    store, journal = SnapshotStore(), Journal()
+    with pytest.raises(FeedUnavailableError, match="no bars"):
+        ingest_bars("alpaca", store, journal, _ctx("SPY", {"/bars": {"bars": None}}))
+    assert store.read_latest_bar("SPY") is None
+    assert not [e for e in journal.entries() if e.kind == "bars_ingested"]
+
+
 def test_ingest_rejects_wrong_kind():
     store, journal = SnapshotStore(), Journal()
     with pytest.raises(ValueError, match="bars, not chains"):
@@ -293,6 +301,28 @@ def test_live_brief_falls_back_and_matches_profile():
     assert "feed_failed" in kinds
     signal_entry = next(e for e in journal.entries() if e.kind == "signal")
     assert signal_entry.payload["snapshot_id"] == snapshot_id
+
+
+def test_live_brief_falls_through_empty_bars_to_finnhub():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": TRADIER_EXPIRATIONS,
+                "chains": TRADIER_CHAIN,
+                "/bars": {"bars": None},
+                "quote": FINNHUB_QUOTE,
+            },
+        )
+
+    live_brief("SPY", store, journal, NOW, context_factory=factory)
+    assert store.read_latest_bar("SPY").close == pytest.approx(102.0)
+    failed = [e for e in journal.entries() if e.kind == "feed_failed"]
+    assert [e.payload["feed_name"] for e in failed] == ["alpaca"]
+    ingested = [e for e in journal.entries() if e.kind == "bars_ingested"]
+    assert [e.payload["source_name"] for e in ingested] == ["finnhub"]
 
 
 def test_live_brief_raises_when_all_chain_feeds_fail():
@@ -343,3 +373,42 @@ def test_live_brief_journals_signal_after_snapshot():
     for entry in journal.entries():
         if entry.kind in ("signal", "model_fallback"):
             assert entry.timestamp_utc >= ingested.timestamp_utc
+
+
+def test_live_brief_paper_trade_fills_and_second_run_skips():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": RuntimeError("boom"),
+                "options/chain": MARKETDATA_CHAIN,
+                "/bars": ALPACA_BARS,
+            },
+        )
+
+    reply = live_brief("SPY", store, journal, NOW, context_factory=factory, paper_trade=True)
+    assert "\npaper trade: " in reply
+    assert sum(1 for e in journal.entries() if e.kind == "fill") == 1
+    reply2 = live_brief("SPY", store, journal, NOW, context_factory=factory, paper_trade=True)
+    assert "paper trade: " not in reply2
+    assert sum(1 for e in journal.entries() if e.kind == "fill") == 1
+    assert journal.entries()[-1].kind == "trade_skipped"
+
+
+def test_live_brief_without_paper_trade_journals_no_fill():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": RuntimeError("boom"),
+                "options/chain": MARKETDATA_CHAIN,
+                "/bars": ALPACA_BARS,
+            },
+        )
+
+    live_brief("SPY", store, journal, NOW, context_factory=factory)
+    assert not [e for e in journal.entries() if e.kind == "fill"]

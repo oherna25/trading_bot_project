@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence
 
-from bot.baseten import generate_reason, select_reason_backend
+from bot.metareason import generate_reason, select_reason_backend
 from bot.exposure import compute_gex
 from bot.ideas import parse_timeframe, rank_ideas, symbols_for, unknown_symbols
 from bot.journal import Journal
@@ -98,7 +98,7 @@ def build_trade_cards(
             "flip_point": profile.flip_point,
         }
         reason_source = "fallback"
-        if backend == "baseten":
+        if backend == "meta":
             try:
                 reason, latency_ms = generate_reason(stats, env, http_post)
             except Exception as exc:
@@ -121,7 +121,7 @@ def build_trade_cards(
                         {"symbol": idea.symbol, "snapshot_id": idea.snapshot_id, "reason": "empty reason"},
                     )
                 else:
-                    reason_source = "baseten"
+                    reason_source = "meta"
                     journal.append(
                         now,
                         "trade_card_reason",

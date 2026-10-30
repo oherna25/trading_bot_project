@@ -53,6 +53,8 @@ def compute_gex(
     scale = spot * spot * ONE_PERCENT_MOVE if spot else 1.0
     front = _front_expiry(snapshot)
     per_strike: dict[float, float] = {}
+    per_call: dict[float, float] = {}
+    per_put: dict[float, float] = {}
     total = 0.0
     front_exposure = 0.0
     call_exposure = 0.0
@@ -65,8 +67,10 @@ def compute_gex(
             front_exposure += exposure
         if contract.call_or_put == "call":
             call_exposure += exposure
+            per_call[contract.strike] = per_call.get(contract.strike, 0.0) + exposure
         else:
             put_exposure += exposure
+            per_put[contract.strike] = per_put.get(contract.strike, 0.0) + exposure
     scaled_strikes = {strike: value * scale for strike, value in per_strike.items()}
     return GexProfile(
         snapshot_id=snapshot_id,
@@ -78,6 +82,8 @@ def compute_gex(
         front_exposure=front_exposure * scale,
         call_exposure=call_exposure * scale,
         put_exposure=put_exposure * scale,
+        per_strike_call_exposure={strike: value * scale for strike, value in per_call.items()},
+        per_strike_put_exposure={strike: value * scale for strike, value in per_put.items()},
     )
 
 

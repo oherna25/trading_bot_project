@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import json
+import os
 import re
-from datetime import datetime
-from typing import Optional, Sequence
+import urllib.request
+from datetime import date, datetime, timedelta
+from typing import Any, Callable, Mapping, Optional, Sequence
+from urllib.parse import urlencode
 
+from bot.config import read_dotenv as _read_dotenv
+from bot.ivrank import iv_rank as _iv_rank
 from bot.risk import even_legs
 from bot.shapes import (
     DEFAULT_CONTRACT_MULTIPLIER,
@@ -14,6 +20,76 @@ from bot.shapes import (
     TradeIdea,
 )
 from bot.store import SnapshotStore
+
+FINNHUB_EARNINGS_URL = "https://finnhub.io/api/v1/calendar/earnings"
+EARNINGS_LOOKAHEAD_DAYS = 60
+EARNINGS_TIMEOUT_SECONDS = 15.0
+
+_earnings_cache: dict[tuple[tuple[str, ...], str], dict[str, date]] = {}
+
+
+def _http_get_json(url: str, params: Mapping[str, str], timeout: float) -> Any:
+    query = urlencode(dict(params))
+    request = urllib.request.Request(f"{url}?{query}" if query else url)
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_earnings(
+    symbols: Sequence[str],
+    token: str,
+    start: date,
+    end: date,
+    http_get: Callable[..., Any] | None = None,
+) -> dict[str, date]:
+    wanted = {str(symbol).upper() for symbol in symbols}
+    get = http_get or _http_get_json
+    out: dict[str, date] = {}
+    for symbol in sorted(wanted):
+        payload = get(
+            FINNHUB_EARNINGS_URL,
+            {"from": start.isoformat(), "to": end.isoformat(), "token": token, "symbol": symbol},
+            EARNINGS_TIMEOUT_SECONDS,
+        )
+        rows = payload.get("earningsCalendar") if isinstance(payload, dict) else None
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("symbol") or "").upper()
+            if name not in wanted:
+                continue
+            try:
+                day = date.fromisoformat(str(row.get("date") or "")[:10])
+            except ValueError:
+                continue
+            if name not in out or day < out[name]:
+                out[name] = day
+    return out
+
+
+def cached_earnings(symbols: Sequence[str], ref: datetime) -> dict[str, date]:
+    token = os.environ.get("FINNHUB_API_KEY") or _read_dotenv().get("FINNHUB_API_KEY", "")
+    if not token or not symbols:
+        return {}
+    key = (tuple(sorted({str(s).upper() for s in symbols})), ref.date().isoformat())
+    if key not in _earnings_cache:
+        try:
+            _earnings_cache[key] = fetch_earnings(
+                symbols, token, ref.date(), ref.date() + timedelta(days=EARNINGS_LOOKAHEAD_DAYS)
+            )
+        except Exception:
+            _earnings_cache[key] = {}
+    return _earnings_cache[key]
+
+
+def spans_earnings(ref: datetime, expiry: str, earnings_day: date | None) -> bool:
+    if earnings_day is None:
+        return False
+    try:
+        expiry_day = date.fromisoformat(expiry)
+    except ValueError:
+        return False
+    return ref.date() <= earnings_day <= expiry_day
 
 TIMEFRAME = {
     "week": 7,
@@ -163,6 +239,20 @@ def _hedge_strike(anchor: OptionContract, snapshot: ChainSnapshot) -> Optional[f
     return min(peers, key=lambda strike: abs(strike - anchor.strike))
 
 
+def _single_numbers(
+    contract: OptionContract,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    per_share = contract.ask if contract.ask is not None else contract.price
+    if per_share is None or per_share <= 0:
+        return None, None, None
+    net = per_share * DEFAULT_CONTRACT_MULTIPLIER
+    if contract.call_or_put == "call":
+        breakeven = contract.strike + per_share
+    else:
+        breakeven = contract.strike - per_share
+    return net, net, breakeven
+
+
 def _vertical_numbers(
     anchor: OptionContract, hedge: OptionContract
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
@@ -194,6 +284,8 @@ def rank_ideas(
     now: Optional[datetime] = None,
     min_open_interest: float = MIN_OPEN_INTEREST,
     max_spread_pct: float = MAX_SPREAD_PCT,
+    iv_history: Optional[Mapping[str, Sequence[float]]] = None,
+    earnings: Optional[Mapping[str, date]] = None,
 ) -> list[TradeIdea]:
     candidates = []
     for snapshot_id, snapshot, profile, bar in entries:
@@ -232,15 +324,13 @@ def rank_ideas(
             ),
             None,
         )
-        debit = max_loss = breakeven = None
+        debit, max_loss, breakeven = _single_numbers(contract)
         spread_label = f"single {contract.call_or_put} {contract.strike}"
         if hedge is not None:
-            debit, max_loss, breakeven = _vertical_numbers(contract, hedge)
+            vertical = _vertical_numbers(contract, hedge)
             width = abs(hedge.strike - contract.strike) * DEFAULT_CONTRACT_MULTIPLIER
-            if debit is not None and abs(debit) > width:
-                debit = max_loss = breakeven = None
-                hedge_strike = None
-            else:
+            if vertical[0] is not None and abs(vertical[0]) <= width:
+                debit, max_loss, breakeven = vertical
                 legs = even_legs(
                     2.0,
                     [
@@ -250,6 +340,8 @@ def rank_ideas(
                 )
                 low, high = sorted([legs[0].strike or 0.0, legs[1].strike or 0.0])
                 spread_label = f"{low:g}/{high:g} {contract.call_or_put} vertical"
+            else:
+                hedge_strike = None
         confidence = 0.30 + 0.45 * (score / top_score if top_score > 0 else 0.0)
         if pct is not None and pct <= TIGHT_SPREAD_PCT:
             confidence += 0.10
@@ -317,6 +409,12 @@ def rank_ideas(
         )
         if max_loss is not None and breakeven is not None:
             thesis += f", max loss ${max_loss:.0f}, breakeven {breakeven:.1f}"
+        histories = iv_history or {}
+        earnings_map = earnings or {}
+        rank = _iv_rank(histories.get(snapshot.underlying, ()))
+        earnings_day = earnings_map.get(snapshot.underlying)
+        ref = now if now is not None else snapshot.timestamp_utc
+        flagged = earnings_day.isoformat() if spans_earnings(ref, contract.expiry, earnings_day) else None
         ideas.append(
             TradeIdea(
                 symbol=snapshot.underlying,
@@ -334,6 +432,8 @@ def rank_ideas(
                 breakeven=breakeven,
                 net_debit=debit,
                 spread_pct=pct,
+                earnings_date=flagged,
+                iv_rank=rank,
             )
         )
     return ideas
@@ -345,8 +445,13 @@ def format_ideas(ideas: Sequence[TradeIdea]) -> str:
         return "trade ideas: none found"
     lines = [f"trade ideas ({len(ideas)}):"]
     for number, idea in enumerate(ideas, 1):
-        lines.append(
+        line = (
             f"{number}. {idea.symbol} {idea.direction} {idea.spread or idea.call_or_put} "
             f"expiry {idea.expiry} confidence {idea.confidence:.2f}: {idea.thesis} | {idea.trigger}"
         )
+        if idea.earnings_date is not None:
+            line += f" | earnings {idea.earnings_date}"
+        if idea.iv_rank is not None:
+            line += f" | iv rank {idea.iv_rank:.1f}"
+        lines.append(line)
     return "\n".join(lines)

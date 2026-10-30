@@ -9,7 +9,7 @@ from bot.journal import Journal
 from bot.research import analyst_tool, derive_display
 from bot.risk import build_intent, review_intent, submit_paper
 from bot.shapes import Bar, ChainSnapshot, PaperEvidence, Position, RiskLimits, RiskState
-from bot.store import snapshot_id_for
+from bot.store import SnapshotStore, snapshot_id_for
 
 
 def _bar_at(bars: Sequence[Bar], moment: datetime) -> Optional[Bar]:
@@ -79,6 +79,49 @@ def replay_week(
             {"snapshot_id": snapshot_id, "direction": signal.direction, "day_pnl": active_state.day_pnl},
         )
     return journal
+
+
+def replay_response(
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    clean_days_target: int = 10,
+    drawdown_bound: float = 500.0,
+) -> str:
+    snaps = [
+        (snapshot_id, snapshot)
+        for snapshot_id, snapshot in store.snapshots_in_order()
+        if snapshot.underlying == underlying
+    ]
+    if len(snaps) < 2:
+        return f"replay {underlying}: needs at least 2 stored snapshots (has {len(snaps)})"
+    bars = store.read_bars(underlying)
+    if not bars:
+        return f"replay {underlying}: needs stored bars"
+    scratch = Journal()
+    replay_week([snapshot for _, snapshot in snaps], scratch, bars=bars)
+    evidence = paper_evidence_from_journal(scratch, clean_days_target, drawdown_bound)
+    fills = sum(1 for entry in scratch.entries() if entry.kind == "fill")
+    steps = [entry for entry in scratch.entries() if entry.kind == "backtest_step"]
+    last_pnl = float(steps[-1].payload.get("day_pnl", 0.0)) if steps else 0.0
+    journal.append(
+        now,
+        "replay_summary",
+        {
+            "underlying": underlying,
+            "snapshots": len(snaps),
+            "fills": fills,
+            "day_pnl": last_pnl,
+            "clean_days": evidence.clean_days,
+            "max_drawdown": evidence.max_drawdown,
+        },
+    )
+    return (
+        f"replay {underlying}: {len(snaps)} snapshots, {fills} fills, day pnl {last_pnl:+.2f}\n"
+        f"clean days {evidence.clean_days}/{evidence.clean_days_target}, "
+        f"max drawdown {evidence.max_drawdown:.2f} (bound {evidence.drawdown_bound:.2f})"
+    )
 
 
 def paper_evidence_from_journal(

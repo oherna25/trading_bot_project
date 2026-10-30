@@ -55,7 +55,7 @@ flowchart TB
     end
 
     subgraph REAS["Card reasons"]
-        BASETEN["Baseten reason model"]
+        META_REASON["Meta reason model"]
         RFALL["Offline reason fallback"]
     end
 
@@ -104,7 +104,7 @@ flowchart TB
     CHAT -. trade cards .-> CARDS
     CARDS --> STORE
     CARDS --> JOUR
-    CARDS --> BASETEN
+    CARDS --> META_REASON
     CARDS --> RFALL
-    BASETEN -. reason .-> CARDS
+    META_REASON -. reason .-> CARDS
     RFALL -. reason .-> CARDS

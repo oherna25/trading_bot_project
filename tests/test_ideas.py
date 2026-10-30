@@ -1,10 +1,10 @@
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
 from bot.exposure import compute_gex
-from bot.ideas import format_ideas, parse_timeframe, rank_ideas, symbols_for
+from bot.ideas import fetch_earnings, format_ideas, parse_timeframe, rank_ideas, spans_earnings, symbols_for
 from bot.journal import Journal
 from bot.research import route_chat
 from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
@@ -231,9 +231,9 @@ def test_rank_ideas_uneconomic_vertical_falls_back_to_single():
     top = ideas[0]
     assert top.spread == "single put 775.0"
     assert top.hedge_strike is None
-    assert top.net_debit is None
-    assert top.max_loss is None
-    assert top.breakeven is None
+    assert top.net_debit == pytest.approx(260.0)
+    assert top.max_loss == pytest.approx(260.0)
+    assert top.breakeven == pytest.approx(772.4)
 
 
 def test_rank_ideas_builds_defined_risk_vertical():
@@ -368,9 +368,61 @@ def test_route_chat_ideas_unknown_symbol_errors_loudly():
         route_chat("ideas for NOPE", "TEST", store, Journal(), CONFIG, NOW)
 
 
+def test_rank_ideas_flags_earnings_and_iv_rank():
+    store = _seeded_store()
+    history = [0.0] * 12 + [100.0] * 12 + [50.0]
+    ideas = rank_ideas(
+        [_entry(store, "TEST")],
+        now=NOW,
+        iv_history={"TEST": history},
+        earnings={"TEST": date(2026, 11, 5)},
+    )
+    assert ideas != []
+    assert {idea.iv_rank for idea in ideas} == {50.0}
+    flagged = [idea for idea in ideas if idea.expiry == "2026-11-20"]
+    assert flagged != []
+    assert {idea.earnings_date for idea in flagged} == {"2026-11-05"}
+    unflagged = [idea for idea in ideas if idea.expiry == "2026-10-30"]
+    assert {idea.earnings_date for idea in unflagged} == {None}
+    text = format_ideas(ideas)
+    assert "| earnings 2026-11-05" in text
+    assert "| iv rank 50.0" in text
+
+
+def test_spans_earnings_bounds_and_bad_expiry():
+    assert spans_earnings(NOW, "2026-11-20", date(2026, 11, 5)) is True
+    assert spans_earnings(NOW, "2026-10-30", date(2026, 11, 5)) is False
+    assert spans_earnings(NOW, "2026-11-20", None) is False
+    assert spans_earnings(NOW, "not-a-date", date(2026, 11, 5)) is False
+
+
+def test_fetch_earnings_parses_earliest_per_symbol():
+    seen = []
+
+    def stub(url, params, timeout):
+        seen.append(params["symbol"])
+        assert params["from"] == "2026-10-27"
+        assert params["to"] == "2026-12-26"
+        assert params["token"] == "tok"
+        if params["symbol"] == "SPY":
+            return {
+                "earningsCalendar": [
+                    {"symbol": "SPY", "date": "2026-11-05T21:00:00.000Z"},
+                    {"symbol": "SPY", "date": "2026-10-20"},
+                    {"symbol": "OTHER", "date": "2026-11-01"},
+                ]
+            }
+        return {"earningsCalendar": [{"symbol": "QQQ", "date": "bogus"}]}
+
+    assert fetch_earnings(
+        ["spy", "QQQ"], "tok", date(2026, 10, 27), date(2026, 12, 26), stub
+    ) == {"SPY": date(2026, 10, 20)}
+    assert seen == ["QQQ", "SPY"]
+
+
 def test_route_chat_cards_stay_before_ideas(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     reply = route_chat("card idea", "TEST", store, Journal(), CONFIG, NOW)
     assert reply.startswith("trade cards")
@@ -488,3 +540,24 @@ def test_rank_ideas_orders_by_printed_confidence_not_raw_score():
     ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
     assert [i.expiry for i in ideas] == ["2026-12-18", "2026-11-20"]
     assert [i.confidence for i in ideas] == sorted([i.confidence for i in ideas], reverse=True)
+
+
+def test_rank_ideas_single_leg_carries_premium_risk_numbers():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.05,
+                           price=2.50, bid=2.40, ask=2.60),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    (idea,) = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    assert idea.spread == "single call 100.0"
+    assert idea.net_debit == pytest.approx(260.0)
+    assert idea.max_loss == pytest.approx(260.0)
+    assert idea.breakeven == pytest.approx(102.6)
+    assert "max loss $260" in idea.thesis

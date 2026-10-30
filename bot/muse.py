@@ -9,12 +9,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import parse_qs
 
+from bot.charts import gamma_chart_html, regime_board_html
 from bot.config import auth_token as _auth_token
+from bot.exposure import compute_gex
 from bot.feeds import FeedContext, default_context, ingest_bars, ingest_chain, live_context
+from bot.ivrank import histories_for, iv_rank
 from bot.journal import Journal
+from bot.models import MODEL_REGISTRY, HttpPost, model_api_key, receipt_payload, run_analyst
 from bot.persist import bundle_mtimes, refresh_bundle, save_bundle
 from bot.research import (
     dex_brief_response,
@@ -40,6 +44,7 @@ class MuseChatRequest:
     live_models: bool = False
     grounding: bool = False
     cards: bool = False
+    llm_router: bool = False
 
 
 @dataclass(frozen=True)
@@ -122,6 +127,34 @@ def _paper_pnl_handler(
     return paper_pnl_text(journal, store)
 
 
+def _replay_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config
+    from bot.replay import replay_response
+
+    return replay_response(underlying, store, journal, now)
+
+
+def _iv_rank_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, journal, config, now, underlying
+    symbols = sorted(store.list_underlyings())
+    if not symbols:
+        return "iv ranks: none stored"
+    histories = histories_for(store, symbols)
+    lines = ["iv ranks:"]
+    for symbol in symbols:
+        points = histories.get(symbol, ())
+        rank = iv_rank(points)
+        if rank is None:
+            lines.append(f"{symbol}: n/a ({len(points)} points)")
+        else:
+            lines.append(f"{symbol}: {rank:.1f} ({len(points)} points)")
+    return "\n".join(lines)
+
+
 def _session_run_handler(
     args: dict[str, Any],
     store: SnapshotStore,
@@ -159,6 +192,8 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_dex_brief": MuseTool("get_dex_brief", "Read the computed DEX brief for an underlying", _dex_brief_handler),
     "journal_tail": MuseTool("journal_tail", "Read the tail of the journal", _journal_tail_handler),
     "paper_pnl": MuseTool("paper_pnl", "Report paper P&L from journaled fills", _paper_pnl_handler),
+    "get_iv_rank": MuseTool("get_iv_rank", "Report IV rank per underlying from stored histories", _iv_rank_handler),
+    "run_replay": MuseTool("run_replay", "Replay stored snapshots into a paper backtest summary", _replay_handler),
     "run_session": MuseTool("run_session", "Run a scheduled session now and return the brief", _session_run_handler),
 }
 
@@ -178,12 +213,77 @@ def parse_chat_payload(raw: dict) -> MuseChatRequest:
         live_models=bool(raw.get("live_models", False)),
         grounding=bool(raw.get("grounding", False)),
         cards=bool(raw.get("cards", False)),
+        llm_router=bool(raw.get("llm_router", False)),
     )
 
 
+ROUTE_SYSTEM = (
+    "Pick exactly one tool for the user request. Reply with JSON only and no other text: "
+    '{"tool": name, "arguments": {}, "underlying": "SYM"}. '
+    "Keep the default underlying unless the text names another ticker."
+)
+
+
+def llm_route(
+    text: str,
+    underlying: str,
+    journal: Journal,
+    now: datetime,
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
+) -> tuple[str, dict[str, Any], str]:
+    key = model_api_key(env)
+    if not key:
+        raise ValueError("missing META_MODEL_API_KEY")
+    catalog = "\n".join(f"- {name}: {tool.description}" for name, tool in TOOL_REGISTRY.items())
+    prompt = f"Request: {text}\nDefault underlying: {underlying}\nTools:\n{catalog}"
+    messages = [
+        {"role": "system", "content": ROUTE_SYSTEM},
+        {"role": "user", "content": prompt},
+    ]
+    reply_text, receipts = run_analyst(
+        MODEL_REGISTRY["analyst"], key, messages, [], {}, prompt, http_post
+    )
+    for receipt in receipts:
+        journal.append(now, "model_receipt", receipt_payload(receipt, ""))
+    start, end = reply_text.find("{"), reply_text.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("router returned no JSON")
+    try:
+        body = json.loads(reply_text[start : end + 1])
+    except ValueError:
+        raise ValueError("router returned bad JSON") from None
+    if not isinstance(body, dict):
+        raise ValueError("router returned bad JSON")
+    name = body.get("tool", "")
+    if name not in TOOL_REGISTRY:
+        raise ValueError(f"unknown tool {name}")
+    args = body.get("arguments", {})
+    if not isinstance(args, dict):
+        raise ValueError("router arguments must be an object")
+    symbol = body.get("underlying") or underlying
+    if not isinstance(symbol, str) or not symbol.strip():
+        symbol = underlying
+    return name, args, symbol.strip().upper()
+
+
 def handle_chat(
-    request: MuseChatRequest, store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime
+    request: MuseChatRequest,
+    store: SnapshotStore,
+    journal: Journal,
+    config: OperatorConfig,
+    now: datetime,
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
 ) -> MuseChatReply:
+    if request.llm_router:
+        try:
+            name, args, symbol = llm_route(request.text, request.underlying, journal, now, env, http_post)
+        except Exception as exc:
+            journal.append(now, "llm_route_failed", {"reason": type(exc).__name__})
+        else:
+            journal.append(now, "llm_routed", {"tool": name, "underlying": symbol})
+            return dispatch_tool(name, args, store, journal, config, now, underlying=symbol)
     try:
         reply = route_chat(
             request.text,
@@ -454,12 +554,19 @@ def health_detail(store: SnapshotStore, journal: Journal, now: datetime) -> dict
             feed_used = entry.payload.get("source_name") or entry.payload.get("feed_name")
             snapshot_id = entry.payload.get("snapshot_id") or snapshot_id
     age_seconds = (now - last_ingest).total_seconds() if last_ingest is not None else None
+    quote_age_seconds: dict[str, float | None] = {}
+    for symbol in store.list_underlyings():
+        bar = store.read_latest_bar(symbol)
+        quote_age_seconds[symbol] = (
+            (now - bar.timestamp_utc).total_seconds() if bar is not None else None
+        )
     return {
         "ok": True,
         "last_ingest_utc": last_ingest.isoformat() if last_ingest is not None else None,
         "feed_used": feed_used,
         "snapshot_id": snapshot_id,
         "snapshot_age_seconds": age_seconds,
+        "quote_age_seconds": quote_age_seconds,
         "underlyings": store.list_underlyings(),
     }
 
@@ -572,6 +679,19 @@ def route_http(
                 200, {"underlying": underlying, "count": len(cards), "cards": cards_to_json(cards)["cards"]}
             )
         return HttpResponse.html(200, trade_cards_html(cards, underlying))
+    if method == "GET" and clean == "/chart":
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        found = store.read_latest(underlying)
+        if found is None:
+            return HttpResponse.html(400, _cards_error_html(f"no snapshot stored for {underlying}"))
+        snapshot_id, snapshot = found
+        bar = store.read_latest_bar(underlying)
+        profile = compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None)
+        return HttpResponse.html(200, gamma_chart_html(underlying, snapshot, profile, bar, now))
+    if method == "GET" and clean == "/board":
+        return HttpResponse.html(200, regime_board_html(store, now))
     return HttpResponse.json(404, {"error": "not found"})
 
 

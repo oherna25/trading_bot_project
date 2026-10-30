@@ -1,4 +1,4 @@
-"""Local entry point: scheduled brief plus persistent store on local disk.
+"""Local entry point: scheduled brief plus one paper trade per symbol plus persistent store on local disk.
 
 Run by hand, from cron, or from launchd (this machine is the scheduler)::
 
@@ -23,10 +23,10 @@ STORE_DIR = "data/trading-bot"
 SCHEDULE = "30 7 * * 1-5"
 
 
-def run(underlying: str = "SPY", store_dir: str = STORE_DIR) -> str:
+def run(underlying: str = "SPY", store_dir: str = STORE_DIR, paper_trade: bool = True) -> str:
     from bot.schedule import run_scheduled_session
 
-    return run_scheduled_session(underlying, store_dir, datetime.now(timezone.utc))
+    return run_scheduled_session(underlying, store_dir, datetime.now(timezone.utc), paper_trade=paper_trade)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -39,12 +39,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=STORE_DIR,
         help=f"JSON bundle directory (default: {STORE_DIR}).",
     )
+    parser.add_argument(
+        "--paper-trade",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Paper trade one position per symbol (default: on).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> str:
     args = parse_args(argv)
-    brief = run(args.underlying, args.store_dir)
+    brief = run(args.underlying, args.store_dir, args.paper_trade)
     print(brief)
     return brief
 

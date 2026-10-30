@@ -54,6 +54,8 @@ class GexProfile:
     front_exposure: float = 0.0
     call_exposure: float = 0.0
     put_exposure: float = 0.0
+    per_strike_call_exposure: dict[float, float] = field(default_factory=dict)
+    per_strike_put_exposure: dict[float, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,8 @@ class TradeIdea:
     breakeven: Optional[float] = None
     net_debit: Optional[float] = None
     spread_pct: Optional[float] = None
+    earnings_date: Optional[str] = None
+    iv_rank: Optional[float] = None
 
 
 @dataclass(frozen=True)

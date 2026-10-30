@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from bot.exposure import compute_gex
-from bot.research import route_chat, scheduled_brief
+from bot.research import route_chat, scheduled_brief, wall_migration_text
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
 from bot.store import SnapshotStore
@@ -51,6 +51,7 @@ def test_chat_brief_carries_profile_numbers():
     assert "walls: 100 $-104,040" in reply
     assert "strike 100.0:" not in reply
     assert "spot 102.00" in reply
+    assert "spot 102.00 (quote 0m)" in reply
     assert "coverage 100%" in reply
     assert "calls $520,200 / puts $-624,240" in reply
     assert "change vs previous: n/a (first snapshot)" in reply
@@ -128,13 +129,51 @@ def test_paper_pnl_marks_journaled_fills():
 
 
 def test_trade_cards_answers_beat_ideas_ordering(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     reply = route_chat("trade card ideas", "TEST", store, Journal(), CONFIG, NOW)
     assert reply.startswith("trade cards (2):")
     assert "short via" in reply
     assert "trade ideas (" not in reply
+
+
+def _migration_store() -> SnapshotStore:
+    store = SnapshotStore()
+    for hour, oi in ((9, 1000.0), (14, 3000.0)):
+        store.save(
+            ChainSnapshot(
+                underlying="TEST",
+                timestamp_utc=NOW.replace(hour=hour, minute=30),
+                source_name="tradier_sandbox",
+                latency_ms=9.0,
+                contracts_list=(
+                    OptionContract(
+                        strike=100.0, expiry="2026-11-20", call_or_put="call",
+                        open_interest=oi, gamma=0.05, price=2.50, bid=2.40, ask=2.60, iv=0.30,
+                    ),
+                ),
+            )
+        )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
+                               open=99.0, high=103.0, low=98.0, close=102.0, volume=1200.0))
+    return store
+
+
+def test_wall_migration_narrates_wall_growth():
+    text = wall_migration_text("TEST", _migration_store(), NOW)
+    assert "walls since the open:" in text
+    assert "100: $520,200 -> $1,560,600 (+1,040,400)" in text
+    assert "day exposure:" in text
+
+
+def test_wall_migration_empty_with_one_snapshot():
+    assert wall_migration_text("TEST", _seeded_store(), NOW) == ""
+
+
+def test_brief_appends_migration_with_two_snapshots():
+    reply = route_chat("gex brief", "TEST", _migration_store(), Journal(), CONFIG, NOW)
+    assert "walls since the open:" in reply
 
 
 def test_scheduled_brief_matches_stored_profile():
@@ -236,8 +275,8 @@ def test_change_line_labels_negative_previous_direction():
 
 
 def test_trade_cards_output_carries_reason_text(monkeypatch):
-    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
-    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     reply = route_chat("show me trade cards", "TEST", store, Journal(), CONFIG, NOW)
     assert reply.startswith("trade cards (2):")

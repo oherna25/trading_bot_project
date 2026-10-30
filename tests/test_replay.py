@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from bot.feeds import FEED_REGISTRY, ingest_chain
 from bot.journal import Journal
-from bot.replay import paper_evidence_from_journal, replay_week
+from bot.replay import paper_evidence_from_journal, replay_response, replay_week
 from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
@@ -93,3 +93,47 @@ def test_ingest_stamps_source_and_registers_snapshot():
 
 def test_registry_covers_every_planned_feed():
     assert sorted(FEED_REGISTRY) == ["alpaca", "finnhub", "marketdata_eod", "tradier_sandbox", "yfinance"]
+
+
+def _stored_week() -> SnapshotStore:
+    store = SnapshotStore()
+    for offset in range(3):
+        store.save(_flippable_snapshot(offset))
+        store.save_bar("TEST", _bar(offset, 100.0 + offset * 4.0))
+    return store
+
+
+def test_replay_response_summarizes_week_without_touching_live_journal():
+    store = _stored_week()
+    journal = Journal()
+    reply = replay_response("TEST", store, journal, DAY + timedelta(days=2))
+    assert reply.startswith("replay TEST: 3 snapshots, ")
+    assert "fills" in reply
+    assert "clean days" in reply
+    assert [entry.kind for entry in journal.entries()] == ["replay_summary"]
+    assert journal.entries()[0].payload["snapshots"] == 3
+
+
+def test_replay_response_needs_two_snapshots_and_bars():
+    assert replay_response("NOPE", SnapshotStore(), Journal(), DAY).startswith(
+        "replay NOPE: needs at least 2 stored snapshots"
+    )
+    store = SnapshotStore()
+    store.save(_flippable_snapshot(0))
+    store.save(_flippable_snapshot(1))
+    assert replay_response("TEST", store, Journal(), DAY) == "replay TEST: needs stored bars"
+
+
+def test_replay_tool_and_keyword_reach_replay():
+    from bot.muse import dispatch_tool
+    from bot.research import route_chat
+    from bot.shapes import OperatorConfig
+
+    config = OperatorConfig(max_day_loss=1000.0, day_profit_target=500.0, max_trade_size=5000.0)
+    tool_reply = dispatch_tool(
+        "run_replay", {}, _stored_week(), Journal(), config, DAY, underlying="TEST"
+    )
+    assert tool_reply.ok is True
+    assert tool_reply.reply.startswith("replay TEST: 3 snapshots, ")
+    chat = route_chat("replay the last squeeze day", "TEST", _stored_week(), Journal(), config, DAY)
+    assert chat.startswith("replay TEST: 3 snapshots, ")

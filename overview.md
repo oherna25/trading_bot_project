@@ -277,15 +277,15 @@ FUNCTION build_trade_cards WITH entries
   ideas = rank_ideas entries
   FOR EACH idea IN ideas
     stats = idea numbers PLUS wall PLUS regime PLUS spot AND flip
-    reason = baseten_reason stats ELSE fallback_reason stats
+    reason = meta_reason stats ELSE fallback_reason stats
     journal APPEND event trade_card_reason OR reason_fallback
     card = BUILD TradeCard WITH stats AND reason
   END FOR
   RETURN cards
 END FUNCTION
 
-FUNCTION baseten_reason WITH stats
-  IF reason key AND model id set THEN CALL predict WITH stats
+FUNCTION meta_reason WITH stats
+  IF meta key set THEN CALL Meta chat WITH stats
   IF call fails OR reason empty THEN RETURN fallback_reason stats
   RETURN reason
 END FUNCTION
@@ -312,8 +312,8 @@ END FUNCTION
 
 The review note is advisory only. The autonomy gate keeps its deterministic checks.
 
-The reason key and model id select the reason backend. Baseten writes
-each card reason when both are set, else the offline fallback runs.
+The Meta key selects the reason backend. The Meta analyst model writes
+each card reason when it is set, else the offline fallback runs.
 
 ## Wheel screening
 
@@ -423,8 +423,8 @@ Card fields in order with bindings:
    credit plus spread width pct from the TradeIdea. Wall exposure from the
    GexProfile strike row. Regime from the profile total sign. Spot from the
    latest Bar close versus the profile flip point.
-3. Reason. One line stating why it is a good trade, written by the Baseten
-   reason model when configured, else the deterministic offline fallback.
+3. Reason. One line stating why it is a good trade, written by the Meta
+   analyst model when configured, else the deterministic offline fallback.
 
 Card stats match the engine numbers on the same snapshot. Reasons journal
 as trade_card_reason on model success and reason_fallback otherwise.
