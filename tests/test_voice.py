@@ -295,6 +295,40 @@ def test_convert_ogg_to_16k_mono_wav():
     assert wav_params(wav) == (1, 16000, 16)
 
 
+def test_body_payload_passes_voice_bytes_and_caps_size():
+    from bot.muse import MAX_VOICE_BYTES, _body_payload
+
+    payload, error = _body_payload("/voice", b"RIFF" + bytes(64))
+    assert error is None and payload == b"RIFF" + bytes(64)
+    _, too_big = _body_payload("/voice", bytes(MAX_VOICE_BYTES + 1))
+    assert too_big is not None and too_big.status == 413
+    payload, error = _body_payload("/chat", b'{"text": "hi"}')
+    assert error is None and payload == {"text": "hi"}
+    _, bad = _body_payload("/chat", b"not json")
+    assert bad is not None and bad.status == 400
+
+
+def test_voice_route_defaults_live_and_flags_off():
+    import json as jsonlib
+
+    from bot.muse import route_http
+    from bot.shapes import default_operator_config
+
+    config = default_operator_config()
+    live = route_http("POST", "/voice?underlying=TEST", b"junk" + bytes(64),
+                      _seeded_store(), Journal(), config, NOW)
+    assert live.status == 200
+    assert jsonlib.loads(live.body.decode("utf-8"))["reply"].startswith("voice note rejected")
+    off = route_http("POST", "/voice?underlying=TEST&live_models=0", b"junk" + bytes(64),
+                     _seeded_store(), Journal(), config, NOW)
+    assert jsonlib.loads(off.body.decode("utf-8"))["reply"] == "voice notes need live models"
+    empty = route_http("POST", "/voice?underlying=TEST", b"", _seeded_store(), Journal(), config, NOW)
+    assert empty.status == 400
+    wrong_shape = route_http("POST", "/voice?underlying=TEST", {"text": "hi"},
+                             _seeded_store(), Journal(), config, NOW)
+    assert wrong_shape.status == 400
+
+
 @needs_ffmpeg
 def test_voice_note_accepts_ogg_and_journals_conversion():
     http_post = _strict_post([_tool_leg(), _final_leg("Model thesis.\nDIRECTION: short\nCONFIDENCE: 0.8")])

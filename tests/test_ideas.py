@@ -389,6 +389,21 @@ def test_rank_ideas_flags_earnings_and_iv_rank():
     assert "| iv rank 50.0" in text
 
 
+def test_rank_ideas_haircuts_confidence_on_spanned_earnings():
+    store = _seeded_store()
+    entry = _entry(store, "TEST")
+    key = lambda i: (i.expiry, i.strike, i.call_or_put)
+    plain = {key(i): i.confidence for i in rank_ideas([entry], now=NOW)}
+    flagged = rank_ideas([entry], now=NOW, earnings={"TEST": date(2026, 11, 5)})
+    assert flagged != []
+    assert any(i.earnings_date is not None for i in flagged)
+    for idea in flagged:
+        if idea.earnings_date is not None:
+            assert idea.confidence == pytest.approx(plain[key(idea)] - 0.15)
+        else:
+            assert idea.confidence == pytest.approx(plain[key(idea)])
+
+
 def test_spans_earnings_bounds_and_bad_expiry():
     assert spans_earnings(NOW, "2026-11-20", date(2026, 11, 5)) is True
     assert spans_earnings(NOW, "2026-10-30", date(2026, 11, 5)) is False

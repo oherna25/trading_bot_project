@@ -31,6 +31,7 @@ JSON_KEYS = [
     "symbol", "direction", "spread", "strike", "expiry", "call_or_put", "hedge_strike",
     "confidence", "snapshot_id", "max_loss", "breakeven", "net_debit", "spread_pct",
     "wall_exposure", "regime", "spot", "flip_point", "reason", "reason_source",
+    "earnings_date", "iv_rank",
 ]
 
 
@@ -246,6 +247,31 @@ def test_meta_reason_cached_per_card_stats():
     clear_reason_cache()
     build_trade_cards(entries, None, NOW, Journal(), env=dict(ENV), http_post=counting)
     assert len(calls) == 4
+
+
+def test_cards_carry_earnings_into_renders_and_reason():
+    from datetime import date
+
+    journal = Journal()
+    cards = build_trade_cards(
+        _entries(_seeded_store()), None, NOW, journal, env={},
+        earnings={"TEST": date(2026, 11, 5)},
+        iv_history={"TEST": [0.0] * 12 + [100.0] * 12 + [50.0]},
+    )
+    flagged = [card for card in cards if card.expiry == "2026-11-20"]
+    assert flagged != []
+    assert {card.earnings_date for card in flagged} == {"2026-11-05"}
+    assert {card.iv_rank for card in flagged} == {50.0}
+    assert "earnings 2026-11-05 inside expiry" in flagged[0].reason
+    text = format_trade_cards(flagged)
+    assert "earnings 2026-11-05" in text
+    assert "iv rank 50.0" in text
+    page = trade_cards_html(flagged, "TEST")
+    assert "earnings 2026-11-05 inside expiry" in page
+    assert "iv rank 50.0" in page
+    payload = cards_to_json(flagged)["cards"][0]
+    assert payload["earnings_date"] == "2026-11-05"
+    assert payload["iv_rank"] == 50.0
 
 
 def test_meta_exception_falls_back_and_journals():

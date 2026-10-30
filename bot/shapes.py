@@ -44,6 +44,16 @@ class ChainSnapshot:
 
 
 @dataclass(frozen=True)
+class Holding:
+    symbol: str
+    kind: str
+    side: str
+    strike: Optional[float] = None
+    expiry: Optional[str] = None
+    qty: float = 1.0
+
+
+@dataclass(frozen=True)
 class GexProfile:
     snapshot_id: str
     per_strike_exposure: dict[float, float]

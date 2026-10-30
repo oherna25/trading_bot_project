@@ -103,15 +103,33 @@ def _stored_week() -> SnapshotStore:
     return store
 
 
-def test_replay_response_summarizes_week_without_touching_live_journal():
+def test_replay_response_feeds_pnl_without_touching_live_positions():
+    from bot.research import open_trade_size, paper_pnl_text
+
     store = _stored_week()
     journal = Journal()
     reply = replay_response("TEST", store, journal, DAY + timedelta(days=2))
     assert reply.startswith("replay TEST: 3 snapshots, ")
     assert "fills" in reply
     assert "clean days" in reply
-    assert [entry.kind for entry in journal.entries()] == ["replay_summary"]
-    assert journal.entries()[0].payload["snapshots"] == 3
+    kinds = [entry.kind for entry in journal.entries()]
+    assert set(kinds) == {"fill", "replay_summary"}
+    assert all(e.payload["venue"] == "replay" for e in journal.entries() if e.kind == "fill")
+    assert "signal" not in kinds and "intent_proposed" not in kinds
+    assert open_trade_size(journal, "TEST") == 0.0
+    assert "total replay pnl:" in paper_pnl_text(journal, store)
+
+
+def test_replay_holds_same_side_and_closes_on_flip():
+    journal = replay_week(
+        [_flippable_snapshot(0), _flippable_snapshot(1), _flippable_snapshot(2)],
+        Journal(),
+        bars=[_bar(0, 100.0), _bar(1, 104.0), _bar(2, 108.0)],
+    )
+    actions = [e.payload["action"] for e in journal.entries() if e.kind == "backtest_step"]
+    assert actions == ["open", "hold", "close"]
+    assert sum(1 for e in journal.entries() if e.kind == "fill") == 2
+    assert sum(1 for e in journal.entries() if e.kind == "replay_hold") == 1
 
 
 def test_replay_response_needs_two_snapshots_and_bars():

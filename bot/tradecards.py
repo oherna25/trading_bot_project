@@ -3,12 +3,13 @@ from __future__ import annotations
 import html
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
 
 from bot.metareason import generate_reason, select_reason_backend
 from bot.exposure import compute_gex
-from bot.ideas import parse_timeframe, rank_ideas, symbols_for, unknown_symbols
+from bot.ideas import cached_earnings, parse_timeframe, rank_ideas, symbols_for, unknown_symbols
+from bot.ivrank import histories_for
 from bot.journal import Journal
 from bot.models import HttpPost
 from bot.shapes import Bar, ChainSnapshot, GexProfile
@@ -56,6 +57,8 @@ class TradeCard:
     flip_point: Optional[float]
     reason: str
     reason_source: str
+    earnings_date: Optional[str] = None
+    iv_rank: Optional[float] = None
 
 
 def fallback_reason(stats: Mapping[str, Any]) -> str:
@@ -76,6 +79,9 @@ def fallback_reason(stats: Mapping[str, Any]) -> str:
     breakeven = stats.get("breakeven")
     if breakeven is not None:
         parts.append(f"breakeven {breakeven:.1f}")
+    earnings_date = stats.get("earnings_date")
+    if earnings_date is not None:
+        parts.append(f"earnings {earnings_date} inside expiry")
     return ", ".join(parts) + "."
 
 
@@ -86,8 +92,10 @@ def build_trade_cards(
     journal: Journal,
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
+    iv_history: Mapping[str, Sequence[float]] | None = None,
+    earnings: Mapping[str, date] | None = None,
 ) -> list[TradeCard]:
-    ideas = rank_ideas(entries, max_days, now=now)
+    ideas = rank_ideas(entries, max_days, now=now, iv_history=iv_history, earnings=earnings)
     by_snapshot = {
         snapshot_id: (snapshot, profile, bar) for snapshot_id, snapshot, profile, bar in entries
     }
@@ -115,6 +123,8 @@ def build_trade_cards(
             "regime": regime,
             "spot": spot,
             "flip_point": profile.flip_point,
+            "earnings_date": idea.earnings_date,
+            "iv_rank": idea.iv_rank,
         }
         reason_source = "fallback"
         if backend == "meta":
@@ -196,9 +206,18 @@ def build_trade_cards(
                 flip_point=profile.flip_point,
                 reason=reason,
                 reason_source=reason_source,
+                earnings_date=idea.earnings_date,
+                iv_rank=idea.iv_rank,
             )
         )
     return cards
+
+
+def bar_at_or_before(store: SnapshotStore, symbol: str, stamp: datetime) -> Optional[Bar]:
+    past = [bar for bar in store.read_bars(symbol) if bar.timestamp_utc <= stamp]
+    if past:
+        return max(past, key=lambda bar: bar.timestamp_utc)
+    return store.read_latest_bar(symbol)
 
 
 def query_trade_cards(
@@ -236,7 +255,16 @@ def query_trade_cards(
         snapshot_ids.append(snapshot_id)
     if not entries:
         raise ValueError(f"no snapshot stored for {underlying}")
-    cards = build_trade_cards(entries, max_days, now, journal, env, http_post)
+    cards = build_trade_cards(
+        entries,
+        max_days,
+        now,
+        journal,
+        env,
+        http_post,
+        iv_history=histories_for(store, used),
+        earnings=cached_earnings(used, now),
+    )
     journal.append(
         now,
         "ideas",
@@ -273,12 +301,17 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
         return "trade cards: none found"
     lines = [f"trade cards ({len(cards)}):"]
     for number, card in enumerate(cards, 1):
-        lines.append(
+        line = (
             f"{number}. {card.symbol} {card.direction} {card.spread} "
             f"expiry {card.expiry} confidence {card.confidence:.2f} "
             f"max loss {card.max_loss} breakeven {card.breakeven} wall {card.wall_exposure} "
-            f"{card.regime} spot {card.spot} flip {card.flip_point}: {card.reason}"
+            f"{card.regime} spot {card.spot} flip {card.flip_point}"
         )
+        if card.earnings_date is not None:
+            line += f" earnings {card.earnings_date}"
+        if card.iv_rank is not None:
+            line += f" iv rank {card.iv_rank:.1f}"
+        lines.append(f"{line}: {card.reason}")
     return "\n".join(lines)
 
 
@@ -309,6 +342,8 @@ def cards_to_json(cards: Sequence[TradeCard]) -> dict:
                 "flip_point": _rounded(card.flip_point, 2),
                 "reason": card.reason,
                 "reason_source": card.reason_source,
+                "earnings_date": card.earnings_date,
+                "iv_rank": _rounded(card.iv_rank, 1),
             }
             for card in cards
         ]
@@ -360,6 +395,10 @@ def trade_cards_html(cards: Sequence[TradeCard], underlying: str) -> str:
             f"spot {card.spot if card.spot is not None else 'n/a'} "
             f"vs flip {card.flip_point if card.flip_point is not None else 'n/a'}",
         ]
+        if card.earnings_date is not None:
+            stats.append(f"earnings {card.earnings_date} inside expiry")
+        if card.iv_rank is not None:
+            stats.append(f"iv rank {card.iv_rank:.1f}")
         items = "".join(f"<li>{html.escape(item)}</li>" for item in stats)
         parts.append(
             "<article>"

@@ -255,6 +255,153 @@ def test_ingest_chain_persists_and_journals():
     assert journal.entries()[-1].kind == "snapshot_ingested"
 
 
+def test_ingest_chain_records_average_iv():
+    store, journal = SnapshotStore(), Journal()
+    ingest_chain("marketdata_eod", store, journal, _ctx("SPY", {"options/chain": MARKETDATA_CHAIN}))
+    history = store.read_iv_history("SPY")
+    assert len(history) == 1
+    assert list(history.values())[0] == pytest.approx(0.31)
+
+
+def test_ingest_chain_skips_iv_without_greeks():
+    store, journal = SnapshotStore(), Journal()
+    ingest_chain(
+        "tradier_sandbox", store, journal, _ctx("SPY", {"expirations": TRADIER_EXPIRATIONS, "chains": TRADIER_CHAIN})
+    )
+    assert store.read_iv_history("SPY") == {}
+
+
+YAHOO_OPTIONS = {
+    "optionChain": {
+        "result": [
+            {
+                "underlyingSymbol": "SPY",
+                "expirationDates": [1763596800],
+                "options": [
+                    {
+                        "expirationDate": 1763596800,
+                        "calls": [
+                            {"strike": 100.0, "impliedVolatility": 0.30},
+                            {"strike": 105.0, "impliedVolatility": 0.34},
+                            {"strike": 110.0, "impliedVolatility": None},
+                        ],
+                        "puts": [
+                            {"strike": 100.0, "impliedVolatility": 0.32},
+                            {"strike": 95.0, "impliedVolatility": 0.0},
+                        ],
+                    }
+                ],
+            }
+        ],
+        "error": None,
+    }
+}
+
+
+def test_fetch_yahoo_iv_averages_positive_legs():
+    from bot.feeds import fetch_yahoo_iv
+
+    result = fetch_yahoo_iv(_ctx("SPY", {"v7/finance/options": YAHOO_OPTIONS}))
+    assert result["underlying"] == "SPY"
+    assert result["iv_average"] == pytest.approx(0.32)
+    assert result["count"] == 3
+
+
+ALPACA_SNAPSHOTS = {
+    "snapshots": {
+        "SPY261120C00769000": {"impliedVolatility": 0.30, "greeks": {"gamma": 0.05}},
+        "SPY261120P00769000": {"impliedVolatility": 0.34},
+        "SPY261120C01000000": {"impliedVolatility": None},
+    }
+}
+
+
+def test_fetch_alpaca_iv_averages_snapshots():
+    from bot.feeds import fetch_alpaca_iv
+
+    result = fetch_alpaca_iv(_ctx("SPY", {"v1beta1/options/snapshots": ALPACA_SNAPSHOTS}))
+    assert result["underlying"] == "SPY"
+    assert result["iv_average"] == pytest.approx(0.32)
+    assert result["count"] == 2
+
+
+def test_fetch_yahoo_iv_empty_chain_yields_none():
+    from bot.feeds import fetch_yahoo_iv
+
+    result = fetch_yahoo_iv(_ctx("SPY", {"v7/finance/options": {"optionChain": {"result": []}}}))
+    assert result["iv_average"] is None
+    assert result["count"] == 0
+
+
+def test_live_brief_prefers_alpaca_iv_when_chain_lacks_greeks():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": TRADIER_EXPIRATIONS,
+                "chains": TRADIER_CHAIN,
+                "/bars": ALPACA_BARS,
+                "v1beta1/options/snapshots": ALPACA_SNAPSHOTS,
+                "v7/finance/options": YAHOO_OPTIONS,
+            },
+        )
+
+    live_brief("SPY", store, journal, NOW, context_factory=factory)
+    history = store.read_iv_history("SPY")
+    assert len(history) == 1
+    assert list(history.values())[0] == pytest.approx(0.32)
+    recorded = [e for e in journal.entries() if e.kind == "iv_recorded"]
+    assert len(recorded) == 1
+    assert recorded[0].payload["source"] == "alpaca_options"
+    assert recorded[0].payload["points"] == 2
+
+
+def test_live_brief_falls_back_to_yahoo_iv():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": TRADIER_EXPIRATIONS,
+                "chains": TRADIER_CHAIN,
+                "/bars": ALPACA_BARS,
+                "v1beta1/options/snapshots": RuntimeError("boom"),
+                "v7/finance/options": YAHOO_OPTIONS,
+            },
+        )
+
+    live_brief("SPY", store, journal, NOW, context_factory=factory)
+    history = store.read_iv_history("SPY")
+    assert len(history) == 1
+    assert list(history.values())[0] == pytest.approx(0.32)
+    recorded = [e for e in journal.entries() if e.kind == "iv_recorded"]
+    assert len(recorded) == 1
+    assert recorded[0].payload["source"] == "yahoo_options"
+
+
+def test_live_brief_skips_yahoo_iv_when_vendor_ivs_present():
+    store, journal = SnapshotStore(), Journal()
+
+    def factory(underlying: str) -> FeedContext:
+        return _ctx(
+            underlying,
+            {
+                "expirations": RuntimeError("boom"),
+                "options/chain": MARKETDATA_CHAIN,
+                "/bars": ALPACA_BARS,
+                "v7/finance/options": AssertionError("must not fetch yahoo with vendor ivs"),
+            },
+        )
+
+    live_brief("SPY", store, journal, NOW, context_factory=factory)
+    history = store.read_iv_history("SPY")
+    assert list(history.values())[0] == pytest.approx(0.31)
+    assert not [e for e in journal.entries() if e.kind == "iv_recorded"]
+
+
 def test_ingest_bars_persists_and_journals():
     store, journal = SnapshotStore(), Journal()
     bars = ingest_bars("alpaca", store, journal, _ctx("SPY", {"/bars": ALPACA_BARS}))

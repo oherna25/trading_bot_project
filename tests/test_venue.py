@@ -6,7 +6,7 @@ import bot.autonomy as autonomy
 from bot.autonomy import LiveDisabledError, enable_live, submit_live
 from bot.journal import Journal
 from bot.risk import even_legs
-from bot.shapes import OrderIntent, OrderLeg, RiskLimits, RiskState
+from bot.shapes import OrderIntent, OrderLeg, PaperEvidence, RiskLimits, RiskState
 from bot.venue import LiveAck, LiveConfigError, LiveOrderError, TradierVenue, occ_symbol
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -199,9 +199,18 @@ def test_place_order_reports_unfilled_status():
         venue.place_order(_intent(), 100.0)
 
 
+def _evidence() -> PaperEvidence:
+    return PaperEvidence(clean_days=12, clean_days_target=10, max_drawdown=100.0,
+                         drawdown_bound=500.0, halt_drills_passed=True)
+
+
+def _checklist() -> dict[str, bool]:
+    return {"paper_evidence_reviewed": True, "risk_limits_set": True, "kill_switch_tested": True}
+
+
 def test_submit_live_returns_fill_and_updates_state():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW)
+    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
     venue = _StubVenue(LiveAck(order_id="1", status="filled", fill_price=100.0, quantity=10))
     fill, position, updated = submit_live(_intent(), _state(), None, LIMITS, journal, NOW, venue, 100.0)
     assert fill.venue == "live"
@@ -215,7 +224,7 @@ def test_submit_live_returns_fill_and_updates_state():
 
 def test_submit_live_blocks_while_halted():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW)
+    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
     venue = _StubVenue(LiveAck(order_id="1", status="filled", fill_price=100.0, quantity=10))
     with pytest.raises(LiveDisabledError):
         submit_live(_intent(), _state(halt_active=True), None, LIMITS, journal, NOW, venue, 100.0)

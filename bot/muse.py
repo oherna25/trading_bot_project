@@ -14,6 +14,7 @@ from urllib.parse import parse_qs
 
 from bot.charts import gamma_chart_html, regime_board_html
 from bot.config import auth_token as _auth_token
+from bot.demo import demo_html
 from bot.exposure import compute_gex
 from bot.feeds import FeedContext, default_context, ingest_bars, ingest_chain, live_context
 from bot.ivrank import histories_for, iv_rank
@@ -139,10 +140,13 @@ def _replay_handler(
 def _iv_rank_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
-    del args, journal, config, now, underlying
+    del args, journal, config, now
     symbols = sorted(store.list_underlyings())
     if not symbols:
         return "iv ranks: none stored"
+    if underlying in symbols:
+        symbols.remove(underlying)
+        symbols.insert(0, underlying)
     histories = histories_for(store, symbols)
     lines = ["iv ranks:"]
     for symbol in symbols:
@@ -153,6 +157,67 @@ def _iv_rank_handler(
         else:
             lines.append(f"{symbol}: {rank:.1f} ({len(points)} points)")
     return "\n".join(lines)
+
+
+def _backfill_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, underlying
+    from bot.ivrank import backfill_iv_history
+
+    return backfill_iv_history(store, journal, now)
+
+
+def _diff_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, journal, now
+    from bot.diff import snapshot_diff_text
+
+    return snapshot_diff_text(underlying, store)
+
+
+def _shock_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.shock import SHOCK_USAGE, shock_text
+
+    raw = args.get("shock_pct")
+    try:
+        shock_pct = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return SHOCK_USAGE
+    return shock_text(underlying, store, journal, now, shock_pct)
+
+
+def _holdings_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config, underlying
+    from bot.holdings import save_holdings_text
+
+    return save_holdings_text(args.get("holdings"), store, journal, now)
+
+
+def _debate_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.debate import card_debate
+
+    raw_index = args.get("index", 0)
+    try:
+        index = int(raw_index)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError("index must be an integer") from None
+    snapshot = args.get("snapshot")
+    return card_debate(
+        underlying, store, journal, now,
+        snapshot_id=str(snapshot) if snapshot else None,
+        index=index,
+        live_models=bool(args.get("live_models", False)),
+    )
 
 
 def _session_run_handler(
@@ -194,6 +259,11 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "journal_tail": MuseTool("journal_tail", "Read the tail of the journal", _journal_tail_handler),
     "paper_pnl": MuseTool("paper_pnl", "Report paper P&L from journaled fills", _paper_pnl_handler),
     "get_iv_rank": MuseTool("get_iv_rank", "Report IV rank per underlying from stored histories", _iv_rank_handler),
+    "backfill_iv": MuseTool("backfill_iv", "Backfill IV history from stored snapshots", _backfill_handler),
+    "snapshot_diff": MuseTool("snapshot_diff", "Diff the latest two stored snapshots", _diff_handler),
+    "shock_test": MuseTool("shock_test", "Shock spot and reprice walls plus cards", _shock_handler),
+    "set_holdings": MuseTool("set_holdings", "Save operator holdings for position-aware risk", _holdings_handler),
+    "debate_card": MuseTool("debate_card", "Bull-bear debate for one trade card", _debate_handler),
     "run_replay": MuseTool("run_replay", "Replay stored snapshots into a paper backtest summary", _replay_handler),
     "run_session": MuseTool("run_session", "Run a scheduled session now and return the brief", _session_run_handler),
 }
@@ -614,6 +684,28 @@ def route_http(
             return HttpResponse.json(400, {"ok": False, "reply": "", "error": str(exc)})
         reply = handle_chat(request, store, journal, config, now)
         return HttpResponse.json(200, {"ok": reply.ok, "reply": reply.reply, "error": reply.error})
+    if method == "POST" and clean == "/voice":
+        from bot.voice import handle_voice_note
+
+        if not isinstance(payload, (bytes, bytearray)) or not payload:
+            return HttpResponse.json(400, {"ok": False, "reply": "", "error": "voice needs raw audio bytes"})
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+
+        def _flag(name: str, default: bool) -> bool:
+            raw_flag = (params.get(name, [""])[0] or "").strip().lower()
+            if not raw_flag:
+                return default
+            return raw_flag not in ("0", "false", "no", "off")
+
+        reply = handle_voice_note(
+            bytes(payload), underlying, store, journal, now,
+            live_models=_flag("live_models", True),
+            grounding=_flag("grounding", False),
+            cards=_flag("cards", False),
+        )
+        return HttpResponse.json(200, {"ok": True, "reply": reply})
     if method == "POST" and clean == SESSION_PATH:
         if not isinstance(payload, dict):
             return HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid session body"})
@@ -696,6 +788,42 @@ def route_http(
         return HttpResponse.html(200, gamma_chart_html(underlying, snapshot, profile, bar, now))
     if method == "GET" and clean == "/board":
         return HttpResponse.html(200, regime_board_html(store, now))
+    if method == "GET" and clean in ("/demo", "/"):
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        if store.read_latest(underlying) is None:
+            return HttpResponse.html(400, _cards_error_html(f"no snapshot stored for {underlying}"))
+        return HttpResponse.html(200, demo_html(underlying, store, journal, now))
+    if method == "GET" and clean == "/card":
+        from bot.demo import demo_cards
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        snapshot_id = (params.get("snapshot", [""])[0] or "").strip()
+        try:
+            index = int((params.get("index", ["0"])[0] or "0").strip())
+        except ValueError:
+            return HttpResponse.html(400, _cards_error_html("index must be an integer"))
+        if not snapshot_id:
+            latest = store.read_latest(underlying)
+            if latest is None:
+                return HttpResponse.html(400, _cards_error_html(f"no snapshot stored for {underlying}"))
+            snapshot_id = latest[0]
+        _, cards = demo_cards(underlying, store, journal, now, snapshot_id)
+        if not cards:
+            return HttpResponse.html(400, _cards_error_html(f"no cards for {underlying} snapshot {snapshot_id}"))
+        if index < 0 or index >= len(cards):
+            return HttpResponse.html(400, _cards_error_html(f"index {index} out of range (0-{len(cards) - 1})"))
+        page = trade_cards_html(cards[index : index + 1], underlying)
+        if (params.get("debate", [""])[0] or "").strip() == "1":
+            from bot.debate import attach_debate, debate_card
+
+            live = (params.get("live_models", [""])[0] or "").strip() == "1"
+            page = attach_debate(
+                page, debate_card(cards[index], journal, now, live_models=live)
+            )
+        return HttpResponse.html(200, page)
     return HttpResponse.json(404, {"error": "not found"})
 
 
@@ -716,6 +844,19 @@ def resolve_port(explicit: Optional[int]) -> int:
 
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+MAX_VOICE_BYTES = 10 * 1024 * 1024
+
+
+def _body_payload(clean: str, raw: bytes) -> tuple[Any, Optional[HttpResponse]]:
+    if clean == "/voice":
+        if len(raw) > MAX_VOICE_BYTES:
+            return None, HttpResponse.json(413, {"ok": False, "reply": "", "error": "voice audio too large"})
+        return raw, None
+    try:
+        return (json.loads(raw.decode("utf-8")) if raw else {}), None
+    except ValueError:
+        return None, HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid JSON"})
 
 
 def open_server_warning(host: str, auth_token: Optional[str]) -> Optional[str]:
@@ -854,12 +995,10 @@ def create_server(
             head_only = self.command == "HEAD"
             length = int(self.headers.get("Content-Length", "0") or "0")
             raw = self.rfile.read(length) if length else b""
-            try:
-                payload = json.loads(raw.decode("utf-8")) if raw else {}
-            except ValueError:
-                response = HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid JSON"})
-                self._send(response, head_only)
-                self._access(response.status, started)
+            payload, decode_error = _body_payload(self.path.split("?", 1)[0], raw)
+            if decode_error is not None:
+                self._send(decode_error, head_only)
+                self._access(decode_error.status, started)
                 return
             now = datetime.now(timezone.utc)
             authorization = self.headers.get("Authorization", "")

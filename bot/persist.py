@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from bot.journal import Journal
-from bot.shapes import Bar, ChainSnapshot, JournalEntry, OperatorProfile, OptionContract
+from bot.shapes import Bar, ChainSnapshot, Holding, JournalEntry, OperatorProfile, OptionContract
 from bot.store import SnapshotStore
 
 SNAPSHOTS_FILE = "snapshots.json"
@@ -14,6 +14,7 @@ BARS_FILE = "bars.json"
 JOURNAL_FILE = "journal.json"
 PROFILE_FILE = "profile.json"
 IV_FILE = "iv.json"
+HOLDINGS_FILE = "holdings.json"
 
 
 def _freeze(value: Any) -> Any:
@@ -141,6 +142,30 @@ def _freeze_profile(profile: OperatorProfile) -> dict[str, Any]:
     }
 
 
+def _freeze_holding(holding: Holding) -> dict[str, Any]:
+    return {
+        "symbol": holding.symbol,
+        "kind": holding.kind,
+        "side": holding.side,
+        "strike": holding.strike,
+        "expiry": holding.expiry,
+        "qty": holding.qty,
+    }
+
+
+def _thaw_holding(raw: dict[str, Any]) -> Holding:
+    strike = raw.get("strike")
+    expiry = raw.get("expiry")
+    return Holding(
+        symbol=str(raw.get("symbol", "")),
+        kind=str(raw.get("kind", "")),
+        side=str(raw.get("side", "")),
+        strike=None if strike is None else float(strike),
+        expiry=None if expiry is None else str(expiry),
+        qty=float(raw.get("qty", 1.0)),
+    )
+
+
 def _thaw_profile(raw: dict[str, Any]) -> OperatorProfile:
     return OperatorProfile(
         risk_tolerance=str(raw["risk_tolerance"]),
@@ -215,6 +240,10 @@ def save_bundle(
             for symbol, days in store.all_iv().items()
         },
     )
+    _write_json(
+        os.path.join(store_dir, HOLDINGS_FILE),
+        [_freeze_holding(holding) for holding in store.read_holdings()],
+    )
 
 
 def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
@@ -247,10 +276,15 @@ def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
                 if isinstance(days, dict):
                     for day, value in days.items():
                         store.save_iv(str(symbol), str(day), float(value))
+    holdings_path = os.path.join(store_dir, HOLDINGS_FILE)
+    if os.path.exists(holdings_path):
+        raw_holdings = _read_json(holdings_path)
+        if isinstance(raw_holdings, list):
+            store.save_holdings([_thaw_holding(item) for item in raw_holdings if isinstance(item, dict)])
     return store, journal
 
 
-BUNDLE_FILES = (SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE)
+BUNDLE_FILES = (SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE, HOLDINGS_FILE)
 
 
 def bundle_mtimes(store_dir: str) -> dict[str, float]:

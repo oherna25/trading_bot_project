@@ -25,12 +25,29 @@ def check_promotion(evidence: PaperEvidence) -> str:
     return "ready_for_checklist"
 
 
-def enable_live(signature: str, state: RiskState, journal: Journal, now: datetime) -> bool:
+LIVE_CHECKLIST = ("paper_evidence_reviewed", "risk_limits_set", "kill_switch_tested")
+
+
+def enable_live(
+    signature: str,
+    state: RiskState,
+    journal: Journal,
+    now: datetime,
+    evidence: PaperEvidence | None = None,
+    checklist: dict[str, bool] | None = None,
+) -> bool:
     global live_enabled
-    if not signature or state.kill_active:
+    if not signature or state.kill_active or state.halt_active:
+        return False
+    if evidence is None or check_promotion(evidence) != "ready_for_checklist":
+        journal.append(now, "live_blocked", {"reason": "evidence not ready"})
+        return False
+    checks = checklist or {}
+    if not all(checks.get(item) is True for item in LIVE_CHECKLIST):
+        journal.append(now, "live_blocked", {"reason": "checklist incomplete"})
         return False
     live_enabled = True
-    journal.append(now, "live_enabled", {"signature": signature})
+    journal.append(now, "live_enabled", {"signature": signature, "checklist": sorted(LIVE_CHECKLIST)})
     return True
 
 

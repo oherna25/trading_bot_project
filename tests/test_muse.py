@@ -101,6 +101,7 @@ def test_registry_tools_answer(monkeypatch):
     assert set(TOOL_REGISTRY) == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
+        "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
     }
     store = _seeded_store()
     journal = Journal()
@@ -129,6 +130,21 @@ def test_registry_tools_answer(monkeypatch):
     pnl = dispatch_tool("paper_pnl", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert pnl.ok is True
     assert "paper pnl" in pnl.reply
+    backfill = dispatch_tool("backfill_iv", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert backfill.ok is True
+    assert backfill.reply.startswith("backfilled IV")
+    diff = dispatch_tool("snapshot_diff", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert diff.ok is True
+    assert "diff TEST" in diff.reply
+    shock = dispatch_tool("shock_test", {"shock_pct": -2.0}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert shock.ok is True
+    assert "TEST shock -2.0%" in shock.reply
+    holdings = dispatch_tool("set_holdings", {"holdings": []}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert holdings.ok is True
+    assert holdings.reply == "holdings cleared"
+    debate = dispatch_tool("debate_card", {"index": 0}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert debate.ok is True
+    assert "BULL [rules]:" in debate.reply
 
 
 def test_openapi_spec_lists_both_paths():
@@ -172,6 +188,7 @@ def test_route_mcp_tools_list_names_registry():
     assert {tool["name"] for tool in body["tools"]} == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
+        "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
     }
 
 
@@ -250,6 +267,24 @@ def test_iv_rank_tool_reports_histories():
     reply = dispatch_tool("get_iv_rank", {}, store, Journal(), CONFIG, NOW, underlying="TEST")
     assert reply.ok is True
     assert reply.reply == "iv ranks:\nTEST: 50.0 (25 points)"
+
+
+def test_iv_rank_tool_leads_with_requested_underlying():
+    store = SnapshotStore()
+    for symbol in ("AAA", "ZZZ"):
+        store.save(
+            ChainSnapshot(
+                underlying=symbol, timestamp_utc=NOW, source_name="seed", latency_ms=1.0,
+                contracts_list=(),
+            )
+        )
+    for day in range(25):
+        store.save_iv("AAA", f"2026-10-{day + 1:02d}", 10.0)
+        store.save_iv("ZZZ", f"2026-10-{day + 1:02d}", 90.0)
+    reply = dispatch_tool("get_iv_rank", {}, store, Journal(), CONFIG, NOW, underlying="ZZZ")
+    assert reply.reply.splitlines()[1].startswith("ZZZ:")
+    reply2 = dispatch_tool("get_iv_rank", {}, store, Journal(), CONFIG, NOW, underlying="AAA")
+    assert reply2.reply.splitlines()[1].startswith("AAA:")
 
 
 def test_iv_rank_tool_empty_store():

@@ -13,6 +13,8 @@ from bot.feeds import (
     CHAIN_FEEDS,
     FeedContext,
     FeedUnavailableError,
+    fetch_alpaca_iv,
+    fetch_yahoo_iv,
     ingest_bars,
     ingest_chain,
     live_context,
@@ -661,6 +663,8 @@ def open_trade_size(journal: Journal, symbol: str) -> float:
     for entry in journal.entries():
         if entry.kind != "fill" or entry.payload.get("symbol") != symbol:
             continue
+        if entry.payload.get("venue", "paper") == "replay":
+            continue
         size = entry.payload.get("size")
         if size is None:
             continue
@@ -690,9 +694,11 @@ def paper_trade_step(
     return f"paper trade: {intent.side} {intent.size:.0f} {symbol} @ {fill.price:.2f}"
 
 
-def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
-    net: dict[str, float] = {}
-    cost: dict[str, float] = {}
+def _fill_books(journal: Journal) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
+    live_net: dict[str, float] = {}
+    live_cost: dict[str, float] = {}
+    replay_net: dict[str, float] = {}
+    replay_cost: dict[str, float] = {}
     for entry in journal.entries():
         if entry.kind != "fill":
             continue
@@ -703,10 +709,18 @@ def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
             continue
         side = entry.payload.get("side", "buy")
         signed = float(size) if side == "buy" else -float(size)
-        net[symbol] = net.get(symbol, 0.0) + signed
-        cost[symbol] = cost.get(symbol, 0.0) + signed * float(price)
-    if not net:
-        return "paper pnl: no fills journaled"
+        if entry.payload.get("venue", "paper") == "replay":
+            book_net, book_cost = replay_net, replay_cost
+        else:
+            book_net, book_cost = live_net, live_cost
+        book_net[symbol] = book_net.get(symbol, 0.0) + signed
+        book_cost[symbol] = book_cost.get(symbol, 0.0) + signed * float(price)
+    return live_net, live_cost, replay_net, replay_cost
+
+
+def _pnl_lines(
+    net: dict[str, float], cost: dict[str, float], store: SnapshotStore, prefix: str
+) -> tuple[list[str], float]:
     lines = []
     total = 0.0
     for symbol in sorted(net):
@@ -716,8 +730,23 @@ def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
         average = cost[symbol] / net[symbol]
         pnl = (bar.close - average) * net[symbol] + 0.0
         total += pnl
-        lines.append(f"{symbol}: size {net[symbol]:.0f} avg {average:.2f} mark {bar.close:.2f} pnl {pnl:+.2f}")
-    lines.append(f"total paper pnl: {total:+.2f}")
+        lines.append(f"{prefix}{symbol}: size {net[symbol]:.0f} avg {average:.2f} mark {bar.close:.2f} pnl {pnl:+.2f}")
+    return lines, total
+
+
+def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
+    live_net, live_cost, replay_net, replay_cost = _fill_books(journal)
+    if not live_net and not replay_net:
+        return "paper pnl: no fills journaled"
+    lines: list[str] = []
+    if live_net:
+        live_lines, live_total = _pnl_lines(live_net, live_cost, store, "")
+        lines.extend(live_lines)
+        lines.append(f"total paper pnl: {live_total:+.2f}")
+    if replay_net:
+        replay_lines, replay_total = _pnl_lines(replay_net, replay_cost, store, "replay ")
+        lines.extend(replay_lines)
+        lines.append(f"total replay pnl: {replay_total:+.2f}")
     return "\n".join(lines)
 
 
@@ -768,6 +797,43 @@ def route_chat(
         from bot.replay import replay_response
 
         return replay_response(underlying, store, journal, now)
+    if re.search(r"\bbackfill\b", lowered):
+        from bot.ivrank import backfill_iv_history
+
+        return backfill_iv_history(store, journal, now)
+    if re.search(r"\bdiffs?\b", lowered):
+        from bot.diff import snapshot_diff_text
+
+        return snapshot_diff_text(underlying, store)
+    if re.search(r"\bshock\b", lowered):
+        from bot.shock import SHOCK_USAGE, parse_shock_pct, shock_text
+
+        shock_pct = parse_shock_pct(text)
+        if shock_pct is None:
+            return SHOCK_USAGE
+        return shock_text(underlying, store, journal, now, shock_pct)
+    if re.search(r"\bdebate\b", lowered):
+        from bot.debate import card_debate
+
+        match = re.search(r"\bdebate\b\s*(\d+)?", lowered)
+        index = int(match.group(1)) if match and match.group(1) else 0
+        try:
+            return card_debate(underlying, store, journal, now, index=index, live_models=live_models)
+        except ValueError as exc:
+            return str(exc)
+    if re.search(r"\bholdings?\b", lowered):
+        from bot.holdings import holdings_text, save_holdings_text
+
+        if "[" in text:
+            try:
+                raw = json.loads(text[text.index("["):])
+            except ValueError as exc:
+                return f"could not parse holdings JSON: {exc}"
+            try:
+                return save_holdings_text(raw, store, journal, now)
+            except ValueError as exc:
+                return f"could not save holdings: {exc}"
+        return holdings_text(store)
     reply, _ = handle_chat_query(text, underlying, store, journal, now, live_models, grounding, cards)
     return reply
 
@@ -791,6 +857,41 @@ def ingest_first_working(
     return None
 
 
+def _record_option_iv(
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    context_factory: Callable[[str], FeedContext],
+) -> None:
+    found = store.read_latest(underlying)
+    if found is None:
+        return
+    _, snapshot = found
+    if any(contract.iv is not None for contract in snapshot.contracts_list):
+        return
+    for source, fetch in (("alpaca_options", fetch_alpaca_iv), ("yahoo_options", fetch_yahoo_iv)):
+        try:
+            result = fetch(context_factory(underlying))
+        except Exception:
+            continue
+        if result["iv_average"] is None:
+            continue
+        store.save_iv(underlying, snapshot.timestamp_utc.isoformat(), result["iv_average"])
+        journal.append(
+            now,
+            "iv_recorded",
+            {
+                "symbol": underlying,
+                "date": snapshot.timestamp_utc.date().isoformat(),
+                "iv": result["iv_average"],
+                "points": result["count"],
+                "source": source,
+            },
+        )
+        return
+
+
 def live_brief(
     underlying: str,
     store: SnapshotStore,
@@ -812,6 +913,7 @@ def live_brief(
     reply, signal = handle_chat_query(
         "live session brief", underlying, store, journal, now, live_models, grounding, cards
     )
+    _record_option_iv(underlying, store, journal, now, context_factory)
     if paper_trade:
         note = paper_trade_step(underlying, signal, store.read_latest_bar(underlying), journal, now)
         if note:

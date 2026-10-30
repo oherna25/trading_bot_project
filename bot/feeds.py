@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import os
 import time
@@ -368,6 +369,81 @@ def _yfinance(ctx: FeedContext) -> dict[str, Any]:
     return {"underlying": ctx.underlying, "bars": bars}
 
 
+_yahoo_cookies: http.cookiejar.CookieJar = http.cookiejar.CookieJar()
+
+
+def _yahoo_live_payload(symbol: str) -> Any:
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_yahoo_cookies))
+    headers = {"User-Agent": "trading-bot/0.1"}
+    crumb_request = urllib.request.Request(f"{YAHOO_BASE_URL}/v1/test/getcrumb", headers=headers)
+    crumb = opener.open(crumb_request, timeout=HTTP_TIMEOUT_SECONDS).read().decode().strip()
+    url = f"{YAHOO_BASE_URL}/v7/finance/options/{symbol}?crumb={crumb}"
+    request = urllib.request.Request(url, headers=headers)
+    with opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def fetch_alpaca_iv(ctx: FeedContext) -> dict[str, Any]:
+    payload = ctx.http_get(
+        f"{ALPACA_BASE_URL}/v1beta1/options/snapshots/{ctx.underlying}",
+        headers={
+            "APCA-API-KEY-ID": _credential_or_offline(ctx, "APCA_API_KEY_ID"),
+            "APCA-API-SECRET-KEY": _credential_or_offline(ctx, "APCA_API_SECRET_KEY"),
+        },
+        params={"feed": "indicative", "limit": "1000"},
+        timeout=HTTP_TIMEOUT_SECONDS,
+    )
+    snaps = payload.get("snapshots") if isinstance(payload, dict) else None
+    ivs = []
+    for snap in (snaps or {}).values():
+        if not isinstance(snap, dict):
+            continue
+        try:
+            value = float(snap.get("impliedVolatility"))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            ivs.append(value)
+    return {
+        "underlying": ctx.underlying,
+        "iv_average": sum(ivs) / len(ivs) if ivs else None,
+        "count": len(ivs),
+    }
+
+
+def fetch_yahoo_iv(ctx: FeedContext) -> dict[str, Any]:
+    if ctx.http_get is _urllib_get:
+        payload = _yahoo_live_payload(ctx.underlying)
+    else:
+        payload = ctx.http_get(
+            f"{YAHOO_BASE_URL}/v7/finance/options/{ctx.underlying}",
+            headers={"User-Agent": "trading-bot/0.1"},
+            params={},
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+    if not isinstance(payload, dict):
+        payload = {}
+    results = _as_list((payload.get("optionChain") or {}).get("result"))
+    node = results[0] if results else {}
+    options = _as_list(node.get("options"))
+    leg = options[0] if options else {}
+    ivs = []
+    for row in _as_list(leg.get("calls")) + _as_list(leg.get("puts")):
+        if not isinstance(row, dict):
+            continue
+        try:
+            value = float(row.get("impliedVolatility"))
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            ivs.append(value)
+    return {
+        "underlying": ctx.underlying,
+        "iv_average": sum(ivs) / len(ivs) if ivs else None,
+        "count": len(ivs),
+    }
+
+
 FEED_REGISTRY: dict[str, Callable[[FeedContext], dict[str, Any]]] = {
     "tradier_sandbox": _tradier_sandbox,
     "alpaca": _alpaca,
@@ -421,6 +497,9 @@ def ingest_chain(
     )
     snapshot_id = store.save(snapshot)
     journal.append(snapshot.timestamp_utc, "snapshot_ingested", {"snapshot_id": snapshot_id, "source_name": feed_name})
+    ivs = [c.iv for c in snapshot.contracts_list if c.iv is not None]
+    if ivs:
+        store.save_iv(raw["underlying"], snapshot.timestamp_utc.isoformat(), sum(ivs) / len(ivs))
     return snapshot
 
 

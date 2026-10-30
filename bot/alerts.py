@@ -17,6 +17,8 @@ DISCORD_ENV = "DISCORD_WEBHOOK_URL"
 TELEGRAM_TOKEN_ENV = "TELEGRAM_BOT_TOKEN"
 TELEGRAM_CHAT_ENV = "TELEGRAM_CHAT_ID"
 WALL_PROXIMITY_PCT = 0.5
+WALL_GROWTH_PCT_PER_HOUR = 25.0
+WALL_GROWTH_TOP_WALLS = 3
 ALERT_TIMEOUT_SECONDS = 15.0
 
 
@@ -67,9 +69,55 @@ def wall_proximity_alerts(
     return [text]
 
 
+def _format_span(span_hours: float) -> str:
+    minutes = span_hours * 60.0
+    if minutes < 120.0:
+        return f"{minutes:.0f}m"
+    return f"{span_hours:.1f}h"
+
+
+def wall_growth_alerts(
+    underlying: str, store: SnapshotStore, journal: Journal, now: datetime
+) -> list[str]:
+    snaps = [
+        (snapshot_id, snapshot)
+        for snapshot_id, snapshot in store.snapshots_in_order()
+        if snapshot.underlying == underlying
+    ]
+    if len(snaps) < 2:
+        return []
+    (prev_id, prev), (latest_id, latest) = snaps[-2], snaps[-1]
+    span_hours = (latest.timestamp_utc - prev.timestamp_utc).total_seconds() / 3600.0
+    if span_hours <= 0:
+        return []
+    bar = store.read_latest_bar(underlying)
+    spot = bar.close if bar is not None else None
+    before = compute_gex(prev, prev_id, spot=spot)
+    after = compute_gex(latest, latest_id, spot=spot)
+    walls = sorted(after.per_strike_exposure.items(), key=lambda item: -abs(item[1]))
+    alerts = []
+    for strike, value in walls[:WALL_GROWTH_TOP_WALLS]:
+        old = before.per_strike_exposure.get(strike, 0.0)
+        if old == 0.0:
+            continue
+        growth_pct = (abs(value) - abs(old)) / abs(old) * 100.0
+        pace = growth_pct / span_hours
+        if pace < WALL_GROWTH_PCT_PER_HOUR:
+            continue
+        text = (
+            f"ALERT: {underlying} {strike:g} wall grew {growth_pct:+.0f}% "
+            f"in {_format_span(span_hours)} ({pace:+.0f}%/h pace)"
+        )
+        journal.append(now, "alert", {"underlying": underlying, "text": text})
+        alerts.append(text)
+    return alerts
+
+
 def collect_alerts(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> list[str]:
-    return change_alerts(underlying, store, journal, now) + wall_proximity_alerts(
-        underlying, store, journal, now
+    return (
+        change_alerts(underlying, store, journal, now)
+        + wall_proximity_alerts(underlying, store, journal, now)
+        + wall_growth_alerts(underlying, store, journal, now)
     )
 
 

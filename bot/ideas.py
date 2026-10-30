@@ -127,6 +127,8 @@ NON_TICKER_WORDS = frozenset(
 MIN_OPEN_INTEREST = 100.0
 MAX_SPREAD_PCT = 10.0
 TIGHT_SPREAD_PCT = 5.0
+EARNINGS_CONFIDENCE_HAIRCUT = 0.15
+EARNINGS_CONFIDENCE_FLOOR = 0.05
 MAX_IDEAS = 10
 MAX_PER_DIRECTION = 7
 MIN_DAYS_TO_EXPIRY = 1
@@ -348,6 +350,12 @@ def rank_ideas(
         if max_loss is not None:
             confidence += 0.05
         confidence = min(0.9, confidence)
+        earnings_map = earnings or {}
+        ref = now if now is not None else snapshot.timestamp_utc
+        earnings_day = earnings_map.get(snapshot.underlying)
+        event_risk = earnings_day.isoformat() if spans_earnings(ref, contract.expiry, earnings_day) else None
+        if event_risk is not None:
+            confidence = max(EARNINGS_CONFIDENCE_FLOOR, confidence - EARNINGS_CONFIDENCE_HAIRCUT)
         ranked.append(
             (
                 confidence,
@@ -366,6 +374,7 @@ def rank_ideas(
                 debit,
                 max_loss,
                 breakeven,
+                event_risk,
             )
         )
     ranked.sort(
@@ -391,6 +400,7 @@ def rank_ideas(
             debit,
             max_loss,
             breakeven,
+            event_risk,
         ) = row
         if len(ideas) >= MAX_IDEAS:
             break
@@ -410,11 +420,7 @@ def rank_ideas(
         if max_loss is not None and breakeven is not None:
             thesis += f", max loss ${max_loss:.0f}, breakeven {breakeven:.1f}"
         histories = iv_history or {}
-        earnings_map = earnings or {}
         rank = _iv_rank(histories.get(snapshot.underlying, ()))
-        earnings_day = earnings_map.get(snapshot.underlying)
-        ref = now if now is not None else snapshot.timestamp_utc
-        flagged = earnings_day.isoformat() if spans_earnings(ref, contract.expiry, earnings_day) else None
         ideas.append(
             TradeIdea(
                 symbol=snapshot.underlying,
@@ -432,7 +438,7 @@ def rank_ideas(
                 breakeven=breakeven,
                 net_debit=debit,
                 spread_pct=pct,
-                earnings_date=flagged,
+                earnings_date=event_risk,
                 iv_rank=rank,
             )
         )

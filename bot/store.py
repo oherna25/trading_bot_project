@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import NewType, Optional
 from urllib.parse import unquote
 
-from bot.shapes import Bar, ChainSnapshot, OperatorProfile
+from bot.shapes import Bar, ChainSnapshot, Holding, OperatorProfile
 
 SnapshotId = NewType("SnapshotId", str)
 
@@ -34,6 +34,7 @@ class SnapshotStore:
         self._bar_keys: dict[str, set[tuple[str, datetime]]] = {}
         self._profile: Optional[OperatorProfile] = None
         self._iv: dict[str, dict[str, float]] = {}
+        self._holdings: list[Holding] = []
 
     def save(self, snapshot: ChainSnapshot) -> str:
         snapshot_id = snapshot_id_for(snapshot)
@@ -104,6 +105,12 @@ class SnapshotStore:
     def read_profile(self) -> Optional[OperatorProfile]:
         return self._profile
 
+    def save_holdings(self, holdings: list[Holding]) -> None:
+        self._holdings = list(holdings)
+
+    def read_holdings(self) -> list[Holding]:
+        return list(self._holdings)
+
     def save_iv(self, symbol: str, day_iso: str, iv: float, keep_per_symbol: int = 600) -> None:
         days = self._iv.setdefault(symbol, {})
         days[day_iso] = iv
@@ -148,6 +155,7 @@ class SnapshotStore:
         self._bar_keys = {underlying: set(keys) for underlying, keys in other._bar_keys.items()}
         self._profile = other._profile
         self._iv = {symbol: dict(days) for symbol, days in other._iv.items()}
+        self._holdings = list(other._holdings)
 
     def merge_from(self, other: SnapshotStore) -> None:
         for snapshot_id in other._order:
