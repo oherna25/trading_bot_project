@@ -41,6 +41,19 @@ def _shock_args(rest: str) -> dict[str, Any]:
     return {"shock_pct": shock_pct}
 
 
+def _share_args(rest: str) -> dict[str, Any]:
+    if not rest:
+        return {"index": 0}
+    try:
+        return {"index": int(rest)}
+    except ValueError:
+        raise ValueError("usage: /share [index]") from None
+
+
+def _close_args(rest: str) -> dict[str, Any]:
+    return {"command": f"close {rest}".strip()}
+
+
 SLASH_COMMANDS: dict[str, SlashCommand] = {
     "profile": SlashCommand("profile", "get_profile", "/profile", _no_args),
     "dashboard": SlashCommand("dashboard", "get_dashboard", "/dashboard", _no_args),
@@ -53,6 +66,10 @@ SLASH_COMMANDS: dict[str, SlashCommand] = {
     "shock": SlashCommand("shock", "shock_test", "/shock <percent>", _shock_args),
     "replay": SlashCommand("replay", "run_replay", "/replay", _no_args),
     "pnl": SlashCommand("pnl", "paper_pnl", "/pnl", _no_args),
+    "coach": SlashCommand("coach", "get_coach_review", "/coach", _no_args),
+    "tier": SlashCommand("tier", "get_tier_status", "/tier", _no_args),
+    "share": SlashCommand("share", "share_card", "/share [index]", _share_args),
+    "close": SlashCommand("close", "portfolio_command", "/close <what>", _close_args),
     "help": SlashCommand("help", "help", "/help", _no_args),
     "commands": SlashCommand("commands", "commands", "/commands", _no_args),
     "info": SlashCommand("info", "info", "/info", _no_args),
@@ -71,6 +88,10 @@ COMMAND_DESCRIPTIONS = {
     "shock": "shock spot and reprice walls and cards",
     "replay": "replay snapshots as a backtest",
     "pnl": "show paper P&L",
+    "coach": "show the trading-coach review",
+    "tier": "show model tier spend and status",
+    "share": "share one trade card with art",
+    "close": "close positions by plain words",
     "help": "list command usages",
     "commands": "list every command with descriptions",
     "info": "explain app features",
@@ -106,6 +127,12 @@ def info_text() -> str:
             "alerts: flip, regime, and wall alerts, pushed to Discord/Telegram when webhooks are set",
             "holdings: saved book with risk vs flip, spot, and walls",
             "debate: bull vs bear debate on any card (chat: debate)",
+            "coach: weekly trading-coach review of the journal (/coach)",
+            "portfolio: plain-words paper commands, closes, rolls, flatten (chat: close my losers)",
+            "shock news: shocked levels plus a cited news driver (chat: shock SPY -2% why)",
+            "images: chart and document screenshot readers (POST /chartread, /docread)",
+            "share: shareable card captions with art (/share)",
+            "tiers: cost-aware local/Spark/Wonder routing with day budget (/tier)",
             "profile: risk questionnaire with suggested risk params (/profile)",
             "pages: /chart, /board, /cards, /card, /demo, /dashboard over HTTP",
             "voice: voice notes transcribed into chat commands (needs a transcription key)",

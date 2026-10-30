@@ -93,6 +93,7 @@ def test_registry_covers_every_command_with_tool_and_usage():
     assert set(SLASH_COMMANDS) == {
         "profile", "dashboard", "alerts", "holdings", "brief", "cards",
         "wheel", "diff", "shock", "replay", "pnl", "help", "commands", "info",
+        "coach", "tier", "share", "close",
     }
     for command in SLASH_COMMANDS.values():
         assert command.tool

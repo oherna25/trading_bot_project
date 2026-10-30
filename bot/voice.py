@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import struct
 import subprocess
 from datetime import datetime
 from typing import Mapping
 
+from bot import autonomy
+from bot.holdings import SPOKEN_HOLDINGS_USAGE, save_spoken_holdings
 from bot.journal import Journal
 from bot.models import (
     MODEL_REGISTRY,
@@ -24,6 +27,19 @@ from bot.store import SnapshotStore
 WAV_RATES = (16000, 24000)
 OGG_MAGIC = b"OggS"
 CONVERT_TIMEOUT_SECONDS = 30.0
+VOICE_KILL_WINDOW_SECONDS = 300.0
+
+KILL_RE = re.compile(
+    r"\b(kill|flatten|stop everything|emergency stop|halt trading|halt everything)\b",
+    re.IGNORECASE,
+)
+KILL_GUARD_RE = re.compile(
+    r"\b(kill|flatten)\s+(my|the|this|that|losers|winners|positions?|trades?)\b",
+    re.IGNORECASE,
+)
+CONFIRM_RE = re.compile(r"\bconfirm\b", re.IGNORECASE)
+HOLDINGS_CMD_RE = re.compile(r"holdings?|my book", re.IGNORECASE)
+HOLDINGS_VERB_RE = re.compile(r"\b(save|set|add|record|remember|update|my book)\b", re.IGNORECASE)
 
 
 def is_ogg(data: bytes) -> bool:
@@ -123,6 +139,51 @@ def transcribe(
     return transcript
 
 
+def is_kill_command(transcript: str) -> bool:
+    return bool(KILL_RE.search(transcript)) and not KILL_GUARD_RE.search(transcript)
+
+
+def is_holdings_command(transcript: str) -> bool:
+    return bool(HOLDINGS_CMD_RE.search(transcript)) and bool(HOLDINGS_VERB_RE.search(transcript))
+
+
+def _kill_armed(journal: Journal, now: datetime) -> bool:
+    for entry in journal.entries():
+        if entry.kind != "kill_armed" or entry.payload.get("source") != "voice":
+            continue
+        if (now - entry.timestamp_utc).total_seconds() <= VOICE_KILL_WINDOW_SECONDS:
+            return True
+    return False
+
+
+def handle_voice_kill(transcript: str, journal: Journal, now: datetime) -> str | None:
+    if not is_kill_command(transcript):
+        return None
+    if CONFIRM_RE.search(transcript):
+        if not _kill_armed(journal, now):
+            journal.append(now, "kill_rejected", {"source": "voice", "reason": "no armed kill"})
+            return "no armed voice kill; say 'flatten everything' first"
+        autonomy.live_enabled = False
+        journal.append(now, "kill_fired", {"source": "voice"})
+        return "voice kill switch fired: auto-ordering flattened, operator reset required"
+    journal.append(now, "kill_armed", {"source": "voice"})
+    return "voice kill armed: say 'confirm kill' within 5 minutes to flatten auto-ordering"
+
+
+def handle_voice_holdings(
+    transcript: str, store: SnapshotStore, journal: Journal, now: datetime
+) -> str | None:
+    if not is_holdings_command(transcript):
+        return None
+    try:
+        return save_spoken_holdings(transcript, store, journal, now)
+    except ValueError as exc:
+        journal.append(now, "voice_holdings_rejected", {"reason": str(exc)})
+        if SPOKEN_HOLDINGS_USAGE in str(exc):
+            return str(exc)
+        return f"{exc}. {SPOKEN_HOLDINGS_USAGE}"
+
+
 def handle_voice_note(
     audio: bytes,
     underlying: str,
@@ -151,5 +212,11 @@ def handle_voice_note(
         journal.append(now, "voice_rejected", {"reason": type(exc).__name__})
         return f"voice note rejected: {type(exc).__name__}"
     journal.append(now, "voice_transcript", {"transcript": transcript})
+    kill_reply = handle_voice_kill(transcript, journal, now)
+    if kill_reply is not None:
+        return kill_reply
+    holdings_reply = handle_voice_holdings(transcript, store, journal, now)
+    if holdings_reply is not None:
+        return holdings_reply
     reply, _ = handle_chat_query(transcript, underlying, store, journal, now, live_models, grounding, cards, env, http_post)
     return reply

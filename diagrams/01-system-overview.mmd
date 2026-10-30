@@ -24,8 +24,10 @@ flowchart TB
 
     subgraph BRAIN["Analyst"]
         LLM["Analyst router"]
+        TIER{"Tier select per task"}
         BUDG{"Model key and budget set"}
         SPARK["Muse Spark 1.3"]
+        LOCAL["Local Glimmer/Spark Open"]
         FALL["Deterministic fallback"]
         SIG["Signal"]
         JOUR[("Journal")]
@@ -71,10 +73,16 @@ flowchart TB
     STORE --> REPLAY
     PROF --> LLM
     STORE --> LLM
-    LLM --> BUDG
+    LLM --> TIER
+    TIER -->|hosted task| BUDG
+    TIER -->|local weights| LOCAL
+    TIER -->|neither| FALL
     BUDG -->|yes| SPARK
     BUDG -->|no| FALL
     SPARK --> API
+    SPARK -. on error .-> LOCAL
+    LOCAL --> SIG
+    LOCAL -. receipt .-> JOUR
     GROUND -. enrich thesis .-> SPARK
     SPARK --> SIG
     FALL --> SIG

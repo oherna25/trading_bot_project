@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Callable, Sequence
 
@@ -113,6 +114,17 @@ def run_scheduled_session(
         cards,
         paper_trade,
     )
+    moment = now or datetime.now(timezone.utc)
+    try:
+        from bot.video import video_response
+
+        requested = underlying if isinstance(underlying, str) else ",".join(underlying)
+        video_response(
+            "", requested, store, journal, moment,
+            project_dir=os.path.join(store_dir, "video-brief"),
+        )
+    except Exception as exc:
+        journal.append(moment, "video_brief_failed", {"error": type(exc).__name__})
     save_bundle(store_dir, store, journal)
     return text
 

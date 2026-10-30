@@ -41,4 +41,8 @@ flowchart TB
     M4 --> GM4{"Kill drill passes on demo head"}
     GM4 -->|no| FIXM4["Fix demo"]
     FIXM4 --> M4
-    GM4 -->|yes| DONE["Hackathon entry ready"]
+    GM4 -->|yes| M5["Phase M5 standout features"]
+    M5 --> GM5{"Focused suites plus full pytest green"}
+    GM5 -->|no| FIXM5["Fix feature"]
+    FIXM5 --> M5
+    GM5 -->|yes| DONE["Hackathon entry ready"]

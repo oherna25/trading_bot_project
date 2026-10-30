@@ -208,7 +208,7 @@
 ## Muse integration program
 
 **Entry.** The project enters Build for Your World with Meta models inside the operator trading loop (plan decision 2026-10-27).
-**Status.** M0, M1, M2, M3, and M4 complete.
+**Status.** M0, M1, M2, M3, M4, and M5 complete.
 **Blocked on.** Nothing. Entry is Build for Your World with a 5 USD day budget (answered 2026-10-27). M0 spent 0.02 USD.
 
 **Phase M0. Model spikes.** Five spikes run with kill rules: Spark tool call, grounding comparison, voice sample, image sample, open-weights run verdict. Evidence is per-call transcripts plus a cost table under /tmp. Result: 5 of 5 pass. Grounding needs the Responses API because chat completions rejects web_search. Transcribe needs 16 kHz mono WAV with request plus audio parts. Spark tool calls are slow at 25 seconds, so M1 needs a timeout plus fallback. Glimmer runs locally via llama.cpp with small GGUF quants, and this machine fits, so weights download waits for M1.
@@ -220,6 +220,8 @@
 **Phase M3. Cards plus review.** Regime card art renders per brief with code-drawn numbers. Wonder appends an advisory review note that approves nothing. New file is bot/cards.py. Evidence is card numbers matching engine output plus operator eyeball of three cards. Result: implemented. Review runs standalone on explicit call, not per chat, because per-brief Wonder reads would waste the premium tier. 12 focused tests pass. Three live cards eyeballed clean with no rendered text. One live review returned not-ready with cited evidence at 0.047 USD total.
 
 **Phase M4. Demo.** One transcript covers voice command plus grounded brief plus card plus offline fallback plus a kill drill with models in the loop. Evidence is the transcript plus a cost table under budget. Result: transcript at /tmp/m4_transcript.txt. Voice brief plus grounded note plus card line plus deterministic fallback plus kill drill approved/rejected/approved. Cost 0.046 USD across analyst, artist, grounding, transcriber.
+
+**Phase M5. Standout features.** Ten Muse-powered features land behind the same receipt plus budget plus fallback discipline: local Glimmer/Spark Open analyst over llama.cpp (bot/localmodels.py), cost-aware tier router with draft/deep/premium classes (bot/tiers.py), Spark chart screenshot reader (bot/chartread.py, POST /chartread), SAM plus Spark document reader (bot/docread.py, POST /docread), shock news explainer (bot/news.py), spoken holdings plus two-step voice kill (bot/holdings.py, bot/voice.py), Wonder journal coach (bot/coach.py), alert narration plus local noise judge (bot/alerts.py), natural-language paper portfolio commands with Spark tool assist (bot/commands.py), shareable signal art with cache (bot/cards.py, GET /share). New files are localmodels, tiers, chartread, docread, news, coach, commands plus tests/test_tiers.py, test_localmodels.py, test_chartread.py, test_news.py, test_voice_commands.py, test_coach.py, test_narrate.py, test_commands.py, test_share.py, test_docread.py, test_surfaces.py. Surfaces extend by 8 MCP tools, 4 slash commands, and 3 HTTP endpoints; the two surface-pinning tests were extended for the new names. Evidence is the focused suites plus one full `pytest tests/ -q` green run.
 
 **Decisions.**
 - The default tier is muse-spark-1.3, because the contributor tier trains on submitted data (inspected Meta docs).

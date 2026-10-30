@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -10,6 +11,14 @@ from bot.store import SnapshotStore
 
 KINDS = ("stock", "call", "put")
 SIDES = ("long", "short")
+
+SPOKEN_HOLDING_RE = re.compile(
+    r"(long|short)\s+(\d+(?:\.\d+)?)\s+([A-Za-z]{1,6})\s+(stock|call|put)"
+    r"(?:\s+(\d+(?:\.\d+)?))?(?:\s+(?:expiring|expiry)\s+(\d{4}-\d{2}-\d{2}))?",
+    re.IGNORECASE,
+)
+SPOKEN_SPLIT_RE = re.compile(r"\s+and\s+|\s*,\s*|\s+plus\s+", re.IGNORECASE)
+SPOKEN_HOLDINGS_USAGE = "say holdings like: long 100 SPY stock and short 2 SPY put 760"
 
 
 def parse_holdings(raw: Any) -> list[Holding]:
@@ -99,6 +108,39 @@ def _option_line(holding: Holding, profile: GexProfile, spot: float) -> str:
         f"{_moneyness(holding.kind, holding.strike, spot)} vs spot {spot:g}; "
         f"wall at {holding.strike:g}: {compact_dollars(wall)}"
     )
+
+
+def parse_spoken_holdings(transcript: str) -> list[Holding]:
+    chunks = [chunk.strip() for chunk in SPOKEN_SPLIT_RE.split(transcript.strip()) if chunk.strip()]
+    if not chunks:
+        raise ValueError(SPOKEN_HOLDINGS_USAGE)
+    raw = []
+    for chunk in chunks:
+        match = SPOKEN_HOLDING_RE.search(chunk)
+        if match is None:
+            raise ValueError(SPOKEN_HOLDINGS_USAGE)
+        side, qty, symbol, kind, strike, expiry = match.groups()
+        item: dict[str, Any] = {
+            "symbol": symbol.upper(),
+            "kind": kind.lower(),
+            "side": side.lower(),
+            "qty": float(qty),
+        }
+        if strike is not None:
+            item["strike"] = float(strike)
+        if expiry is not None:
+            item["expiry"] = expiry
+        raw.append(item)
+    return parse_holdings(raw)
+
+
+def save_spoken_holdings(transcript: str, store: SnapshotStore, journal: Any, now: datetime) -> str:
+    holdings = parse_spoken_holdings(transcript)
+    store.save_holdings(holdings)
+    journal.append(now, "holdings_saved", {"count": len(holdings), "source": "voice"})
+    lines = [f"saved {len(holdings)} holding{'s' if len(holdings) != 1 else ''}:"]
+    lines.extend(describe_holding(holding) for holding in holdings)
+    return "\n".join(lines)
 
 
 def save_holdings_text(raw: Any, store: SnapshotStore, journal: Any, now: datetime) -> str:

@@ -111,7 +111,8 @@ def test_scheduled_session_ingests_briefs_and_persists(tmp_path):
     assert store.read_latest("TEST") is not None
     kinds = [e.kind for e in journal.entries()]
     assert "signal" in kinds
-    assert kinds[-1] == "session_saved"
+    assert "session_saved" in kinds
+    assert kinds[-1] == "video_brief"
 
 
 def test_scheduled_session_accumulates_across_runs(tmp_path):
@@ -149,4 +150,6 @@ def test_scheduled_session_reports_failed_chains_and_still_persists(tmp_path):
     reply = run_scheduled_session("TEST", str(tmp_path), NOW, context_factory=exploding_factory)
     assert reply.startswith("scheduled session failed")
     _, journal = load_bundle(str(tmp_path))
-    assert journal.entries()[-1].kind == "session_failed"
+    kinds = [entry.kind for entry in journal.entries()]
+    assert "session_failed" in kinds
+    assert kinds[-1] == "video_brief"

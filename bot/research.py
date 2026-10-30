@@ -30,8 +30,10 @@ from bot.ideas import (
 )
 from bot.ivrank import backfill_iv_history, histories_for
 from bot.journal import Journal
+from bot.localmodels import LocalRunner, local_available, run_local
 from bot.profile import build_profile, format_questionnaire, format_summary, parse_answers, suggest_params
 from bot.risk import build_intent, review_intent, submit_paper
+from bot.tiers import select_model_tier
 from bot.models import (
     MODEL_REGISTRY,
     HttpPost,
@@ -282,6 +284,35 @@ def advisory_review(
     return note
 
 
+def local_signal(
+    text: str,
+    snapshot_id: str,
+    snapshot: ChainSnapshot,
+    profile: GexProfile,
+    bar: Optional[Bar],
+    journal: Journal,
+    now: datetime,
+    grounding: bool = False,
+    env: Mapping[str, str] | None = None,
+    runner: LocalRunner | None = None,
+) -> Signal:
+    prompt = _analyst_prompt(text, snapshot, profile, bar)
+    reply, receipt = run_local("analyst", prompt, env, runner=runner)
+    journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
+    thesis = _strip_markers(reply)
+    if not thesis:
+        raise ValueError("empty local thesis")
+    if grounding:
+        journal.append(now, "grounding_skipped", {"reason": "local tier"})
+    fallback_direction = analyst_tool(text, snapshot, profile, bar).direction
+    return Signal(
+        direction=_parse_direction(reply, fallback_direction),
+        thesis=thesis,
+        confidence=_parse_confidence(reply),
+        snapshot_id=snapshot_id,
+    )
+
+
 def analyst_backend(
     text: str,
     snapshot_id: str,
@@ -294,17 +325,33 @@ def analyst_backend(
     grounding: bool = False,
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
+    local_runner: LocalRunner | None = None,
 ) -> Signal:
     if not live_models:
         journal.append(now, "model_fallback", {"reason": "live models off"})
         return analyst_tool(text, snapshot, profile, bar)
-    backend, reason = select_backend("analyst", journal, now, env)
-    if backend != "model":
-        journal.append(now, "model_fallback", {"reason": reason})
+    decision = select_model_tier("analyst", journal, now, env)
+    if decision.tier == "local":
+        try:
+            return local_signal(
+                text, snapshot_id, snapshot, profile, bar, journal, now, grounding, env, local_runner
+            )
+        except Exception as exc:
+            journal.append(now, "model_fallback", {"reason": type(exc).__name__})
+            return analyst_tool(text, snapshot, profile, bar)
+    if decision.tier == "fallback":
+        journal.append(now, "model_fallback", {"reason": decision.reason})
         return analyst_tool(text, snapshot, profile, bar)
     try:
         return spark_signal(text, snapshot_id, snapshot, profile, bar, journal, now, env, http_post, grounding)
     except Exception as exc:
+        if local_available(env):
+            try:
+                return local_signal(
+                    text, snapshot_id, snapshot, profile, bar, journal, now, grounding, env, local_runner
+                )
+            except Exception:
+                pass
         journal.append(now, "model_fallback", {"reason": type(exc).__name__})
         return analyst_tool(text, snapshot, profile, bar)
 
@@ -802,8 +849,21 @@ def route_chat(
         return format_summary(profile, params)
     if "profile" in lowered or "questionnaire" in lowered:
         return format_questionnaire()
+    if re.match(r"\s*(close|sell|flatten|roll)\b", lowered):
+        from bot.commands import portfolio_response
+
+        return portfolio_response(text, underlying, store, journal, now, live_models=live_models)
     if re.search(r"\bwheels?\b", lowered):
         return wheel_response(text, underlying, store, journal, now)
+    if re.search(r"\bshare\b", lowered) and "card" in lowered:
+        from bot.cards import share_card
+
+        match = re.search(r"\bshare\b.*?(\d+)?", lowered)
+        index = int(match.group(1)) if match and match.group(1) else 0
+        try:
+            return share_card(index, underlying, store, journal, now, live_models=live_models)
+        except ValueError as exc:
+            return str(exc)
     if re.search(r"\bcards?\b", lowered):
         return cards_response(text, underlying, store, journal, now)
     if "idea" in lowered:
@@ -825,11 +885,16 @@ def route_chat(
 
         return snapshot_diff_text(underlying, store)
     if re.search(r"\bshock\b", lowered):
+        from bot.news import shock_news_response
         from bot.shock import SHOCK_USAGE, parse_shock_pct, shock_text
 
         shock_pct = parse_shock_pct(text)
         if shock_pct is None:
             return SHOCK_USAGE
+        if "news" in lowered or "why" in lowered:
+            return shock_news_response(
+                underlying, store, journal, now, shock_pct, live_models=live_models
+            )
         return shock_text(underlying, store, journal, now, shock_pct)
     if re.search(r"\bdebate\b", lowered):
         from bot.debate import card_debate
@@ -840,6 +905,26 @@ def route_chat(
             return card_debate(underlying, store, journal, now, index=index, live_models=live_models)
         except ValueError as exc:
             return str(exc)
+    if re.search(r"\bvideo\b", lowered):
+        from bot.video import video_response
+
+        return video_response(text, underlying, store, journal, now)
+    if re.search(r"\bcoach\b", lowered):
+        from bot.coach import coach_review
+
+        return coach_review(store, journal, now, live_models=live_models)
+    if "chart" in lowered and ("read" in lowered or "image" in lowered or "screenshot" in lowered):
+        from bot.chartread import CHART_USAGE
+
+        return CHART_USAGE
+    if "document" in lowered and ("read" in lowered or "scan" in lowered):
+        from bot.docread import DOC_USAGE
+
+        return DOC_USAGE
+    if "tier status" in lowered or "model status" in lowered or "model tiers" in lowered:
+        from bot.tiers import format_tier_status, tier_status
+
+        return format_tier_status(tier_status(journal, now))
     if re.search(r"\bholdings?\b", lowered):
         from bot.holdings import holdings_text, save_holdings_text
 

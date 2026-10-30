@@ -438,3 +438,172 @@ FUNCTION cards_page WITH underlying
   RETURN page WITH one article PER card
 END FUNCTION
 ```
+
+## Standout model features (M5)
+
+Ten Muse-powered features share one discipline: every model call
+journals a ModelReceipt, honors the day budget, and degrades to a
+deterministic path when keys, budget, or weights are missing. Local
+calls cost zero and rescue failed hosted calls.
+
+New shapes:
+
+```
+SHAPE TierDecision
+  task
+  tier
+  role_name
+  model_id
+  reason
+END SHAPE
+
+SHAPE LocalSpec
+  backend_name
+  model_id
+  weights_env_var
+END SHAPE
+
+SHAPE PortfolioAction
+  action
+  threshold_pct
+  symbol
+  kind
+  strike
+  to_expiry
+  confirm
+END SHAPE
+
+SHAPE ImageRegion
+  x
+  y
+  width
+  height
+  label
+END SHAPE
+```
+
+Organizing structure:
+
+- Tasks use a class table keyed by task name with draft, deep, and
+  premium classes. Each class names its tier order over the local
+  backend, Spark, and Wonder.
+- The local backend uses a registry table keyed by backend name,
+  mirroring the model registry. Glimmer weights win over Spark Open
+  weights when both exist.
+- Portfolio commands parse with deterministic rules first. The Spark
+  tool loop only translates phrasings the rules reject, and the
+  deterministic executor validates every translated action before
+  running it through the risk reviewer and the paper venue.
+
+```
+FUNCTION select_model_tier WITH task
+  class = class_table task WITH deep AS default
+  FOR EACH step IN tier_order class
+    IF step IS local AND weights_present THEN RETURN local decision
+    IF step IS hosted AND backend_ready step THEN RETURN model decision
+  END FOR
+  RETURN fallback WITH last reason
+END FUNCTION
+
+FUNCTION local_analyst_signal WITH text AND snapshot AND profile AND bar
+  reply = CALL local_backend analyst WITH prompt
+  journal APPEND receipt AS model_receipt WITH zero cost
+  signal = BUILD Signal FROM reply direction AND confidence
+  RETURN signal
+END FUNCTION
+
+FUNCTION read_chart_image WITH image AND underlying AND question AND regions
+  IF live_models_off THEN journal skip AND RETURN needs_models
+  IF image_not_png_or_jpeg THEN journal skip AND RETURN rejected
+  prompt = engine walls AND flip AND spot PLUS region hints
+  reply = CALL model_role analyst WITH prompt AND image
+  journal APPEND receipt AS model_receipt
+  journal APPEND event chart_read
+  RETURN reply
+END FUNCTION
+
+FUNCTION read_document WITH image AND question AND underlying
+  regions = segment_image image WITH fail_soft_to_empty
+  RETURN read_chart_image image WITH question AND regions
+END FUNCTION
+
+FUNCTION segment_image WITH image
+  boxes = CALL sam_3_1 WITH image AND table_task
+  journal APPEND receipt AS model_receipt
+  RETURN clean boxes AS ImageRegion list
+END FUNCTION
+
+FUNCTION shock_news WITH underlying AND shock_pct
+  facts = shock_text underlying WITH shock_pct
+  IF no_snapshot OR no_bar THEN RETURN facts
+  IF live_models_off THEN journal skip AND RETURN facts WITH pointer
+  note = grounded_note WITH shock facts AND web_search
+  journal APPEND event shock_news
+  RETURN facts PLUS likely_driver note
+END FUNCTION
+
+FUNCTION handle_voice_holdings WITH transcript
+  IF NOT holdings_command THEN RETURN none
+  holdings = parse_spoken_holdings transcript
+  journal APPEND event holdings_saved WITH voice source
+  RETURN saved holdings text
+END FUNCTION
+
+FUNCTION handle_voice_kill WITH transcript
+  IF NOT kill_command THEN RETURN none
+  IF transcript confirms AND kill_armed_within_window THEN
+    live_enabled = false
+    journal APPEND event kill_fired WITH voice source
+    RETURN fired text
+  IF transcript confirms THEN journal reject AND RETURN no_armed_kill
+  journal APPEND event kill_armed
+  RETURN confirm prompt
+END FUNCTION
+
+FUNCTION coach_review WITH journal
+  stats = count fills AND halts AND kills AND vetoes AND signals
+  IF live_models_off THEN journal skip AND RETURN rules_coach stats
+  decision = select_model_tier coach
+  note = CALL decision_backend WITH stats
+  journal APPEND receipt AS model_receipt
+  journal APPEND event coach_note
+  RETURN note
+END FUNCTION
+
+FUNCTION narrate_alert WITH text
+  IF live_models_off THEN journal skip AND RETURN rules_narration text
+  decision = select_model_tier narrate
+  narration = CALL decision_backend WITH text
+  journal APPEND receipt AS model_receipt
+  RETURN narration WITH source tag
+END FUNCTION
+
+FUNCTION filter_noise WITH alerts
+  DROP repeat stale alerts past first per day WITH alert_dropped
+  IF live_models AND local_ready THEN
+    DROP alerts the local judge answers NO WITH alert_dropped
+  RETURN survivors
+END FUNCTION
+
+FUNCTION portfolio_response WITH text
+  action = parse_portfolio_command text AS PortfolioAction
+  IF action unknown AND live_models THEN action = spark_translate text
+  IF action unknown THEN journal reject AND RETURN usage
+  intents = build close intents FROM open_book journal fills
+  FOR EACH intent
+    verdict = review_intent intent
+    IF approved THEN fill = submit_paper intent AT mark
+  END FOR
+  journal APPEND event portfolio_command
+  RETURN paper_only lines
+END FUNCTION
+
+FUNCTION share_card WITH index AND underlying
+  IF no saved operator profile THEN RETURN profile setup prompt
+  card = demo_cards underlying AT index
+  IF NOT live_models THEN journal skip AND RETURN caption text
+  art = render_signal_art card WITH prompt_hash cache
+  journal APPEND receipt AS model_receipt
+  RETURN caption text WITH art hash
+END FUNCTION
+```

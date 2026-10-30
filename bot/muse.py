@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import html
 import json
 import os
@@ -35,6 +36,7 @@ from bot.schedule import normalize_underlyings, run_session_core, tick_symbols
 from bot.shapes import OperatorConfig, default_operator_config
 from bot.store import SnapshotStore
 from bot.tradecards import OPTIONS_DISABLED, PROFILE_REQUIRED, cards_response, cards_to_json, query_trade_cards, trade_cards_html
+from bot.video import build_video_brief, composition_html, video_response
 from bot.wheel import wheel_response
 
 
@@ -97,6 +99,15 @@ def _wheel_ideas_handler(
     if not isinstance(query, str) or not query.strip():
         query = "wheel ideas"
     return wheel_response(query, underlying, store, journal, now)
+
+
+def _video_brief_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    query = args.get("query", "video brief") if isinstance(args, dict) else "video brief"
+    if not isinstance(query, str) or not query.strip():
+        query = "video brief"
+    return video_response(query, underlying, store, journal, now)
 
 
 def _vex_brief_handler(
@@ -292,6 +303,134 @@ def _session_run_handler(
     return text
 
 
+def _coach_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config, underlying
+    from bot.coach import coach_review
+
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    return coach_review(store, journal, now, live_models=live)
+
+
+def _portfolio_tool_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.commands import PORTFOLIO_USAGE, portfolio_response
+
+    command = args.get("command", "") if isinstance(args, dict) else ""
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    if not isinstance(command, str) or not command.strip():
+        return PORTFOLIO_USAGE
+    return portfolio_response(command, underlying, store, journal, now, live_models=live)
+
+
+def _shock_news_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.news import shock_news_response
+    from bot.shock import SHOCK_USAGE, parse_shock_pct
+
+    raw = args.get("shock_pct")
+    if raw is None:
+        raw = args.get("percent")
+    shock_pct: float | None = None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        shock_pct = float(raw)
+    elif isinstance(raw, str):
+        shock_pct = parse_shock_pct(raw)
+    if shock_pct is None:
+        return SHOCK_USAGE
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    return shock_news_response(underlying, store, journal, now, shock_pct, live_models=live)
+
+
+def _decode_tool_image(args: dict[str, Any]) -> bytes:
+    raw = args.get("image_b64", "") if isinstance(args, dict) else ""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("read needs image_b64 with base64 png or jpeg bytes")
+    try:
+        return base64.b64decode(raw.strip(), validate=True)
+    except ValueError:
+        raise ValueError("chart image rejected: bad base64") from None
+
+
+def _chart_image_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.chartread import read_chart_image
+
+    image = _decode_tool_image(args)
+    question = args.get("question", "") if isinstance(args, dict) else ""
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    return read_chart_image(
+        image, underlying, store, journal, now, live_models=live,
+        question=question if isinstance(question, str) else "",
+    )
+
+
+def _document_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.docread import read_document
+
+    image = _decode_tool_image(args)
+    question = args.get("question", "") if isinstance(args, dict) else ""
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    return read_document(
+        image, question if isinstance(question, str) else "", underlying,
+        store, journal, now, live_models=live,
+    )
+
+
+def _share_tool_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.cards import share_card
+
+    raw_index = args.get("index", 0)
+    try:
+        index = int(raw_index)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError("index must be an integer") from None
+    snapshot = args.get("snapshot")
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    return share_card(
+        index, underlying, store, journal, now,
+        snapshot_id=str(snapshot) if snapshot else None,
+        live_models=live,
+    )
+
+
+def _narrated_alerts_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config, underlying
+    from bot.alerts import narrated_alerts
+
+    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
+    lines = []
+    for symbol in sorted(store.list_underlyings()):
+        lines.extend(narrated_alerts(symbol, store, journal, now, live_models=live))
+    if not lines:
+        return "alerts: none"
+    return "\n".join(lines)
+
+
+def _tier_status_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, store, config, underlying
+    from bot.tiers import format_tier_status, tier_status
+
+    return format_tier_status(tier_status(journal, now))
+
+
 TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_gex_brief": MuseTool("get_gex_brief", "Read the computed GEX brief for an underlying", _gex_brief_handler),
     "get_trade_cards": MuseTool(
@@ -319,6 +458,33 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_dashboard": MuseTool("get_dashboard", "Read the one-screen digest across stored underlyings", _dashboard_handler),
     "get_alerts": MuseTool("get_alerts", "Read current alerts across stored underlyings", _alerts_handler),
     "get_holdings": MuseTool("get_holdings", "Read the saved operator book against live positioning", _holdings_read_handler),
+    "get_video_brief": MuseTool(
+        "get_video_brief", "Render-ready HyperFrames video brief project from stored snapshots", _video_brief_handler
+    ),
+    "get_coach_review": MuseTool(
+        "get_coach_review", "Wonder trading-coach review of the journaled record", _coach_handler
+    ),
+    "portfolio_command": MuseTool(
+        "portfolio_command", "Run a natural-language paper portfolio command", _portfolio_tool_handler
+    ),
+    "shock_news": MuseTool(
+        "shock_news", "Shock spot and explain the move with cited news", _shock_news_handler
+    ),
+    "read_chart_image": MuseTool(
+        "read_chart_image", "Read a chart screenshot against engine positioning", _chart_image_handler
+    ),
+    "read_document": MuseTool(
+        "read_document", "Segment and read a document screenshot with SAM plus Spark", _document_handler
+    ),
+    "share_card": MuseTool(
+        "share_card", "Shareable trade card caption with art", _share_tool_handler
+    ),
+    "get_narrated_alerts": MuseTool(
+        "get_narrated_alerts", "Current alerts with one-line reasons", _narrated_alerts_handler
+    ),
+    "get_tier_status": MuseTool(
+        "get_tier_status", "Model tier spend, budget, and local backend status", _tier_status_handler
+    ),
 }
 
 
@@ -592,6 +758,15 @@ class SessionController:
                 paper_trade,
             )
         with self.lock:
+            moment = now or datetime.now(timezone.utc)
+            try:
+                requested = underlying if isinstance(underlying, str) else ",".join(underlying)
+                video_response(
+                    "", requested, self.store, self.journal, moment,
+                    project_dir=os.path.join(self.store_dir, "video-brief"),
+                )
+            except Exception as exc:
+                self.journal.append(moment, "video_brief_failed", {"error": type(exc).__name__})
             save_bundle(self.store_dir, self.store, self.journal)
         return text, symbols
 
@@ -664,6 +839,32 @@ def openapi_spec() -> dict:
                 "get": {
                     "summary": "Trade cards JSON",
                     "responses": {"200": {"description": "Trade cards data"}},
+                }
+            },
+            "/video": {
+                "get": {
+                    "summary": "Video brief composition",
+                    "responses": {"200": {"description": "Video brief page"}},
+                }
+            },
+            "/chartread": {
+                "post": {
+                    "summary": "Read a chart screenshot against engine positioning",
+                    "requestBody": {"required": True},
+                    "responses": {"200": {"description": "Chart reading"}},
+                }
+            },
+            "/docread": {
+                "post": {
+                    "summary": "Segment and read a document screenshot",
+                    "requestBody": {"required": True},
+                    "responses": {"200": {"description": "Document reading"}},
+                }
+            },
+            "/share": {
+                "get": {
+                    "summary": "Shareable trade card page",
+                    "responses": {"200": {"description": "Share page"}},
                 }
             },
         },
@@ -759,6 +960,30 @@ def route_http(
             cards=_flag("cards", False),
         )
         return HttpResponse.json(200, {"ok": True, "reply": reply})
+    if method == "POST" and clean in ("/chartread", "/docread"):
+        if not isinstance(payload, (bytes, bytearray)) or not payload:
+            return HttpResponse.json(400, {"ok": False, "reply": "", "error": "image endpoint needs raw png or jpeg bytes"})
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        raw_flag = (params.get("live_models", [""])[0] or "").strip().lower()
+        live = raw_flag not in ("0", "false", "no", "off") if raw_flag else True
+        if clean == "/chartread":
+            from bot.chartread import read_chart_image
+
+            question = (params.get("question", [""])[0] or "").strip()
+            reply = read_chart_image(
+                bytes(payload), underlying, store, journal, now,
+                live_models=live, question=question,
+            )
+        else:
+            from bot.docread import read_document
+
+            question = (params.get("question", [""])[0] or "").strip()
+            reply = read_document(
+                bytes(payload), question, underlying, store, journal, now, live_models=live
+            )
+        return HttpResponse.json(200, {"ok": True, "reply": reply})
     if method == "POST" and clean == SESSION_PATH:
         if not isinstance(payload, dict):
             return HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid session body"})
@@ -842,6 +1067,15 @@ def route_http(
         return HttpResponse.html(200, gamma_chart_html(underlying, snapshot, profile, bar, now))
     if method == "GET" and clean == "/board":
         return HttpResponse.html(200, regime_board_html(store, now))
+    if method == "GET" and clean == "/video":
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        if store.read_latest(underlying) is None:
+            return HttpResponse.html(400, _cards_error_html(f"no snapshot stored for {underlying}"))
+        brief = build_video_brief([underlying], store, journal, now)
+        storyboard = params.get("storyboard", [""])[0] == "1"
+        return HttpResponse.html(200, composition_html(brief, storyboard=storyboard))
     if method == "GET" and clean == "/dashboard":
         from bot.dashboard import dashboard_html
 
@@ -889,6 +1123,36 @@ def route_http(
                 page, debate_card(cards[index], journal, now, live_models=live)
             )
         return HttpResponse.html(200, page)
+    if method == "GET" and clean == "/share":
+        from bot.cards import render_signal_art, share_html
+        from bot.demo import demo_cards
+
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        if store.read_profile() is None:
+            return HttpResponse.html(403, _cards_error_html(PROFILE_REQUIRED))
+        snapshot_id = (params.get("snapshot", [""])[0] or "").strip()
+        try:
+            index = int((params.get("index", ["0"])[0] or "0").strip())
+        except ValueError:
+            return HttpResponse.html(400, _cards_error_html("index must be an integer"))
+        if not snapshot_id:
+            latest = store.read_latest(underlying)
+            if latest is None:
+                return HttpResponse.html(400, _cards_error_html(f"no snapshot stored for {underlying}"))
+            snapshot_id = latest[0]
+        _, cards = demo_cards(underlying, store, journal, now, snapshot_id)
+        if not cards:
+            return HttpResponse.html(400, _cards_error_html(f"no cards for {underlying} snapshot {snapshot_id}"))
+        if index < 0 or index >= len(cards):
+            return HttpResponse.html(400, _cards_error_html(f"index {index} out of range (0-{len(cards) - 1})"))
+        art = url = art_hash = None
+        if (params.get("live_models", [""])[0] or "").strip() == "1":
+            rendered = render_signal_art(cards[index], journal, now)
+            if rendered is not None:
+                art, url, art_hash = rendered["art"], rendered["url"], rendered["art_hash"]
+        return HttpResponse.html(200, share_html(cards[index], art=art, url=url, art_hash=art_hash))
     return HttpResponse.json(404, {"error": "not found"})
 
 
@@ -911,12 +1175,18 @@ def resolve_port(explicit: Optional[int]) -> int:
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 MAX_VOICE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 def _body_payload(clean: str, raw: bytes) -> tuple[Any, Optional[HttpResponse]]:
     if clean == "/voice":
         if len(raw) > MAX_VOICE_BYTES:
             return None, HttpResponse.json(413, {"ok": False, "reply": "", "error": "voice audio too large"})
+        return raw, None
+    if clean in ("/chartread", "/docread"):
+        if len(raw) > MAX_IMAGE_BYTES:
+            label = "chart image too large" if clean == "/chartread" else "document image too large"
+            return None, HttpResponse.json(413, {"ok": False, "reply": "", "error": label})
         return raw, None
     try:
         return (json.loads(raw.decode("utf-8")) if raw else {}), None

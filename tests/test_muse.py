@@ -105,7 +105,9 @@ def test_registry_tools_answer(monkeypatch):
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
-        "get_profile", "get_dashboard", "get_alerts", "get_holdings",
+        "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
+        "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
+        "read_document", "share_card", "get_narrated_alerts", "get_tier_status",
     }
     store = _seeded_store()
     journal = Journal()
@@ -206,7 +208,9 @@ def test_route_mcp_tools_list_names_registry():
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
-        "get_profile", "get_dashboard", "get_alerts", "get_holdings",
+        "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
+        "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
+        "read_document", "share_card", "get_narrated_alerts", "get_tier_status",
     }
 
 

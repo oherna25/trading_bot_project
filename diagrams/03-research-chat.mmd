@@ -29,12 +29,17 @@ sequenceDiagram
     B->>A: Run tool call
     A->>S: Read latest ChainSnapshot
     S-->>A: Return snapshot
-    alt Model key and budget set
+    alt Hosted tier ready
         A->>M: Spark tool call with snapshot
         M-->>A: Return thesis
         A->>J: Journal ModelReceipt
-    else Fallback
-        A->>A: Deterministic flip rule
+    else Local or fallback
+        alt Local weights present
+            A->>A: Local Glimmer read with snapshot
+            A->>J: Journal zero-cost ModelReceipt
+        else Fallback
+            A->>A: Deterministic flip rule
+        end
     end
     Note over A,M: Grounding on enriches the thesis
     A->>J: Journal signal
