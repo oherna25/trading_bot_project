@@ -190,7 +190,7 @@ tail data/session.log
 | Endpoint | Method | Body |
 |---|---|---|
 | `/chat` | POST | `{"text": "...", "underlying": "SPY"}` (`live_models`, `grounding`, `cards`, `llm_router` optional, default false) |
-| `/session` | POST | `{"underlying": "SPY"}` (same optional flags as `/chat`); runs a session now, replies `{"ok", "reply", "underlyings"}` |
+| `/session` | POST | `{"underlying": "SPY"}` (same optional flags as `/chat`, plus `paper_trade` default true); runs a session now, replies `{"ok", "reply", "underlyings"}` |
 | `/mcp` | POST | `{"method": "tools/list"}` or `{"method": "tools/call", "params": {"name": "...", "arguments": {}, "underlying": "SPY"}}` |
 | `/cards?underlying=SPY[&query=...]` | GET | none; HTML trade cards page |
 | `/cards.json?underlying=SPY[&query=...]` | GET | none; trade cards JSON |
@@ -200,7 +200,7 @@ tail data/session.log
 | `/healthz` | GET | none; minimal `{"ok": true}` probe (always open) |
 | `/openapi.json` | GET | none |
 
-MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`. Each session run also pushes new flip, regime, and wall-proximity alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session.
+MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`. Each session run also pushes new flip, regime, and wall-proximity alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session. Server sessions paper trade one position per symbol by default, same as the CLI; pass `paper_trade: false` to `/session` or `run_session` to skip.
 
 When `store_dir` is passed to `serve` (as `run_app.py` does), the server reloads the JSON bundle whenever the scheduled session rewrites it, and with `refresh_seconds > 0` it re-ingests on its own timer (`bot/schedule.py: refresh_store`, ingest-only, no signals minted), prunes in-memory growth, and persists every pass, so snapshots stay fresh without restarts. Each tick refreshes the startup symbols plus every underlying currently in the store, so a ticker added later via `run_session.py --underlying QQQ` stays fresh with no restart. Session runs (`/session`, `run_session`, and the session timer) likewise cover the requested symbols plus every underlying in the store, requested first.
 

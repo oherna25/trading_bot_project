@@ -173,6 +173,7 @@ def _session_run_handler(
         grounding=bool(flags.get("grounding", False)),
         cards=bool(flags.get("cards", False)),
         now=now,
+        paper_trade=bool(flags.get("paper_trade", True)),
     )
     return text
 
@@ -448,6 +449,7 @@ class SessionController:
         grounding: bool = False,
         cards: bool = False,
         now: datetime | None = None,
+        paper_trade: bool = True,
     ) -> tuple[str, list[str]]:
         with self.lock:
             symbols = tick_symbols(normalize_underlyings(underlying), self.store)
@@ -464,6 +466,7 @@ class SessionController:
                 live_models,
                 grounding,
                 cards,
+                paper_trade,
             )
         with self.lock:
             save_bundle(self.store_dir, self.store, self.journal)
@@ -631,6 +634,7 @@ def route_http(
             grounding=bool(payload.get("grounding", False)),
             cards=bool(payload.get("cards", False)),
             now=now,
+            paper_trade=bool(payload.get("paper_trade", True)),
         )
         return HttpResponse.json(200, {"ok": True, "reply": text, "underlyings": symbols})
     if method == "POST" and clean == "/mcp":

@@ -110,9 +110,11 @@ class FakeController:
         self.calls = []
         self.fired = threading.Event()
 
-    def run(self, underlying="SPY", live_models=False, grounding=False, cards=False, now=None):
+    def run(self, underlying="SPY", live_models=False, grounding=False, cards=False, now=None,
+            paper_trade=True):
         self.calls.append(
-            {"underlying": underlying, "live_models": live_models, "grounding": grounding, "cards": cards}
+            {"underlying": underlying, "live_models": live_models, "grounding": grounding,
+             "cards": cards, "paper_trade": paper_trade}
         )
         self.fired.set()
         return "fake brief", ["QQQ"]
@@ -133,7 +135,7 @@ def test_session_endpoint_runs_controller():
     assert response.status == 200
     assert json.loads(response.body) == {"ok": True, "reply": "fake brief", "underlyings": ["QQQ"]}
     assert fake.calls == [
-        {"underlying": "QQQ", "live_models": True, "grounding": True, "cards": True}
+        {"underlying": "QQQ", "live_models": True, "grounding": True, "cards": True, "paper_trade": True}
     ]
 
 
@@ -265,7 +267,7 @@ def test_dispatch_run_session_returns_brief_with_controller():
     assert reply.ok is True
     assert reply.reply == "fake brief"
     assert fake.calls == [
-        {"underlying": "QQQ", "live_models": True, "grounding": False, "cards": False}
+        {"underlying": "QQQ", "live_models": True, "grounding": False, "cards": False, "paper_trade": True}
     ]
 
 
@@ -293,7 +295,7 @@ def test_mcp_run_session_route_passes_controller_under_auth():
     assert allowed.status == 200
     assert json.loads(allowed.body) == {"ok": True, "reply": "fake brief", "error": ""}
     assert fake.calls == [
-        {"underlying": "QQQ", "live_models": False, "grounding": False, "cards": True}
+        {"underlying": "QQQ", "live_models": False, "grounding": False, "cards": True, "paper_trade": True}
     ]
     missing = route_http(
         "POST", "/mcp", envelope, SnapshotStore(), Journal(), CONFIG, NOW,
@@ -342,6 +344,52 @@ def test_session_run_expands_to_stored_underlyings(tmp_path):
     text, symbols = controller.run("QQQ", now=NOW)
     assert symbols == ["QQQ", "SPY"]
     assert "QQQ" in text and "SPY" in text
+
+
+def _directional_factory(symbol):
+    from bot.feeds import FeedContext
+
+    chain = {
+        "options": {
+            "option": [
+                {"strike": 95.0, "expiration_date": "2026-11-20", "option_type": "put",
+                 "open_interest": 3000.0, "greeks": {"gamma": 0.05}},
+                {"strike": 105.0, "expiration_date": "2026-11-20", "option_type": "call",
+                 "open_interest": 3000.0, "greeks": {"gamma": 0.05}},
+            ]
+        }
+    }
+    bars = {"bars": {symbol: [
+        {"t": "2026-10-26T00:00:00Z", "o": 100.0, "h": 101.0, "l": 99.0, "c": 100.0, "v": 1000.0},
+    ]}}
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "expirations" in url:
+            return {"expirations": {"date": ["2026-11-20"]}}
+        if "options/chains" in url:
+            return chain
+        if "/bars" in url:
+            return bars
+        raise AssertionError(f"unexpected url {url}")
+
+    return FeedContext(
+        underlying=symbol,
+        credentials={"TRADIER_ACCESS_TOKEN": "test", "APCA_API_KEY_ID": "t", "APCA_API_SECRET_KEY": "t"},
+        http_get=fake_get,
+    )
+
+
+def test_session_run_trades_by_default_and_opts_out(tmp_path):
+    store, journal = SnapshotStore(), Journal()
+    controller = SessionController(store, journal, str(tmp_path), threading.RLock(), _directional_factory)
+    text, _ = controller.run("SPY", now=NOW)
+    assert "\npaper trade: " in text
+    assert sum(1 for e in journal.entries() if e.kind == "fill") == 1
+    store2, journal2 = SnapshotStore(), Journal()
+    controller2 = SessionController(store2, journal2, str(tmp_path), threading.RLock(), _directional_factory)
+    text2, _ = controller2.run("SPY", now=NOW, paper_trade=False)
+    assert "paper trade: " not in text2
+    assert not [e for e in journal2.entries() if e.kind == "fill"]
 
 
 def test_session_endpoint_expands_to_stored_underlyings(tmp_path):
