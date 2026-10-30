@@ -171,6 +171,24 @@ def test_empty_ideas_render_none_found():
     assert format_trade_cards([]) == "trade cards: none found"
 
 
+def test_format_trade_cards_rounds_header_numbers():
+    card = TradeCard(
+        symbol="TEST", direction="long", spread="single", strike=100.0,
+        expiry="2026-11-20", call_or_put="call", hedge_strike=None,
+        confidence=0.5, snapshot_id="TEST:x", max_loss=40.000000000000036,
+        breakeven=97.50000000000001, net_debit=40.0, spread_pct=None,
+        wall_exposure=-2352664863.869247, regime="short-gamma",
+        spot=102.00000000000001, flip_point=99.0, reason="r",
+        reason_source="fallback",
+    )
+    text = format_trade_cards([card])
+    assert "max loss 40.0" in text
+    assert "breakeven 97.5" in text
+    assert "wall -2352664863.87" in text
+    assert "spot 102.0" in text
+    assert "40.000000000000036" not in text
+
+
 def test_cards_to_json_rounds_floats():
     card = TradeCard(
         symbol="TEST", direction="short", spread="774/775 put vertical", strike=775.0,

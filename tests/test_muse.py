@@ -158,7 +158,7 @@ def test_registry_tools_answer(monkeypatch):
     assert "TEST:" in dashboard.reply
     alerts = dispatch_tool("get_alerts", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert alerts.ok is True
-    assert "alerts for TEST: none" in alerts.reply
+    assert "alerts: none" in alerts.reply
     holdings_read = dispatch_tool("get_holdings", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert holdings_read.ok is True
     assert holdings_read.reply.startswith("holdings: none saved")

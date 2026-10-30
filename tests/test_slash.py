@@ -33,6 +33,12 @@ PROFILE = OperatorProfile(
 
 
 @pytest.fixture(autouse=True)
+def _no_reason_backend(monkeypatch):
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_keys(monkeypatch):
     monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
     monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
@@ -138,7 +144,35 @@ def test_dashboard_dispatch_shows_header_and_board_line():
 
 
 def test_alerts_dispatch_reports_none_when_quiet():
-    assert _slash("/alerts") == "alerts for TEST: none"
+    assert _slash("/alerts") == "alerts: none"
+
+
+def test_alerts_aggregates_every_underlying():
+    store = SnapshotStore()
+    for symbol, strike, spot in (("SPY", 100.0, 100.2), ("IWM", 200.0, 200.4)):
+        store.save(
+            ChainSnapshot(
+                underlying=symbol,
+                timestamp_utc=NOW,
+                source_name="tradier_sandbox",
+                latency_ms=9.0,
+                contracts_list=(
+                    OptionContract(
+                        strike=strike, expiry="2026-11-20", call_or_put="call",
+                        open_interest=5000.0, gamma=0.05, price=2.50,
+                        bid=2.40, ask=2.60, iv=0.30,
+                    ),
+                ),
+            )
+        )
+        store.save_bar(
+            symbol,
+            Bar(interval="1d", timestamp_utc=NOW, open=spot - 1.0, high=spot + 1.0,
+                low=spot - 2.0, close=spot, volume=1000.0),
+        )
+    reply = _slash("/alerts", store=store)
+    assert "ALERT: SPY" in reply
+    assert "ALERT: IWM" in reply
 
 
 def test_holdings_dispatch_reports_none_when_empty():
@@ -265,7 +299,7 @@ def test_new_tools_dispatch_directly():
     assert "dashboard 2026-10-27" in dashboard.reply
     alerts = dispatch_tool("get_alerts", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert alerts.ok is True
-    assert alerts.reply == "alerts for TEST: none"
+    assert alerts.reply == "alerts: none"
     holdings = dispatch_tool("get_holdings", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert holdings.ok is True
     assert holdings.reply.startswith("holdings: none saved")

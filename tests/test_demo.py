@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote as urlencode
 
+import pytest
+
 from bot.demo import demo_cards, demo_html
 from bot.journal import Journal
 from bot.muse import route_http
@@ -10,6 +12,12 @@ from bot.tradecards import bar_at_or_before
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 CONFIG = default_operator_config()
+
+
+@pytest.fixture(autouse=True)
+def _no_reason_backend(monkeypatch):
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
 def _contract(strike, side, oi, gamma):
@@ -100,6 +108,28 @@ def test_card_permalink_defaults_to_latest_and_validates():
         "GET", "/card?underlying=TEST&index=x", {}, store, Journal(), CONFIG, NOW
     )
     assert non_integer.status == 400
+
+
+def _reason_stub(url, headers, payload, timeout):
+    del url, headers, payload, timeout
+    return {
+        "choices": [{"message": {"content": "Model says go."}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+    }
+
+
+def test_demo_cards_honors_passed_reason_env():
+    _, cards = demo_cards(
+        "TEST",
+        _seeded_store(),
+        Journal(),
+        NOW,
+        env={"META_MODEL_API_KEY": "key-1"},
+        http_post=_reason_stub,
+    )
+    assert cards
+    assert {card.reason_source for card in cards} == {"meta"}
+    assert {card.reason for card in cards} == {"Model says go."}
 
 
 def test_demo_cards_pins_old_snapshot_bar():

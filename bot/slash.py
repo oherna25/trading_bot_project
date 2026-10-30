@@ -103,13 +103,13 @@ def info_text() -> str:
             "shock: reprice walls and card P&L at a shocked spot",
             "replay: replay snapshots as a signal-to-fill backtest",
             "paper: paper trading plus marked P&L (/pnl)",
-            "alerts: flip, regime, and wall alerts with Discord/Telegram push",
+            "alerts: flip, regime, and wall alerts, pushed to Discord/Telegram when webhooks are set",
             "holdings: saved book with risk vs flip, spot, and walls",
             "debate: bull vs bear debate on any card (chat: debate)",
             "profile: risk questionnaire with suggested risk params (/profile)",
             "pages: /chart, /board, /cards, /card, /demo, /dashboard over HTTP",
-            "voice: voice notes transcribed into chat commands",
-            "sessions: scheduled live briefs with alerts and paper trades",
+            "voice: voice notes transcribed into chat commands (needs a transcription key)",
+            "sessions: scheduled live briefs with alerts and paper trades (when scheduled)",
         ]
     )
 

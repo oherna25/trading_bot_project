@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import html
 from datetime import datetime
+from typing import Mapping
 from urllib.parse import quote as _urlencode
 
 from bot.exposure import compute_gex
 from bot.ivrank import histories_for
 from bot.journal import Journal
+from bot.models import HttpPost
 from bot.replay import replay_report
 from bot.research import handle_chat_query
 from bot.store import SnapshotStore
@@ -15,7 +17,13 @@ from bot.wheel import wheel_response
 
 
 def demo_cards(
-    underlying: str, store: SnapshotStore, journal: Journal, now: datetime, snapshot_id: str | None = None
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    snapshot_id: str | None = None,
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
 ):
     if snapshot_id is None:
         found = store.read_latest(underlying)
@@ -40,7 +48,7 @@ def demo_cards(
         )
     ]
     cards = build_trade_cards(
-        entries, None, now, journal, {}, None,
+        entries, None, now, journal, env, http_post,
         iv_history=histories_for(store, [underlying]), earnings={},
     )
     return snapshot_id, cards

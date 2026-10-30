@@ -143,7 +143,7 @@ def card_debate(
         if latest is None:
             raise ValueError(f"no snapshot stored for {underlying}")
         snapshot_id = latest[0]
-    found_id, cards = demo_cards(underlying, store, journal, now, snapshot_id)
+    found_id, cards = demo_cards(underlying, store, journal, now, snapshot_id, env, http_post)
     if found_id is None or not cards:
         raise ValueError(f"no cards for {underlying} snapshot {snapshot_id}")
     if index < 0 or index >= len(cards):

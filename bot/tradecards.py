@@ -318,8 +318,9 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
         line = (
             f"{number}. {card.symbol} {card.direction} {card.spread} "
             f"expiry {card.expiry} confidence {card.confidence:.2f} "
-            f"max loss {card.max_loss} breakeven {card.breakeven} wall {card.wall_exposure} "
-            f"{card.regime} spot {card.spot} flip {card.flip_point}"
+            f"max loss {_rounded(card.max_loss, 2)} breakeven {_rounded(card.breakeven, 2)} "
+            f"wall {_rounded(card.wall_exposure, 2)} {card.regime} "
+            f"spot {_rounded(card.spot, 2)} flip {_rounded(card.flip_point, 2)}"
         )
         if card.earnings_date is not None:
             line += f" earnings {card.earnings_date}"
@@ -399,15 +400,15 @@ def trade_cards_html(cards: Sequence[TradeCard], underlying: str) -> str:
         stats = [
             f"confidence {card.confidence:.2f}",
             f"max loss {_money(card.max_loss)}",
-            f"breakeven {card.breakeven if card.breakeven is not None else 'n/a'}",
+            f"breakeven {_rounded(card.breakeven, 2) if card.breakeven is not None else 'n/a'}",
             f"net {_net_text(card.net_debit)}",
             f"spread width {card.spread_pct:.1f}%" if card.spread_pct is not None else "spread width n/a",
             f"wall exposure {card.wall_exposure:.0f}"
             if card.wall_exposure is not None
             else "wall exposure n/a",
             f"regime {card.regime}",
-            f"spot {card.spot if card.spot is not None else 'n/a'} "
-            f"vs flip {card.flip_point if card.flip_point is not None else 'n/a'}",
+            f"spot {_rounded(card.spot, 2) if card.spot is not None else 'n/a'} "
+            f"vs flip {_rounded(card.flip_point, 2) if card.flip_point is not None else 'n/a'}",
         ]
         if card.earnings_date is not None:
             stats.append(f"earnings {card.earnings_date} inside expiry")

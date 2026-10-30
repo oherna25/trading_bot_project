@@ -249,12 +249,14 @@ def _dashboard_handler(
 def _alerts_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
-    del args, config
+    del args, config, underlying
     from bot.alerts import collect_alerts
 
-    alerts = collect_alerts(underlying, store, journal, now)
+    alerts = []
+    for symbol in sorted(store.list_underlyings()):
+        alerts.extend(collect_alerts(symbol, store, journal, now))
     if not alerts:
-        return f"alerts for {underlying}: none"
+        return "alerts: none"
     return "\n".join(alerts)
 
 
@@ -315,7 +317,7 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "run_session": MuseTool("run_session", "Run a scheduled session now and return the brief", _session_run_handler),
     "get_profile": MuseTool("get_profile", "Read the saved operator profile", _profile_handler),
     "get_dashboard": MuseTool("get_dashboard", "Read the one-screen digest across stored underlyings", _dashboard_handler),
-    "get_alerts": MuseTool("get_alerts", "Read current alerts for an underlying", _alerts_handler),
+    "get_alerts": MuseTool("get_alerts", "Read current alerts across stored underlyings", _alerts_handler),
     "get_holdings": MuseTool("get_holdings", "Read the saved operator book against live positioning", _holdings_read_handler),
 }
 

@@ -1,6 +1,8 @@
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from bot.journal import Journal
 from bot.research import ideas_response, route_chat
 from bot.risk import build_intent, even_legs, review_intent
@@ -18,6 +20,12 @@ LIMITS = RiskLimits(max_trade_size=5000.0, day_profit_target=500.0, max_day_loss
 
 OPT_IN = "profile: risk_tolerance=moderate, portfolio_size=50000, knowledge=intermediate, options_ok=yes"
 OPT_OUT = "profile: risk_tolerance=moderate, portfolio_size=50000, knowledge=intermediate, options_ok=no"
+
+
+@pytest.fixture(autouse=True)
+def _no_reason_backend(monkeypatch):
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
 def _state() -> RiskState:

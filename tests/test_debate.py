@@ -10,6 +10,12 @@ from bot.tradecards import TradeCard
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 CONFIG = default_operator_config()
+
+
+@pytest.fixture(autouse=True)
+def _no_reason_backend(monkeypatch):
+    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
 
 
