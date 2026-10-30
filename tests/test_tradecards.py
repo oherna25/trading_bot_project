@@ -13,7 +13,7 @@ from bot.tradecards import (
     format_trade_cards,
     trade_cards_html,
 )
-from bot.shapes import Bar, ChainSnapshot, OptionContract
+from bot.shapes import Bar, ChainSnapshot, OperatorProfile, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -59,6 +59,9 @@ def _seeded_store() -> SnapshotStore:
                                open=99.0, high=101.0, low=98.0, close=100.0, volume=1000.0))
     store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
                                open=100.0, high=103.0, low=99.0, close=102.0, volume=1200.0))
+    store.save_profile(OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    ))
     return store
 
 
@@ -297,6 +300,20 @@ def test_missing_env_falls_back_without_calling_http():
     assert {card.reason_source for card in cards} == {"fallback"}
     payload = journal.entries()[0].payload
     assert payload["reason"] == "missing META_MODEL_API_KEY"
+
+
+def test_card_wall_matches_brief_dollar_gex():
+    from bot.tradecards import query_trade_cards
+
+    store = _seeded_store()
+    cards = query_trade_cards("TEST", "TEST", store, Journal(), NOW, env={})
+    assert cards
+    snapshot_id, snapshot = store.read_latest("TEST")
+    bar = store.read_latest_bar("TEST")
+    assert bar is not None
+    brief = compute_gex(snapshot, snapshot_id, spot=bar.close)
+    for card in cards:
+        assert card.wall_exposure == brief.per_strike_exposure.get(card.strike)
 
 
 def test_cards_response_journals_ideas_with_card_count():

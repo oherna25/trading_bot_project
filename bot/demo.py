@@ -10,7 +10,7 @@ from bot.journal import Journal
 from bot.replay import replay_report
 from bot.research import handle_chat_query
 from bot.store import SnapshotStore
-from bot.tradecards import bar_at_or_before, build_trade_cards, format_trade_cards
+from bot.tradecards import PROFILE_REQUIRED, bar_at_or_before, build_trade_cards, format_trade_cards
 from bot.wheel import wheel_response
 
 
@@ -31,7 +31,14 @@ def demo_cards(
             return None, []
         snapshot = match[0]
     bar = bar_at_or_before(store, underlying, snapshot.timestamp_utc)
-    entries = [(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), bar)]
+    entries = [
+        (
+            snapshot_id,
+            snapshot,
+            compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None),
+            bar,
+        )
+    ]
     cards = build_trade_cards(
         entries, None, now, journal, {}, None,
         iv_history=histories_for(store, [underlying]), earnings={},
@@ -46,7 +53,10 @@ def demo_html(underlying: str, store: SnapshotStore, journal: Journal, now: date
     snapshot_id, _ = found
     brief, _ = handle_chat_query("judge demo brief", underlying, store, journal, now)
     _, cards = demo_cards(underlying, store, journal, now)
-    top = format_trade_cards(cards[:1]) if cards else "trade cards: none found"
+    if store.read_profile() is None:
+        top = PROFILE_REQUIRED
+    else:
+        top = format_trade_cards(cards[:1]) if cards else "trade cards: none found"
     wheel = wheel_response("wheel ideas", underlying, store, journal, now)
     replay_text, _, _ = replay_report(underlying, store)
     link = f"/card?underlying={_urlencode(underlying)}&snapshot={_urlencode(snapshot_id)}&index=0"

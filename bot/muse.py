@@ -34,7 +34,7 @@ from bot.research import (
 from bot.schedule import normalize_underlyings, run_session_core, tick_symbols
 from bot.shapes import OperatorConfig, default_operator_config
 from bot.store import SnapshotStore
-from bot.tradecards import OPTIONS_DISABLED, cards_response, cards_to_json, query_trade_cards, trade_cards_html
+from bot.tradecards import OPTIONS_DISABLED, PROFILE_REQUIRED, cards_response, cards_to_json, query_trade_cards, trade_cards_html
 from bot.wheel import wheel_response
 
 
@@ -181,12 +181,17 @@ def _shock_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
     del config
-    from bot.shock import SHOCK_USAGE, shock_text
+    from bot.shock import SHOCK_USAGE, parse_shock_pct, shock_text
 
     raw = args.get("shock_pct")
-    try:
-        shock_pct = float(raw)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    if raw is None:
+        raw = args.get("percent")
+    shock_pct: float | None = None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        shock_pct = float(raw)
+    elif isinstance(raw, str):
+        shock_pct = parse_shock_pct(raw)
+    if shock_pct is None:
         return SHOCK_USAGE
     return shock_text(underlying, store, journal, now, shock_pct)
 
@@ -218,6 +223,48 @@ def _debate_handler(
         index=index,
         live_models=bool(args.get("live_models", False)),
     )
+
+
+def _profile_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, journal, config, now, underlying
+    from bot.profile import format_profile, suggest_params
+
+    profile = store.read_profile()
+    if profile is None:
+        return 'no profile is saved; chat "profile" to answer the questionnaire'
+    return format_profile(profile, suggest_params(profile))
+
+
+def _dashboard_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, underlying
+    from bot.dashboard import dashboard_text
+
+    return dashboard_text(store, journal, now)
+
+
+def _alerts_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config
+    from bot.alerts import collect_alerts
+
+    alerts = collect_alerts(underlying, store, journal, now)
+    if not alerts:
+        return f"alerts for {underlying}: none"
+    return "\n".join(alerts)
+
+
+def _holdings_read_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, journal, config, now, underlying
+    from bot.holdings import holdings_text
+
+    return holdings_text(store)
 
 
 def _session_run_handler(
@@ -266,6 +313,10 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "debate_card": MuseTool("debate_card", "Bull-bear debate for one trade card", _debate_handler),
     "run_replay": MuseTool("run_replay", "Replay stored snapshots into a paper backtest summary", _replay_handler),
     "run_session": MuseTool("run_session", "Run a scheduled session now and return the brief", _session_run_handler),
+    "get_profile": MuseTool("get_profile", "Read the saved operator profile", _profile_handler),
+    "get_dashboard": MuseTool("get_dashboard", "Read the one-screen digest across stored underlyings", _dashboard_handler),
+    "get_alerts": MuseTool("get_alerts", "Read current alerts for an underlying", _alerts_handler),
+    "get_holdings": MuseTool("get_holdings", "Read the saved operator book against live positioning", _holdings_read_handler),
 }
 
 
@@ -767,9 +818,10 @@ def route_http(
                 return HttpResponse.json(400, {"error": str(exc)})
             return HttpResponse.html(400, _cards_error_html(str(exc)))
         if cards is None:
+            reason = PROFILE_REQUIRED if store.read_profile() is None else OPTIONS_DISABLED
             if want_json:
-                return HttpResponse.json(403, {"error": OPTIONS_DISABLED})
-            return HttpResponse.html(403, _cards_error_html(OPTIONS_DISABLED))
+                return HttpResponse.json(403, {"error": reason})
+            return HttpResponse.html(403, _cards_error_html(reason))
         if want_json:
             return HttpResponse.json(
                 200, {"underlying": underlying, "count": len(cards), "cards": cards_to_json(cards)["cards"]}
@@ -788,6 +840,15 @@ def route_http(
         return HttpResponse.html(200, gamma_chart_html(underlying, snapshot, profile, bar, now))
     if method == "GET" and clean == "/board":
         return HttpResponse.html(200, regime_board_html(store, now))
+    if method == "GET" and clean == "/dashboard":
+        from bot.dashboard import dashboard_html
+
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        if not store.list_underlyings():
+            return HttpResponse.html(400, _cards_error_html("dashboard: no snapshots stored"))
+        return HttpResponse.html(200, dashboard_html(store, journal, now, underlying))
     if method == "GET" and clean in ("/demo", "/"):
         query_string = path.split("?", 1)[1] if "?" in path else ""
         params = parse_qs(query_string)
@@ -800,6 +861,8 @@ def route_http(
         query_string = path.split("?", 1)[1] if "?" in path else ""
         params = parse_qs(query_string)
         underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        if store.read_profile() is None:
+            return HttpResponse.html(403, _cards_error_html(PROFILE_REQUIRED))
         snapshot_id = (params.get("snapshot", [""])[0] or "").strip()
         try:
             index = int((params.get("index", ["0"])[0] or "0").strip())

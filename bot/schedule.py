@@ -5,6 +5,7 @@ from typing import Callable, Sequence
 
 from bot.alerts import push_alerts
 from bot.feeds import BAR_FEEDS, CHAIN_FEEDS, FeedContext, FeedUnavailableError, ingest_bars, ingest_chain, live_context
+from bot.ivrank import backfill_iv_history
 from bot.journal import Journal
 from bot.persist import load_bundle, save_bundle
 from bot.research import ingest_first_working, live_brief
@@ -142,10 +143,13 @@ def refresh_core(
     used: dict[str, str | None] = {}
     for symbol in normalize_underlyings(underlying):
         chain = ingest_first_working(chains, ingest_chain, symbol, store, journal, moment, context_factory)
-        ingest_first_working(bars, ingest_bars, symbol, store, journal, moment, context_factory)
+        bars_used = ingest_first_working(bars, ingest_bars, symbol, store, journal, moment, context_factory)
+        if bars_used != "finnhub":
+            ingest_first_working(("finnhub",), ingest_bars, symbol, store, journal, moment, context_factory)
         if chain is None:
             journal.append(moment, "refresh_failed", {"underlying": symbol})
         used[symbol] = chain
+    backfill_iv_history(store, journal, moment)
     journal.append(moment, "refreshed", {"underlyings": sorted(used), "store_dir": store_dir})
     return used
 

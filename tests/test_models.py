@@ -157,7 +157,7 @@ def test_backend_runs_tool_loop_and_journals_receipts():
     assert receipts[0].payload["snapshot_id"] == snapshot_id
     tool_messages = [m for m in http_post.log[1]["messages"] if m.get("role") == "tool"]
     assert len(tool_messages) == 1
-    assert json.loads(tool_messages[0]["content"])["total_exposure"] == pytest.approx(-1000.0)
+    assert json.loads(tool_messages[0]["content"])["total_exposure"] == pytest.approx(-104040.0)
 
 
 def test_backend_missing_markers_use_regime_fallback():

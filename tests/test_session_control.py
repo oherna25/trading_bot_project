@@ -447,7 +447,7 @@ def test_run_app_passes_session_to_serve(monkeypatch, tmp_path):
     def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen.update(kwargs)
 
-    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "live_brief", lambda *args, **kwargs: "brief text")
     monkeypatch.setattr(run_app, "serve", fake_serve)
     run_app.main(
         ["--store-dir", str(tmp_path), "--session-schedule", "30 7 * * 1-5",
@@ -464,7 +464,7 @@ def test_run_app_session_underlying_defaults_to_underlying(monkeypatch, tmp_path
     def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen.update(kwargs)
 
-    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "live_brief", lambda *args, **kwargs: "brief text")
     monkeypatch.setattr(run_app, "serve", fake_serve)
     run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path)])
     assert seen["session_schedule"] == ""

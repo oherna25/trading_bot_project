@@ -29,10 +29,11 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
     monkeypatch.chdir(tmp_path)
     seen = {}
 
-    def fake_live_brief(underlying, store, journal, now):
+    def fake_live_brief(underlying, store, journal, now, paper_trade=False):
         seen["underlying"] = underlying
         seen["store"] = store
         seen["journal"] = journal
+        seen["paper_trade"] = paper_trade
         return "brief text"
 
     def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
@@ -50,6 +51,7 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
     )
     assert result == "brief text"
     assert seen["underlying"] == "QQQ"
+    assert seen["paper_trade"] is False
     assert seen["serve_store"] is seen["store"]
     assert seen["serve_journal"] is seen["journal"]
     assert seen["store_dir"] == str(tmp_path)
@@ -69,7 +71,7 @@ def test_main_feed_failure_still_serves(monkeypatch, capsys, tmp_path):
     monkeypatch.chdir(tmp_path)
     seen = {}
 
-    def failing_live_brief(underlying, store, journal, now):
+    def failing_live_brief(underlying, store, journal, now, paper_trade=False):
         raise FeedUnavailableError("all chain feeds failed for QQQ")
 
     def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
@@ -97,7 +99,7 @@ def test_main_port_env_flows_to_serve(monkeypatch, tmp_path):
         seen["host"] = host
         seen["port"] = port
 
-    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "live_brief", lambda *args, **kwargs: "brief text")
     monkeypatch.setattr(run_app, "serve", fake_serve)
     run_app.main(["--store-dir", str(tmp_path)])
     assert seen == {"host": "0.0.0.0", "port": 9002}
@@ -127,7 +129,7 @@ def test_main_wires_saved_profile_into_limits(monkeypatch, tmp_path):
     def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen["config"] = config
 
-    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "live_brief", lambda *args, **kwargs: "brief text")
     monkeypatch.setattr(run_app, "serve", fake_serve)
     run_app.main(["--store-dir", str(tmp_path)])
     assert seen["config"].max_day_loss == 1000.0
@@ -138,14 +140,44 @@ def test_main_briefs_multiple_underlyings(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     seen = []
 
-    def fake_live_brief(underlying, store, journal, now):
-        seen.append(underlying)
+    def fake_live_brief(underlying, store, journal, now, paper_trade=False):
+        seen.append((underlying, paper_trade))
         return f"brief {underlying}"
 
     monkeypatch.setattr(run_app, "live_brief", fake_live_brief)
     monkeypatch.setattr(run_app, "serve", lambda *args, **kwargs: None)
     result = run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path)])
-    assert seen == ["SPY", "QQQ"]
+    assert seen == [("SPY", False), ("QQQ", False)]
+    assert result == "brief SPY\n---\nbrief QQQ"
+
+
+def test_main_startup_briefs_stored_symbols_requested_first(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    from bot.journal import Journal
+    from bot.persist import save_bundle
+    from bot.shapes import ChainSnapshot
+    from bot.store import SnapshotStore
+
+    monkeypatch.chdir(tmp_path)
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="QQQ", timestamp_utc=datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc),
+            source_name="tradier_sandbox", latency_ms=9.0, contracts_list=(),
+        )
+    )
+    save_bundle(str(tmp_path), store, Journal())
+    seen = []
+
+    def fake_live_brief(underlying, store, journal, now, paper_trade=False):
+        seen.append((underlying, paper_trade))
+        return f"brief {underlying}"
+
+    monkeypatch.setattr(run_app, "live_brief", fake_live_brief)
+    monkeypatch.setattr(run_app, "serve", lambda *args, **kwargs: None)
+    result = run_app.main(["--underlying", "SPY", "--store-dir", str(tmp_path)])
+    assert seen == [("SPY", False), ("QQQ", False)]
     assert result == "brief SPY\n---\nbrief QQQ"
 
 
@@ -156,7 +188,7 @@ def test_main_passes_refresh_to_serve(monkeypatch, tmp_path):
     def fake_serve(store, journal, config, host, port, store_dir, **kwargs):
         seen.update(kwargs)
 
-    monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
+    monkeypatch.setattr(run_app, "live_brief", lambda *args, **kwargs: "brief text")
     monkeypatch.setattr(run_app, "serve", fake_serve)
     run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path), "--refresh-seconds", "60"])
     assert seen == {"refresh_seconds": 60.0, "refresh_symbols": ["SPY", "QQQ"],

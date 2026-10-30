@@ -21,6 +21,7 @@ ALPACA_BASE_URL = "https://data.alpaca.markets"
 FINNHUB_BASE_URL = "https://finnhub.io/api/v1"
 MARKETDATA_BASE_URL = "https://api.marketdata.app/v1"
 YAHOO_BASE_URL = "https://query1.finance.yahoo.com"
+ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 
 HTTP_TIMEOUT_SECONDS = 30.0
 BAR_DAYS = 5
@@ -54,6 +55,19 @@ def _urllib_get(url: str, headers: dict[str, str] | None, params: dict[str, Any]
 
 
 def _canned_get(url: str, headers: dict[str, str] | None, params: dict[str, Any] | None, timeout: float) -> Any:
+    if "alphavantage" in url:
+        return {
+            "Time Series (Daily)": {
+                "2026-10-27": {
+                    "1. open": "100.5", "2. high": "103.0", "3. low": "100.0",
+                    "4. close": "102.0", "5. volume": "1200",
+                },
+                "2026-10-26": {
+                    "1. open": "100.0", "2. high": "101.0", "3. low": "99.0",
+                    "4. close": "100.5", "5. volume": "1000",
+                },
+            }
+        }
     if "options/expirations" in url:
         return {"expirations": {"date": ["2026-11-20"]}}
     if "options/chains" in url:
@@ -154,6 +168,7 @@ CREDENTIAL_NAMES = (
     "APCA_API_SECRET_KEY",
     "FINNHUB_API_KEY",
     "MARKETDATA_API_KEY",
+    "ALPHA_VANTAGE_API_KEY",
 )
 
 
@@ -369,6 +384,48 @@ def _yfinance(ctx: FeedContext) -> dict[str, Any]:
     return {"underlying": ctx.underlying, "bars": bars}
 
 
+def _alpha_vantage(ctx: FeedContext) -> dict[str, Any]:
+    payload = ctx.http_get(
+        ALPHA_VANTAGE_URL,
+        headers={},
+        params={
+            "function": "TIME_SERIES_DAILY",
+            "symbol": ctx.underlying,
+            "outputsize": "compact",
+            "apikey": _credential_or_offline(ctx, "ALPHA_VANTAGE_API_KEY"),
+        },
+        timeout=HTTP_TIMEOUT_SECONDS,
+    )
+    series = payload.get("Time Series (Daily)") or {}
+    if not series:
+        note = (
+            payload.get("Note")
+            or payload.get("Information")
+            or payload.get("Error Message")
+            or "no daily series"
+        )
+        raise FeedUnavailableError(f"alpha vantage: {note}")
+    bars = []
+    for day, node in series.items():
+        try:
+            stamp = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            close = float(node["4. close"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        bars.append(
+            {
+                "timestamp": stamp,
+                "open": float(node.get("1. open") or close),
+                "high": float(node.get("2. high") or close),
+                "low": float(node.get("3. low") or close),
+                "close": close,
+                "volume": float(node.get("5. volume") or 0.0),
+            }
+        )
+    bars.sort(key=lambda b: b["timestamp"])
+    return {"underlying": ctx.underlying, "bars": bars}
+
+
 _yahoo_cookies: http.cookiejar.CookieJar = http.cookiejar.CookieJar()
 
 
@@ -450,6 +507,7 @@ FEED_REGISTRY: dict[str, Callable[[FeedContext], dict[str, Any]]] = {
     "finnhub": _finnhub,
     "marketdata_eod": _marketdata_eod,
     "yfinance": _yfinance,
+    "alpha_vantage": _alpha_vantage,
 }
 
 FEED_KIND: dict[str, str] = {
@@ -458,10 +516,24 @@ FEED_KIND: dict[str, str] = {
     "finnhub": "bars",
     "marketdata_eod": "chain",
     "yfinance": "bars",
+    "alpha_vantage": "bars",
 }
 
+DAILY_QUOTA_FEEDS = frozenset({"alpha_vantage"})
+
 CHAIN_FEEDS = ("tradier_sandbox", "marketdata_eod")
-BAR_FEEDS = ("alpaca", "finnhub", "yfinance")
+BAR_FEEDS = ("alpaca", "finnhub", "yfinance", "alpha_vantage")
+
+
+def _fetched_today(feed_name: str, underlying: str, journal: Journal) -> bool:
+    today = _now_utc().date()
+    return any(
+        entry.kind == "bars_ingested"
+        and entry.payload.get("source_name") == feed_name
+        and entry.payload.get("underlying") == underlying
+        and entry.timestamp_utc.date() == today
+        for entry in journal.entries()
+    )
 
 
 def ingest_chain(
@@ -508,6 +580,8 @@ def ingest_bars(feed_name: str, store: SnapshotStore, journal: Journal, ctx: Fee
         raise ValueError(f"feed {feed_name} carries chains, not bars")
     adapter = FEED_REGISTRY[feed_name]
     context = ctx or default_context()
+    if feed_name in DAILY_QUOTA_FEEDS and _fetched_today(feed_name, context.underlying, journal):
+        raise FeedUnavailableError(f"feed {feed_name} already fetched today for {context.underlying}")
     started = time.perf_counter()
     raw = adapter(context)
     latency_ms = (time.perf_counter() - started) * 1000.0

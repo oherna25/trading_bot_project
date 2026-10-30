@@ -26,7 +26,7 @@ from bot.feeds import FeedUnavailableError
 from bot.muse import resolve_port, serve
 from bot.persist import load_bundle, save_bundle
 from bot.research import live_brief
-from bot.schedule import normalize_underlyings
+from bot.schedule import normalize_underlyings, tick_symbols
 
 STORE_DIR = "data/trading-bot"
 HOST = "0.0.0.0"
@@ -62,9 +62,9 @@ def run(
     symbols = normalize_underlyings(underlying)
     briefs = []
     failures = []
-    for symbol in symbols:
+    for symbol in tick_symbols(symbols, store):
         try:
-            briefs.append(live_brief(symbol, store, journal, datetime.now(timezone.utc)))
+            briefs.append(live_brief(symbol, store, journal, datetime.now(timezone.utc), paper_trade=False))
         except FeedUnavailableError as exc:
             failures.append(f"live brief failed for {symbol}: {exc}")
     for line in briefs + failures:

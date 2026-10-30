@@ -4,7 +4,7 @@ import pytest
 
 from bot.debate import attach_debate, card_debate, debate_card
 from bot.journal import Journal
-from bot.shapes import Bar, ChainSnapshot, OptionContract, default_operator_config
+from bot.shapes import Bar, ChainSnapshot, OperatorProfile, OptionContract, default_operator_config
 from bot.store import SnapshotStore
 from bot.tradecards import TradeCard
 
@@ -45,6 +45,9 @@ def _seeded_store() -> SnapshotStore:
     )
     store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
                                open=100.0, high=103.0, low=99.0, close=102.0, volume=1200.0))
+    store.save_profile(OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    ))
     return store
 
 

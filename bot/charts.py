@@ -41,13 +41,23 @@ def gamma_svg(profile: GexProfile, width: int = CHART_WIDTH, height: int = CHART
     strikes = chart_strikes(profile)
     calls = [profile.per_strike_call_exposure.get(strike, 0.0) for strike in strikes]
     puts = [profile.per_strike_put_exposure.get(strike, 0.0) for strike in strikes]
-    peak = max([abs(value) for value in calls + puts] + [1.0]) * 1.1
+    pos_max = max([value for value in calls + puts if value > 0] + [0.0])
+    neg_max = max([-value for value in calls + puts if value < 0] + [0.0])
+    if pos_max <= 0 and neg_max <= 0:
+        pos_max = neg_max = 1.0
+    elif pos_max <= 0:
+        pos_max = neg_max
+    elif neg_max <= 0:
+        neg_max = pos_max
+    pos_peak = pos_max * 1.1
+    neg_peak = neg_max * 1.1
+    span = pos_peak + neg_peak
     left, right, top, bottom = 76, 16, 18, 44
     plot_width = width - left - right
     plot_height = height - top - bottom
 
     def y_of(value: float) -> float:
-        return top + plot_height / 2 - (value / peak) * (plot_height / 2)
+        return top + (pos_peak - value) / span * plot_height
 
     def x_of(strike: float) -> float:
         if len(strikes) == 1:
@@ -64,7 +74,13 @@ def gamma_svg(profile: GexProfile, width: int = CHART_WIDTH, height: int = CHART
         f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
         'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">'
     ]
-    for value, label in ((peak / 1.1, _money(peak / 1.1)), (0.0, "$0"), (-peak / 1.1, _money(-peak / 1.1))):
+    for value, label in (
+        (pos_max, _money(pos_max)),
+        (pos_max / 2, _money(pos_max / 2)),
+        (0.0, "$0"),
+        (-neg_max / 2, _money(-neg_max / 2)),
+        (-neg_max, _money(-neg_max)),
+    ):
         y = y_of(value)
         parts.append(
             f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" '

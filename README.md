@@ -45,7 +45,7 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/venue.py` | Tradier live venue: `occ_symbol`, equity, single-option, and combo orders, `LiveAck` |
 | `bot/tradecards.py` | `TradeCard`, card builder over `rank_ideas`, text plus JSON plus HTML renderers |
 | `bot/replay.py` | `replay_week` (totals or signal-to-fill backtest), `paper_evidence_from_journal`, pure `replay_report` plus journaling `replay_response` |
-| `bot/charts.py` | Gamma-by-strike SVG chart page plus multi-ticker regime board, both auto-refreshing |
+| `bot/charts.py` | Gamma-by-strike SVG chart page plus multi-ticker regime board, both auto-refreshing; the chart scales each side to its own peak with half-peak gridlines |
 | `bot/alerts.py` | Wall-proximity plus wall-growth plus flip/regime alerts with Discord/Telegram push and journal dedup |
 | `bot/diff.py` | Latest-two-snapshot diff: regime, flip, wall growth, totals, top movers |
 | `bot/shock.py` | Spot-shock repricing: broken walls, flip cross, intrinsic card P&L table |
@@ -71,10 +71,11 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `tradier_sandbox` | chain | `TRADIER_ACCESS_TOKEN` | Primary chain. Sandbox is delayed ~15 min without Greeks; production has Greeks |
 | `marketdata_eod` | chain | `MARKETDATA_API_KEY` | EOD chain seed and fallback. 100 free credits/day |
 | `alpaca` | bars | `APCA_API_KEY_ID` + `APCA_API_SECRET_KEY` | Primary daily bars (IEX rail) |
-| `finnhub` | bars | `FINNHUB_API_KEY` | Live quote bar plus earnings calendar; currently the working spot source |
+| `finnhub` | bars | `FINNHUB_API_KEY` | Live quote bar plus earnings calendar; stored every tick alongside the daily winner so marks track spot |
 | `yfinance` | bars | none | Unkeyed backup |
+| `alpha_vantage` | bars | `ALPHA_VANTAGE_API_KEY` | Last-resort daily bars with ~100-day depth; at most one call per symbol per day (journal-guarded) |
 
-Fallback order is fixed tables: chains try Tradier then Market Data; bars try Alpaca, Finnhub, then Yahoo. An empty bar result counts as feed failure and falls through to the next source. `live_brief` journals each failure with the error class name only, raises `FeedUnavailableError` when every chain feed fails, and treats bars as best effort (without a bar or a flip, direction falls back to the regime sign and the brief says so).
+Fallback order is fixed tables: chains try Tradier then Market Data; bars try Alpaca, Finnhub, Yahoo, then Alpha Vantage. Quota-capped feeds skip when the journal shows a fetch for that symbol today, so Alpha Vantage costs at most one call per symbol per day no matter how often sessions tick. Seed one symbol by hand with `ingest_bars("alpha_vantage", store, journal)`. An empty bar result counts as feed failure and falls through to the next source. `live_brief` journals each failure with the error class name only, raises `FeedUnavailableError` when every chain feed fails, and treats bars as best effort (without a bar or a flip, direction falls back to the regime sign and the brief says so).
 
 Without arguments, `ingest_chain`/`ingest_bars` use canned vendor-shaped fixtures, so the whole suite and every offline flow run with no keys and no network.
 
@@ -125,7 +126,7 @@ Fully offline, no network:
 
 ### Full app in one script
 
-`run_app.py` loads the JSON bundle, prints the live brief, saves, then serves the Muse HTTP surface (blocks serving) while re-ingesting on a timer (`--refresh-seconds`, default 900, 0 disables) so snapshots stay fresh without restarts. On a feed failure it prints the failure, still saves, and still serves the loaded state.
+`run_app.py` loads the JSON bundle, prints the live brief with paper trading off, saves, then serves the Muse HTTP surface (blocks serving) while re-ingesting on a timer (`--refresh-seconds`, default 900, 0 disables) so snapshots stay fresh without restarts. On a feed failure it prints the failure, still saves, and still serves the loaded state. Only explicit session runs paper trade.
 
 ```bash
 .venv/bin/python run_app.py
@@ -202,12 +203,13 @@ tail data/session.log
 | `/card?underlying=SPY[&snapshot=...][&index=0][&debate=1]` | GET | none; permalink for one card pinned to a snapshot (`debate=1` appends the bull-bear debate) |
 | `/chart?underlying=SPY` | GET | none; gamma-by-strike SVG chart with flip line, refreshes every 60s |
 | `/board` | GET | none; regime board across all stored underlyings, refreshes every 60s |
+| `/dashboard?underlying=SPY` | GET | none; digest plus top card plus holdings page (400 when the store is empty) |
 | `/voice?underlying=SPY[&live_models=1]` | POST | raw WAV/ogg audio bytes (10MB cap); transcribes and returns the brief as `{"ok", "reply"}` |
 | `/health` | GET | none; last ingest time, feed used, snapshot age, quote ages, underlyings (always open) |
 | `/healthz` | GET | none; minimal `{"ok": true}` probe (always open) |
 | `/openapi.json` | GET | none |
 
-MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`, `backfill_iv`, `snapshot_diff`, `shock_test` (`{"shock_pct": -2}`), `set_holdings` (`{"holdings": [...]}`), `debate_card` (`{"index": 0}`, optional `snapshot` and `live_models`). Each session run also pushes new flip, regime, wall-proximity, and wall-growth alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session. Server sessions paper trade one position per symbol by default, same as the CLI; pass `paper_trade: false` to `/session` or `run_session` to skip.
+MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`, `backfill_iv`, `snapshot_diff`, `shock_test` (`{"shock_pct": -2}`), `set_holdings` (`{"holdings": [...]}`), `debate_card` (`{"index": 0}`, optional `snapshot` and `live_models`), `get_profile`, `get_dashboard`, `get_alerts`, `get_holdings`. Each session run also pushes new flip, regime, wall-proximity, and wall-growth alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session. Server sessions paper trade one position per symbol by default, same as the CLI; pass `paper_trade: false` to `/session` or `run_session` to skip.
 
 When `store_dir` is passed to `serve` (as `run_app.py` does), the server reloads the JSON bundle whenever the scheduled session rewrites it, and with `refresh_seconds > 0` it re-ingests on its own timer (`bot/schedule.py: refresh_store`, ingest-only, no signals minted), prunes in-memory growth, and persists every pass, so snapshots stay fresh without restarts. Each tick refreshes the startup symbols plus every underlying currently in the store, so a ticker added later via `run_session.py --underlying QQQ` stays fresh with no restart. Session runs (`/session`, `run_session`, and the session timer) likewise cover the requested symbols plus every underlying in the store, requested first.
 
@@ -377,7 +379,7 @@ print(route_chat("weekly trade ideas", "SPY", store, journal, config, now))
 print(route_chat("trade ideas for QQQ", "SPY", store, journal, config, now))
 ```
 
-Queries mentioning `"card"` or `"cards"` return trade cards instead: one card per recommended trade with spread stats plus wall exposure plus regime plus spot versus flip, and a one-line reason stating why it is a good trade. The same cards render as a page at `/cards?underlying=SPY` and as JSON at `/cards.json?underlying=SPY`. Each card also has a permalink at `/card?underlying=SPY&snapshot=...&index=N` that rebuilds that card pinned to its snapshot and contemporary bar, so a shared link always shows the same trade.
+Queries mentioning `"card"` or `"cards"` return trade cards instead: one card per recommended trade with spread stats plus wall exposure plus regime plus spot versus flip, and a one-line reason stating why it is a good trade. Trade cards need a saved operator profile first; without one, chat replies and every card page (`/cards`, `/cards.json`, `/card`, the demo and dashboard top card, shock card P&L, and debate) ask for profile setup instead. The same cards render as a page at `/cards?underlying=SPY` and as JSON at `/cards.json?underlying=SPY`. Each card also has a permalink at `/card?underlying=SPY&snapshot=...&index=N` that rebuilds that card pinned to its snapshot and contemporary bar, so a shared link always shows the same trade.
 
 Each idea flags event risk: `earnings 2026-11-05` when the expiry spans the symbol's next earnings date (live Finnhub calendar, cached per process, fail-soft), plus `iv rank 87.0` when at least 20 IV points are stored. Spanned earnings cut confidence by 0.15 ahead of ranking. Trade cards carry both fields into text, HTML, JSON, and the reason stats. The `get_iv_rank` tool reports ranks per underlying.
 
@@ -395,7 +397,7 @@ Deliberately not integrated: a volume filter needs a contract field that does no
 
 ### IV backfill
 
-`get_iv_rank` needs 20 history points before any rank computes, and a fresh store has none. Chatting `"backfill iv history"` (or the `backfill_iv` tool) walks every stored snapshot, averages its priced contract IVs, and records one sample per snapshot keyed by sample time. Days already recorded by live screens are skipped, so reruns are idempotent and live values always win. Snapshots without priced IVs are reported, not invented:
+`get_iv_rank` needs 20 history points before any rank computes, and a fresh store has none. Chatting `"backfill iv history"` (or the `backfill_iv` tool) walks every stored snapshot, averages its priced contract IVs, and records one sample per snapshot keyed by sample time. Days already recorded by live screens are skipped, so reruns are idempotent and live values always win. Snapshots with mid prices but no vendor IV are inverted through Black-Scholes instead of skipped, using only near-money liquid contracts (2% band, $0.10+ mid, 100+ OI, 1–60 DTE) so deep-ITM and penny quotes cannot drag the average. Sessions and refresh ticks backfill automatically, so new snapshots join the history without a manual run. Snapshots without priced IVs are reported, not invented:
 
 ```python
 print(route_chat("backfill iv history", "SPY", store, journal, config, now))
@@ -411,7 +413,7 @@ print(route_chat("diff SPY", "SPY", store, journal, config, now))
 
 ### Shock test
 
-Chatting `"shock SPY -2%"` (or the `shock_test` tool with `{"shock_pct": -2}`) reprices the latest snapshot at the shocked spot: walls the move breaks through, whether spot crosses the flip, the nearest surviving walls, and an intrinsic P&L line for every open card. Positions are unchanged by a spot move, so the regime line says so:
+Chatting `"shock SPY -2%"` (or the `shock_test` tool with `{"shock_pct": -2}`) reprices the latest snapshot at the shocked spot: walls the move breaks through, whether spot crosses the flip, the nearest surviving walls, and an intrinsic P&L line vs debit paid for every open card. Positions are unchanged by a spot move, so the regime line says so:
 
 ```python
 print(route_chat("shock SPY -2%", "SPY", store, journal, config, now))
@@ -434,6 +436,32 @@ Chatting `"debate 0"` (or the `debate_card` tool, or `/card?...&debate=1`) stage
 
 ```python
 print(route_chat("debate", "SPY", store, journal, config, now))
+```
+
+### Slash commands
+
+Any chat text starting with `/` dispatches through the `SLASH_COMMANDS` registry in `bot/slash.py`, which routes each name to one MCP tool via `dispatch_tool`, so chat, MCP, and the LLM router stay one surface. Unknown names return the help listing.
+
+| Command | Tool | Args |
+|---|---|---|
+| `/profile` | `get_profile` | none |
+| `/dashboard` | `get_dashboard` | none |
+| `/alerts` | `get_alerts` | none |
+| `/holdings` | `get_holdings` | none |
+| `/brief` | `get_gex_brief` | none |
+| `/cards [query]` | `get_trade_cards` | `{"query": "trade cards"}` by default |
+| `/wheel [query]` | `get_wheel_ideas` | `{"query": "wheel ideas"}` by default |
+| `/diff` | `snapshot_diff` | none |
+| `/shock <percent>` | `shock_test` | `{"shock_pct": -2}`; missing percent returns usage |
+| `/replay` | `run_replay` | none |
+| `/pnl` | `paper_pnl` | none |
+| `/help` | local help text | none |
+| `/commands` | local command list with descriptions | none |
+| `/info` | local app feature overview | none |
+
+```python
+print(route_chat("/brief", "SPY", store, journal, config, now))
+print(route_chat("/shock -2%", "SPY", store, journal, config, now))
 ```
 
 ### Reason model
@@ -494,6 +522,6 @@ Options legs need the saved profile at review (`options_ok` must be yes); withou
 
 ## Status and roadmap
 
-Implemented: five live feeds with fallback, GEX/VEX/DEX engine with dollar GEX and interpolated flip, research chat loop plus scheduled briefs with change alerts, trade cards over HTTP plus chat with Meta reasons and offline fallback, paper trading with quote fills and halt logic, autonomy gate with kill switch, signal-to-fill replay backtest with generated paper evidence, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, defined-risk trade-ideas screener, Muse chat transport with bearer auth, health endpoints, tool registry, and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, bundle reload in the live server, multi-underlying briefs, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, broker combo support for multi-leg live orders, CI pytest workflow, wheel premium screener with IV rank plus risk caps, auto paper trade per session with one-position guard, gamma chart plus regime board pages, wall-migration brief section, LLM tool router, Discord/Telegram alert pushes, earnings overlay on ideas, one-click replay demo, card permalinks, IV backfill, snapshot diffs, spot-shock repricing, position-aware holdings, bull-bear debate, voice input endpoint, wall-growth push alerts, 462-test suite with a socket-level server smoke test.
+Implemented: five live feeds with fallback, GEX/VEX/DEX engine with dollar GEX and interpolated flip, research chat loop plus scheduled briefs with change alerts, trade cards over HTTP plus chat with Meta reasons and offline fallback, paper trading with quote fills and halt logic, autonomy gate with kill switch, signal-to-fill replay backtest with generated paper evidence, Muse program M0-M4 (Spark analyst, voice, grounding, cards, Wonder review), operator risk questionnaire, defined-risk trade-ideas screener, Muse chat transport with bearer auth, health endpoints, tool registry, and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, bundle reload in the live server, multi-underlying briefs, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, broker combo support for multi-leg live orders, CI pytest workflow, wheel premium screener with IV rank plus risk caps, auto paper trade per session with one-position guard, gamma chart plus regime board pages, wall-migration brief section, LLM tool router, Discord/Telegram alert pushes, earnings overlay on ideas, one-click replay demo, card permalinks, IV backfill, snapshot diffs, spot-shock repricing, position-aware holdings, bull-bear debate, voice input endpoint, wall-growth push alerts, slash commands, dashboard page, Alpha Vantage bar history, six-defect fix batch, wall-unit parity, live quote marks, filtered IV backfill, 510-test suite with a socket-level server smoke test.
 
 Not yet implemented: `live_enabled` defaults to `False`.

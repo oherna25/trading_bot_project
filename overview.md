@@ -267,6 +267,7 @@ FUNCTION scheduled_brief
 END FUNCTION
 
 FUNCTION cards_response WITH text
+  IF no saved operator profile THEN RETURN profile setup prompt
   entries = latest snapshots FOR text symbols
   cards = build_trade_cards entries
   journal APPEND event ideas WITH card count
@@ -415,6 +416,7 @@ END FUNCTION
 One card per recommended trade, built from the same ranked ideas as the
 ideas reply. Chat answers card queries with text cards. The /cards page
 renders one article per card with a stat list plus a reason paragraph.
+Every card surface needs a saved operator profile first.
 
 Card fields in order with bindings:
 

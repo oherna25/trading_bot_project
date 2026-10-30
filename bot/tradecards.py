@@ -16,6 +16,7 @@ from bot.shapes import Bar, ChainSnapshot, GexProfile
 from bot.store import SnapshotStore
 
 OPTIONS_DISABLED = "options ideas are disabled by your saved profile"
+PROFILE_REQUIRED = "trade cards need a saved operator profile; reply profile for the questionnaire"
 REASON_CACHE_MAX = 2000
 
 _reason_cache: dict[str, str] = {}
@@ -230,7 +231,10 @@ def query_trade_cards(
     http_post: HttpPost | None = None,
 ) -> list[TradeCard] | None:
     profile = store.read_profile()
-    if profile is not None and not profile.options_ok:
+    if profile is None:
+        journal.append(now, "ideas_blocked", {"reason": "profile required"})
+        return None
+    if not profile.options_ok:
         journal.append(now, "ideas_blocked", {"reason": "options blocked by profile"})
         return None
     unknown = unknown_symbols(text, store)
@@ -250,7 +254,15 @@ def query_trade_cards(
         if found is None:
             continue
         snapshot_id, snapshot = found
-        entries.append((snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), store.read_latest_bar(symbol)))
+        bar = store.read_latest_bar(symbol)
+        entries.append(
+            (
+                snapshot_id,
+                snapshot,
+                compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None),
+                bar,
+            )
+        )
         used.append(symbol)
         snapshot_ids.append(snapshot_id)
     if not entries:
@@ -291,6 +303,8 @@ def cards_response(
 ) -> str:
     cards = query_trade_cards(text, underlying, store, journal, now, env, http_post)
     if cards is None:
+        if store.read_profile() is None:
+            return PROFILE_REQUIRED
         return OPTIONS_DISABLED
     return format_trade_cards(cards)
 

@@ -28,7 +28,7 @@ from bot.ideas import (
     symbols_for,
     unknown_symbols,
 )
-from bot.ivrank import histories_for
+from bot.ivrank import backfill_iv_history, histories_for
 from bot.journal import Journal
 from bot.profile import build_profile, format_questionnaire, format_summary, parse_answers, suggest_params
 from bot.risk import build_intent, review_intent, submit_paper
@@ -149,7 +149,11 @@ def spark_signal(
         model_api_key(env),
         messages,
         [GEX_TOOL],
-        {"get_gex_profile": lambda args: gex_tool_result(snapshot, snapshot_id, args)},
+        {
+            "get_gex_profile": lambda args: gex_tool_result(
+                snapshot, snapshot_id, args, spot=bar.close if bar is not None else None
+            )
+        },
         prompt,
         http_post,
     )
@@ -385,14 +389,17 @@ def format_brief(
     else:
         delta = profile.total_exposure - previous.total_exposure
         if previous.total_exposure != 0:
-            pct = delta / abs(previous.total_exposure) * 100.0
-            note = ""
-            if previous.total_exposure < 0:
-                if delta > 0:
-                    note = ", less negative"
-                elif delta < 0:
-                    note = ", more negative"
-            lines.append(f"change vs previous: {_money(delta)} ({pct:+.1f}%{note})")
+            if (previous.total_exposure >= 0.0) != (profile.total_exposure >= 0.0):
+                lines.append(f"change vs previous: {_money(delta)} (sign flip)")
+            else:
+                pct = delta / abs(previous.total_exposure) * 100.0
+                note = ""
+                if previous.total_exposure < 0:
+                    if delta > 0:
+                        note = ", less negative"
+                    elif delta < 0:
+                        note = ", more negative"
+                lines.append(f"change vs previous: {_money(delta)} ({pct:+.1f}%{note})")
         else:
             lines.append(f"change vs previous: {_money(delta)}")
     basis = ""
@@ -600,7 +607,15 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
         if found is None:
             continue
         snapshot_id, snapshot = found
-        entries.append((snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), store.read_latest_bar(symbol)))
+        bar = store.read_latest_bar(symbol)
+        entries.append(
+            (
+                snapshot_id,
+                snapshot,
+                compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None),
+                bar,
+            )
+        )
         used.append(symbol)
         snapshot_ids.append(snapshot_id)
     if not entries:
@@ -761,6 +776,10 @@ def route_chat(
     grounding: bool = False,
     cards: bool = False,
 ) -> str:
+    if text.strip().startswith("/"):
+        from bot.slash import slash_response
+
+        return slash_response(text, underlying, store, journal, config, now)
     lowered = text.strip().lower()
     if lowered.startswith("profile:"):
         try:
@@ -909,7 +928,10 @@ def live_brief(
     bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
     if ingest_first_working(chains, ingest_chain, underlying, store, journal, now, context_factory) is None:
         raise FeedUnavailableError(f"all chain feeds failed for {underlying}")
-    ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
+    bars_used = ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
+    if bars_used != "finnhub":
+        ingest_first_working(("finnhub",), ingest_bars, underlying, store, journal, now, context_factory)
+    backfill_iv_history(store, journal, now)
     reply, signal = handle_chat_query(
         "live session brief", underlying, store, journal, now, live_models, grounding, cards
     )

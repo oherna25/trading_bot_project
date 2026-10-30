@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from bot.journal import Journal
@@ -104,3 +105,83 @@ def test_ideas_flow_without_profile():
     ingest_bars("alpaca", store, journal, ctx)
     reply = ideas_response("trade ideas", "TEST", store, journal, NOW)
     assert reply.startswith("trade ideas")
+
+
+PROFILE_REQUIRED = "trade cards need a saved operator profile; reply profile for the questionnaire"
+
+
+def _snapshotted_store():
+    from bot.feeds import default_context, ingest_bars, ingest_chain
+    from bot.store import SnapshotStore
+
+    store, journal = SnapshotStore(), Journal()
+    ctx = default_context("TEST")
+    ingest_chain("tradier_sandbox", store, journal, ctx)
+    ingest_bars("alpaca", store, journal, ctx)
+    return store
+
+
+def test_trade_cards_blocked_without_profile():
+    from bot.tradecards import query_trade_cards
+
+    journal = Journal()
+    assert query_trade_cards("trade cards", "TEST", _snapshotted_store(), journal, NOW) is None
+    assert journal.entries()[-1].kind == "ideas_blocked"
+    assert journal.entries()[-1].payload["reason"] == "profile required"
+
+
+def test_cards_response_requires_profile():
+    from bot.tradecards import cards_response
+
+    reply = cards_response("trade cards", "TEST", _snapshotted_store(), Journal(), NOW)
+    assert reply == PROFILE_REQUIRED
+
+
+def test_cards_still_blocked_when_profile_opts_out():
+    from bot.tradecards import cards_response
+
+    store = _snapshotted_store()
+    journal = Journal()
+    route_chat(OPT_OUT, "TEST", store, journal, CONFIG, NOW)
+    assert cards_response("trade cards", "TEST", store, journal, NOW) == (
+        "options ideas are disabled by your saved profile"
+    )
+
+
+def test_trade_cards_flow_with_profile():
+    from bot.tradecards import cards_response
+
+    store = _snapshotted_store()
+    journal = Journal()
+    route_chat(OPT_IN, "TEST", store, journal, CONFIG, NOW)
+    reply = cards_response("trade cards", "TEST", store, journal, NOW)
+    assert reply.startswith("trade cards")
+    assert journal.entries()[-1].kind == "ideas"
+
+
+def test_card_routes_require_profile():
+    from bot.muse import route_http
+    from bot.shapes import default_operator_config
+
+    config = default_operator_config()
+    page = route_http("GET", "/cards?underlying=TEST", {}, _snapshotted_store(), Journal(), config, NOW)
+    assert page.status == 403
+    assert PROFILE_REQUIRED in page.body.decode("utf-8")
+    doc = route_http("GET", "/cards.json?underlying=TEST", {}, _snapshotted_store(), Journal(), config, NOW)
+    assert doc.status == 403
+    assert PROFILE_REQUIRED in json.loads(doc.body)["error"]
+    card = route_http("GET", "/card?underlying=TEST&index=0", {}, _snapshotted_store(), Journal(), config, NOW)
+    assert card.status == 403
+    assert PROFILE_REQUIRED in card.body.decode("utf-8")
+
+
+def test_shock_debate_demo_dashboard_require_profile():
+    from bot.dashboard import dashboard_html
+    from bot.debate import card_debate
+    from bot.demo import demo_html
+    from bot.shock import shock_text
+
+    assert PROFILE_REQUIRED in shock_text("TEST", _snapshotted_store(), Journal(), NOW, -2.0)
+    assert card_debate("TEST", _snapshotted_store(), Journal(), NOW) == PROFILE_REQUIRED
+    assert PROFILE_REQUIRED in demo_html("TEST", _snapshotted_store(), Journal(), NOW)
+    assert PROFILE_REQUIRED in dashboard_html(_snapshotted_store(), Journal(), NOW, "TEST")

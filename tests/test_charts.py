@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 
 from bot.charts import (
@@ -12,7 +13,7 @@ from bot.charts import (
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.muse import route_http
-from bot.shapes import Bar, ChainSnapshot, OptionContract, default_operator_config
+from bot.shapes import Bar, ChainSnapshot, GexProfile, OptionContract, default_operator_config
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -85,6 +86,24 @@ def test_gamma_svg_marks_calls_puts_and_flip():
     assert PUT_COLOR in svg
     assert "flip 105.0" in svg
     assert svg.count("<rect") == 2
+
+
+def test_gamma_svg_labels_each_side_peak():
+    profile = GexProfile(
+        snapshot_id="TEST:snap-1",
+        per_strike_exposure={100.0: 1_000_000.0, 105.0: -100_000.0},
+        total_exposure=900_000.0,
+        flip_point=None,
+        spot=None,
+        per_strike_call_exposure={100.0: 1_000_000.0},
+        per_strike_put_exposure={105.0: -100_000.0},
+    )
+    svg = gamma_svg(profile)
+    assert ">$1M</text>" in svg
+    assert ">-$100K</text>" in svg
+    heights = [float(found) for found in re.findall(r'<rect [^>]*height="([\d.]+)"', svg)]
+    assert len(heights) == 2
+    assert min(heights) > 20.0
 
 
 def test_gamma_chart_html_refreshes_and_labels():

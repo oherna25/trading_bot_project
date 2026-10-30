@@ -246,10 +246,12 @@ def run_responses(
     return text, receipt
 
 
-def gex_tool_result(snapshot: ChainSnapshot, snapshot_id: str, args: Mapping[str, Any]) -> str:
+def gex_tool_result(
+    snapshot: ChainSnapshot, snapshot_id: str, args: Mapping[str, Any], spot: float | None = None
+) -> str:
     if args.get("underlying") != snapshot.underlying:
         raise ValueError("tool called for wrong underlying")
-    profile = compute_gex(snapshot, snapshot_id)
+    profile = compute_gex(snapshot, snapshot_id, spot=spot)
     return json.dumps(
         {
             "total_exposure": profile.total_exposure,

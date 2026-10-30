@@ -102,6 +102,7 @@ CREDS = {
     "APCA_API_SECRET_KEY": "test-secret",
     "FINNHUB_API_KEY": "test-finnhub",
     "MARKETDATA_API_KEY": "test-marketdata",
+    "ALPHA_VANTAGE_API_KEY": "test-alpha",
 }
 
 
@@ -198,6 +199,91 @@ def test_yfinance_adapter_normalizes_bars():
 
     raw = FEED_REGISTRY["yfinance"](_ctx("SPY", {"chart": YAHOO_CHART}))
     assert [b["close"] for b in raw["bars"]] == [100.0, 102.0]
+
+
+ALPHA_DAILY = {
+    "Time Series (Daily)": {
+        "2026-10-27": {
+            "1. open": "100.5", "2. high": "103.0", "3. low": "100.0",
+            "4. close": "102.0", "5. volume": "1200",
+        },
+        "2026-10-26": {
+            "1. open": "100.0", "2. high": "101.0", "3. low": "99.0",
+            "4. close": "100.5", "5. volume": "1000",
+        },
+        "bogus-day": {"1. open": "1.0"},
+    }
+}
+
+
+def test_alpha_vantage_adapter_normalizes_daily_bars():
+    from bot.feeds import FEED_REGISTRY
+
+    raw = FEED_REGISTRY["alpha_vantage"](_ctx("SPY", {"alphavantage": ALPHA_DAILY}))
+    assert [b["close"] for b in raw["bars"]] == [100.5, 102.0]
+    assert raw["bars"][0]["timestamp"] == datetime(2026, 10, 26, tzinfo=timezone.utc)
+    assert raw["bars"][1]["volume"] == pytest.approx(1200.0)
+
+
+def test_alpha_vantage_adapter_sends_key_and_symbol():
+    from bot.feeds import FEED_REGISTRY
+
+    seen = {}
+
+    def spy_get(url, headers=None, params=None, timeout=None):
+        seen.update(params or {})
+        return ALPHA_DAILY
+
+    ctx = FeedContext(underlying="QQQ", credentials=dict(CREDS), http_get=spy_get)
+    raw = FEED_REGISTRY["alpha_vantage"](ctx)
+    assert raw["underlying"] == "QQQ"
+    assert seen["function"] == "TIME_SERIES_DAILY"
+    assert seen["symbol"] == "QQQ"
+    assert seen["apikey"] == "test-alpha"
+
+
+def test_alpha_vantage_rate_limit_is_unavailable():
+    from bot.feeds import FEED_REGISTRY
+
+    with pytest.raises(FeedUnavailableError, match="alpha vantage"):
+        FEED_REGISTRY["alpha_vantage"](
+            _ctx("SPY", {"alphavantage": {"Note": "rate limit hit"}})
+        )
+
+
+def test_alpha_vantage_missing_key_is_config_error():
+    from bot.feeds import FEED_REGISTRY
+
+    ctx = FeedContext(underlying="SPY", credentials={}, http_get=_transport({"alphavantage": ALPHA_DAILY}))
+    with pytest.raises(FeedConfigError, match="ALPHA_VANTAGE_API_KEY"):
+        FEED_REGISTRY["alpha_vantage"](ctx)
+
+
+def test_alpha_vantage_fetches_once_per_symbol_per_day():
+    calls = []
+
+    def counting_get(url, headers=None, params=None, timeout=None):
+        calls.append(url)
+        return ALPHA_DAILY
+
+    store, journal = SnapshotStore(), Journal()
+    ctx = FeedContext(underlying="SPY", credentials=dict(CREDS), http_get=counting_get)
+    first = ingest_bars("alpha_vantage", store, journal, ctx)
+    assert len(first) == 2
+    with pytest.raises(FeedUnavailableError, match="already fetched today"):
+        ingest_bars("alpha_vantage", store, journal, ctx)
+    assert len(calls) == 1
+    other = FeedContext(underlying="QQQ", credentials=dict(CREDS), http_get=counting_get)
+    assert len(ingest_bars("alpha_vantage", store, journal, other)) == 2
+    assert len(calls) == 2
+
+
+def test_alpha_vantage_is_last_bar_fallback():
+    from bot.feeds import BAR_FEEDS, FEED_KIND, FEED_REGISTRY
+
+    assert BAR_FEEDS[-1] == "alpha_vantage"
+    assert FEED_KIND["alpha_vantage"] == "bars"
+    assert "alpha_vantage" in FEED_REGISTRY
 
 
 def test_tradier_base_defaults_to_sandbox(monkeypatch, tmp_path):

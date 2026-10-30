@@ -3,9 +3,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from bot.exposure import compute_gex
-from bot.research import route_chat, scheduled_brief, wall_migration_text
+from bot.research import format_brief, route_chat, scheduled_brief, wall_migration_text
 from bot.journal import Journal
-from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
+from bot.shapes import Bar, ChainSnapshot, GexProfile, OperatorConfig, OperatorProfile, OptionContract, Signal
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -41,6 +41,9 @@ def _seeded_store() -> SnapshotStore:
                                open=99.0, high=101.0, low=98.0, close=100.0, volume=1000.0))
     store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
                                open=100.0, high=103.0, low=99.0, close=102.0, volume=1200.0))
+    store.save_profile(OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    ))
     return store
 
 
@@ -252,7 +255,7 @@ def test_change_line_labels_negative_previous_direction():
         )
     )
     less = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
-    assert "change vs previous: $624,240 (+600.0%, less negative)" in less
+    assert "change vs previous: $624,240 (sign flip)" in less
     store = _seeded_store()
     journal = Journal()
     route_chat("gex brief", "TEST", store, journal, CONFIG, NOW)
@@ -272,6 +275,27 @@ def test_change_line_labels_negative_previous_direction():
     )
     more = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
     assert "change vs previous: $-208,080 (-200.0%, more negative)" in more
+
+
+def _direct_brief(current_total, previous_total):
+    snapshot = ChainSnapshot(
+        underlying="TEST", timestamp_utc=NOW, source_name="tradier_sandbox",
+        latency_ms=9.0, contracts_list=(),
+    )
+    signal = Signal(direction="short", thesis="t", confidence=0.5, snapshot_id="s")
+    current = GexProfile(snapshot_id="s", per_strike_exposure={}, total_exposure=current_total, flip_point=None)
+    previous = GexProfile(snapshot_id="p", per_strike_exposure={}, total_exposure=previous_total, flip_point=None)
+    return format_brief(current, signal, snapshot, None, NOW, previous)
+
+
+def test_change_line_marks_sign_flip_without_percent():
+    assert "change vs previous: $154,040 (sign flip)" in _direct_brief(50000.0, -104040.0)
+    assert "change vs previous: $-154,040 (sign flip)" in _direct_brief(-104040.0, 50000.0)
+
+
+def test_change_line_keeps_percent_for_same_sign_negatives():
+    assert "change vs previous: $-208,080 (-200.0%, more negative)" in _direct_brief(-312120.0, -104040.0)
+    assert "change vs previous: $52,020 (+50.0%, less negative)" in _direct_brief(-52020.0, -104040.0)
 
 
 def test_trade_cards_output_carries_reason_text(monkeypatch):

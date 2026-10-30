@@ -13,7 +13,7 @@ from bot.muse import (
     route_http,
     TOOL_REGISTRY,
 )
-from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
+from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OperatorProfile, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -49,6 +49,9 @@ def _seeded_store() -> SnapshotStore:
                                open=99.0, high=101.0, low=98.0, close=100.0, volume=1000.0))
     store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
                                open=100.0, high=103.0, low=99.0, close=102.0, volume=1200.0))
+    store.save_profile(OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    ))
     return store
 
 
@@ -102,6 +105,7 @@ def test_registry_tools_answer(monkeypatch):
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
+        "get_profile", "get_dashboard", "get_alerts", "get_holdings",
     }
     store = _seeded_store()
     journal = Journal()
@@ -145,6 +149,19 @@ def test_registry_tools_answer(monkeypatch):
     debate = dispatch_tool("debate_card", {"index": 0}, store, journal, CONFIG, NOW, underlying="TEST")
     assert debate.ok is True
     assert "BULL [rules]:" in debate.reply
+    empty_profile = dispatch_tool("get_profile", {}, SnapshotStore(), journal, CONFIG, NOW, underlying="TEST")
+    assert empty_profile.ok is True
+    assert "no profile is saved" in empty_profile.reply
+    dashboard = dispatch_tool("get_dashboard", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert dashboard.ok is True
+    assert "dashboard" in dashboard.reply
+    assert "TEST:" in dashboard.reply
+    alerts = dispatch_tool("get_alerts", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert alerts.ok is True
+    assert "alerts for TEST: none" in alerts.reply
+    holdings_read = dispatch_tool("get_holdings", {}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert holdings_read.ok is True
+    assert holdings_read.reply.startswith("holdings: none saved")
 
 
 def test_openapi_spec_lists_both_paths():
@@ -189,6 +206,7 @@ def test_route_mcp_tools_list_names_registry():
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
+        "get_profile", "get_dashboard", "get_alerts", "get_holdings",
     }
 
 

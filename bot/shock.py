@@ -7,17 +7,25 @@ from bot.diff import compact_dollars, signed_dollars
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.store import SnapshotStore
-from bot.tradecards import TradeCard, query_trade_cards
+from bot.tradecards import PROFILE_REQUIRED, TradeCard, query_trade_cards
 
 SHOCK_USAGE = "shock needs a percent, e.g. shock SPY -2%"
 SHOCK_PCT_RE = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*%")
+SHOCK_PERCENT_WORD_RE = re.compile(r"([+-]?\d+(?:\.\d+)?)\s*percent", re.IGNORECASE)
+SHOCK_BARE_RE = re.compile(r"[+-]?\d+(?:\.\d+)?")
 
 
 def parse_shock_pct(text: str) -> float | None:
+    text = text.replace("\u2212", "-")
     match = SHOCK_PCT_RE.search(text)
-    if match is None:
-        return None
-    return float(match.group(1))
+    if match is not None:
+        return float(match.group(1))
+    match = SHOCK_PERCENT_WORD_RE.search(text)
+    if match is not None:
+        return float(match.group(1))
+    if SHOCK_BARE_RE.fullmatch(text.strip()) is not None:
+        return float(text.strip())
+    return None
 
 
 def _intrinsic(call_or_put: str, strike: float, spot: float) -> float:
@@ -26,13 +34,13 @@ def _intrinsic(call_or_put: str, strike: float, spot: float) -> float:
     return max(strike - spot, 0.0)
 
 
-def shock_card_pnl(card: TradeCard, spot: float, shocked: float) -> float:
-    before = _intrinsic(card.call_or_put, card.strike, spot)
-    after = _intrinsic(card.call_or_put, card.strike, shocked)
+def shock_card_pnl(card: TradeCard, shocked: float) -> float | None:
+    if card.net_debit is None:
+        return None
+    value = _intrinsic(card.call_or_put, card.strike, shocked)
     if card.hedge_strike is not None:
-        before -= _intrinsic(card.call_or_put, card.hedge_strike, spot)
-        after -= _intrinsic(card.call_or_put, card.hedge_strike, shocked)
-    return (after - before) * 100.0
+        value -= _intrinsic(card.call_or_put, card.hedge_strike, shocked)
+    return value * 100.0 - card.net_debit
 
 
 def shock_text(
@@ -77,13 +85,19 @@ def shock_text(
     lines.append(f"regime {('long-gamma' if profile.total_exposure >= 0.0 else 'short-gamma')} (positions unchanged)")
     cards = query_trade_cards(underlying, underlying, store, journal, now, env={})
     if cards is None:
-        lines.append("card P&L: options blocked by profile")
+        if store.read_profile() is None:
+            lines.append(f"card P&L: {PROFILE_REQUIRED}")
+        else:
+            lines.append("card P&L: options blocked by profile")
         return "\n".join(lines)
     if not cards:
         lines.append("card P&L: no open cards")
         return "\n".join(lines)
-    lines.append(f"card P&L at {shocked:g} (intrinsic):")
+    lines.append(f"card P&L at {shocked:g} (intrinsic, vs debit paid):")
     for card in cards:
-        pnl = shock_card_pnl(card, spot, shocked)
-        lines.append(f"{card.spread} {card.expiry}: {signed_dollars(pnl)}")
+        pnl = shock_card_pnl(card, shocked)
+        if pnl is None:
+            lines.append(f"{card.spread} {card.expiry}: n/a (no debit)")
+        else:
+            lines.append(f"{card.spread} {card.expiry}: {signed_dollars(pnl)}")
     return "\n".join(lines)

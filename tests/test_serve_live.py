@@ -4,10 +4,12 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from bot.journal import Journal
 from bot.muse import create_server
 from bot.persist import save_bundle
-from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
+from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OperatorProfile, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -37,12 +39,18 @@ def _seeded_store() -> SnapshotStore:
     )
     store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
                                open=100.0, high=103.0, low=99.0, close=102.0, volume=1200.0))
+    store.save_profile(OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    ))
     return store
 
 
 class LiveServer:
     def __init__(self, store, journal, config=CONFIG, store_dir=None, token=None):
-        self.server = create_server(store, journal, config, "127.0.0.1", 0, store_dir, token)
+        try:
+            self.server = create_server(store, journal, config, "127.0.0.1", 0, store_dir, token)
+        except PermissionError:
+            pytest.skip("loopback bind blocked by sandbox")
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
     def __enter__(self):

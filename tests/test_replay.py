@@ -92,7 +92,7 @@ def test_ingest_stamps_source_and_registers_snapshot():
 
 
 def test_registry_covers_every_planned_feed():
-    assert sorted(FEED_REGISTRY) == ["alpaca", "finnhub", "marketdata_eod", "tradier_sandbox", "yfinance"]
+    assert sorted(FEED_REGISTRY) == ["alpaca", "alpha_vantage", "finnhub", "marketdata_eod", "tradier_sandbox", "yfinance"]
 
 
 def _stored_week() -> SnapshotStore:

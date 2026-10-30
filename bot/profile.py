@@ -146,6 +146,24 @@ def format_questionnaire() -> str:
     return "\n".join(lines)
 
 
+def format_profile(profile: OperatorProfile, params: Mapping[str, float]) -> str:
+    return "\n".join(
+        [
+            "profile: "
+            f"risk_tolerance={profile.risk_tolerance}, "
+            f"portfolio_size={profile.portfolio_size}, "
+            f"knowledge={profile.knowledge}, "
+            f"options_ok={profile.options_ok}",
+            "suggested params: "
+            f"risk_per_trade={params['risk_per_trade']}, "
+            f"account_size={params['account_size']}, "
+            f"max_day_loss={params['max_day_loss']}, "
+            f"max_trade_size={params['max_trade_size']}",
+            "options_ok gates options intents in review plus options ideas.",
+        ]
+    )
+
+
 def format_summary(profile: OperatorProfile, params: Mapping[str, float]) -> str:
     return "\n".join(
         [
