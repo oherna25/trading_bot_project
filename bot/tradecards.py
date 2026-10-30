@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Optional, Sequence
@@ -14,6 +15,24 @@ from bot.shapes import Bar, ChainSnapshot, GexProfile
 from bot.store import SnapshotStore
 
 OPTIONS_DISABLED = "options ideas are disabled by your saved profile"
+REASON_CACHE_MAX = 2000
+
+_reason_cache: dict[str, str] = {}
+
+
+def clear_reason_cache() -> None:
+    _reason_cache.clear()
+
+
+def _reason_cache_key(stats: Mapping[str, Any], http_post: HttpPost | None) -> str:
+    post_id = "live" if http_post is None else f"stub-{id(http_post)}"
+    return post_id + ":" + json.dumps(stats, sort_keys=True, default=str)
+
+
+def _reason_cache_store(key: str, reason: str) -> None:
+    if len(_reason_cache) >= REASON_CACHE_MAX:
+        _reason_cache.pop(next(iter(_reason_cache)), None)
+    _reason_cache[key] = reason
 
 
 @dataclass(frozen=True)
@@ -99,38 +118,56 @@ def build_trade_cards(
         }
         reason_source = "fallback"
         if backend == "meta":
-            try:
-                reason, latency_ms = generate_reason(stats, env, http_post)
-            except Exception as exc:
-                reason = fallback_reason(stats)
+            cache_key = _reason_cache_key(stats, http_post)
+            cached = _reason_cache.get(cache_key)
+            if cached is not None:
+                reason = cached
+                reason_source = "meta"
                 journal.append(
                     now,
-                    "reason_fallback",
+                    "trade_card_reason",
                     {
                         "symbol": idea.symbol,
                         "snapshot_id": idea.snapshot_id,
-                        "reason": type(exc).__name__,
+                        "latency_ms": 0.0,
+                        "cached": True,
                     },
                 )
             else:
-                if not reason:
+                try:
+                    reason, latency_ms = generate_reason(stats, env, http_post)
+                except Exception as exc:
                     reason = fallback_reason(stats)
                     journal.append(
                         now,
                         "reason_fallback",
-                        {"symbol": idea.symbol, "snapshot_id": idea.snapshot_id, "reason": "empty reason"},
-                    )
-                else:
-                    reason_source = "meta"
-                    journal.append(
-                        now,
-                        "trade_card_reason",
                         {
                             "symbol": idea.symbol,
                             "snapshot_id": idea.snapshot_id,
-                            "latency_ms": latency_ms,
+                            "reason": type(exc).__name__,
                         },
                     )
+                else:
+                    if not reason:
+                        reason = fallback_reason(stats)
+                        journal.append(
+                            now,
+                            "reason_fallback",
+                            {"symbol": idea.symbol, "snapshot_id": idea.snapshot_id, "reason": "empty reason"},
+                        )
+                    else:
+                        reason_source = "meta"
+                        _reason_cache_store(cache_key, reason)
+                        journal.append(
+                            now,
+                            "trade_card_reason",
+                            {
+                                "symbol": idea.symbol,
+                                "snapshot_id": idea.snapshot_id,
+                                "latency_ms": latency_ms,
+                                "cached": False,
+                            },
+                        )
         else:
             reason = fallback_reason(stats)
             journal.append(

@@ -382,7 +382,7 @@ Deliberately not integrated: a volume filter needs a contract field that does no
 
 ### Reason model
 
-Each trade card carries a one-line reason. With `META_MODEL_API_KEY` set, the app calls the Meta analyst model for each card; otherwise (or on any failure) the deterministic offline fallback writes the reason from the card numbers. The Baseten client (`bot/baseten.py`) plus the Truss app in [deploy/reason-model](deploy/reason-model) stay dormant for later, deployed with:
+Each trade card carries a one-line reason. With `META_MODEL_API_KEY` set, the app calls the Meta analyst model for each card; otherwise (or on any failure) the deterministic offline fallback writes the reason from the card numbers. Model reasons cache per card stats in memory (cap 2000, journaled with `cached: true` on hits), so repeat `/cards` fetches skip the model calls entirely. The Baseten client (`bot/baseten.py`) plus the Truss app in [deploy/reason-model](deploy/reason-model) stay dormant for later, deployed with:
 
 ```bash
 BASETEN_API_KEY=... deploy/baseten.sh

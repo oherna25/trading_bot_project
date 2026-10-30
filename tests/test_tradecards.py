@@ -8,6 +8,7 @@ from bot.tradecards import (
     build_trade_cards,
     cards_response,
     cards_to_json,
+    clear_reason_cache,
     fallback_reason,
     format_trade_cards,
     trade_cards_html,
@@ -220,6 +221,31 @@ def test_meta_stub_success_journals_model_reason():
     assert payload["symbol"] == "TEST"
     assert payload["snapshot_id"] == cards[0].snapshot_id
     assert isinstance(payload["latency_ms"], float)
+
+
+def test_meta_reason_cached_per_card_stats():
+    clear_reason_cache()
+    calls = []
+
+    def counting(*args):
+        calls.append(1)
+        return {
+            "choices": [{"message": {"content": "Model says go."}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        }
+
+    entries = _entries(_seeded_store())
+    first = build_trade_cards(entries, None, NOW, Journal(), env=dict(ENV), http_post=counting)
+    assert len(calls) == len(first) == 2
+    journal = Journal()
+    second = build_trade_cards(entries, None, NOW, journal, env=dict(ENV), http_post=counting)
+    assert len(calls) == 2
+    assert [card.reason for card in second] == ["Model says go.", "Model says go."]
+    assert {card.reason_source for card in second} == {"meta"}
+    assert [e.payload["cached"] for e in journal.entries()] == [True, True]
+    clear_reason_cache()
+    build_trade_cards(entries, None, NOW, Journal(), env=dict(ENV), http_post=counting)
+    assert len(calls) == 4
 
 
 def test_meta_exception_falls_back_and_journals():
