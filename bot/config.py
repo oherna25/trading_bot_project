@@ -7,7 +7,6 @@ from bot.profile import suggest_params
 from bot.shapes import OperatorConfig, OperatorProfile
 
 DOTENV_PATH = ".env"
-DASHBOARD_BASE_URL_ENV = "DASHBOARD_BASE_URL"
 AUTH_TOKEN_ENV = "MUSE_AUTH_TOKEN"
 
 
@@ -36,18 +35,13 @@ def env_value(name: str, default: str = "", env: Mapping[str, str] | None = None
     return (os.environ.get(name, file_values.get(name, "")) or "").strip() or default
 
 
-def dashboard_base_url(env: Mapping[str, str] | None = None) -> str:
-    return env_value(DASHBOARD_BASE_URL_ENV, "", env)
-
-
 def auth_token(env: Mapping[str, str] | None = None) -> str:
     return env_value(AUTH_TOKEN_ENV, "", env)
 
 
 def operator_config(
-    dashboard_base: str,
     profile: Optional[OperatorProfile] = None,
-    dashboard_link_expiry_seconds: int = 3600,
+    day_profit_target: float = 500.0,
 ) -> OperatorConfig:
     max_day_loss = 1000.0
     max_trade_size = 5000.0
@@ -56,9 +50,7 @@ def operator_config(
         max_day_loss = params["max_day_loss"]
         max_trade_size = params["max_trade_size"]
     return OperatorConfig(
-        dashboard_base_url=dashboard_base,
-        dashboard_link_expiry_seconds=dashboard_link_expiry_seconds,
         max_day_loss=max_day_loss,
-        day_profit_target=500.0,
+        day_profit_target=day_profit_target,
         max_trade_size=max_trade_size,
     )

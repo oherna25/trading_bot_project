@@ -22,7 +22,7 @@
 **Feeds.** Free live and delayed feeds layer around the Tradier core per Data Sources (plan decision).
 **Edge.** GEX and VEX profiles come from stored chain snapshots, not from vendor Greeks alone (plan decision).
 **LLM.** The model acts as a tool-using analyst over structured market state, not as a RAG chatbot (user idea).
-**Compute.** Scheduled jobs and persistent storage run on the operator machine via cron or launchd, and chat runs first with the dashboard later (plan decision 2026-10-28, replaces the Modal plan because the operator has no Modal access).
+**Compute.** Scheduled jobs and persistent storage run on the operator machine via cron or launchd, and chat runs first with trade cards after the research loop (plan decision 2026-10-28, replaces the Modal plan because the operator has no Modal access).
 **Money.** No live order exists before paper evidence plus an operator approval plus a kill switch (plan decision).
 **Reuse.** No existing code is reused because the workspace holds no trading project (observed this session).
 
@@ -41,7 +41,7 @@
 
 **Decisions.**
 
-- Chat first wins over dashboard first because the research loop needs conversation before charts (plan decision).
+- Chat first wins over cards first because the research loop needs conversation before trade cards (plan decision).
 - A custom replay engine wins over an unnamed library because stored snapshots define the harness shape (plan decision).
 - Paper-first wins over live-first because money movement is irreversible (plan decision).
 - Computed GEX wins over vendor GEX because no inspected free source streams it live (synthesis of Sources).
@@ -141,10 +141,10 @@
 - Go-live follows a written checklist with account size and max daily loss restated (plan decision).
 - Phase 4 starts after Phase 3 evidence exists (plan decision).
 
-**Phase 5. Dashboard and social.**
+**Phase 5. Trade cards.**
 
-- A web dashboard visualizes profiles plus positions plus journal on the same snapshot store (user idea).
-- The dashboard framework is picked by a spike against criteria, and no framework is named here (plan decision).
+- Phase 5 ships trade cards: one card per recommended trade with stats plus a one-line reason (plan decision).
+- Cards surface in chat text and on the /cards page, both built from the same ranked ideas (plan decision).
 - Social features stay conditional on the open question below (open question).
 - Phase 5 starts after Phase 3 evidence exists and runs parallel to Phase 4 (plan decision).
 
@@ -160,7 +160,7 @@
 - Phase 3 passes when paper fills reconcile with intents one by one (plan decision).
 - Phase 4 passes when the kill switch drill stops ordering within the stated limit and needs a reset (assumption).
 - Phase 4 passes when the operator signs the go-live checklist in the journal (assumption).
-- Phase 5 passes when dashboard numbers match chat numbers on the same snapshot id (plan decision).
+- Phase 5 passes when card stats match engine numbers on the same snapshot (plan decision).
 - The highest-risk validation is GEX correctness in Phase 1, because wrong exposure corrupts every later signal (plan decision).
 - The second highest-risk validation is the Phase 4 live gate, because it guards real money (plan decision).
 
@@ -176,7 +176,7 @@
 - Finnhub free scope is unverified beyond its homepage, so adoption waits on the spike (evidence gap).
 - Live paper fills will lag where feeds delay, so promotion criteria discount delayed-fill performance (plan decision).
 - The operator picks research-only or full autonomy for v1, and the default is research-only first (open question).
-- The operator picks chat-first or dashboard-first, and the default is chat-first (open question).
+- The operator picks chat-first or cards-first, and the default is chat-first (open question).
 - The operator clarifies whether Grok bot style means a model choice or a conversational tone, and both branches stay feasible (open question).
 - The operator defines social interaction as publishing outward or ingesting sentiment or both (open question).
 - The operator supplies one LLM key and the account size plus risk numbers before Phase 3 (open question).

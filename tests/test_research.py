@@ -2,9 +2,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from bot.dashboard import dashboard_view
 from bot.exposure import compute_gex
-from bot.research import build_dashboard_link, route_chat, scheduled_brief
+from bot.research import route_chat, scheduled_brief
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OptionContract
 from bot.store import SnapshotStore
@@ -12,8 +11,6 @@ from bot.store import SnapshotStore
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
 CONFIG = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
-    dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
     max_trade_size=5000.0,
@@ -130,19 +127,14 @@ def test_paper_pnl_marks_journaled_fills():
     assert "total paper pnl: +2000.00" in text
 
 
-def test_dashboard_request_returns_pinned_link():
+def test_trade_cards_answers_beat_ideas_ordering(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     store = _seeded_store()
-    journal = Journal()
-    reply = route_chat("show me the dashboard", "TEST", store, journal, CONFIG, NOW)
-    assert reply.startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in reply
-    assert journal.entries()[-1].kind == "dashboard_link_sent"
-
-
-def test_dashboard_link_uses_config_host_and_expiry():
-    link = build_dashboard_link("TEST:snap-9", CONFIG, NOW)
-    assert link.url == "https://ops.example.internal/dashboard/TEST%3Asnap-9"
-    assert link.expires_utc == NOW + timedelta(seconds=3600)
+    reply = route_chat("trade card ideas", "TEST", store, Journal(), CONFIG, NOW)
+    assert reply.startswith("trade cards (2):")
+    assert "short via" in reply
+    assert "trade ideas (" not in reply
 
 
 def test_scheduled_brief_matches_stored_profile():
@@ -243,24 +235,11 @@ def test_change_line_labels_negative_previous_direction():
     assert "change vs previous: $-208,080 (-200.0%, more negative)" in more
 
 
-def test_dashboard_numbers_match_chat_numbers_on_same_snapshot():
+def test_trade_cards_output_carries_reason_text(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     store = _seeded_store()
-    journal = Journal()
-    chat_reply = route_chat("gex brief please", "TEST", store, journal, CONFIG, NOW)
-    snapshot_id, snapshot = store.read_latest("TEST")
-    profile = compute_gex(snapshot, snapshot_id, spot=102.0)
-    signal_entry = next(e for e in journal.entries() if e.kind == "signal")
-    assert signal_entry.payload["snapshot_id"] == snapshot_id
-    from bot.research import handle_chat_query
-    _, signal = handle_chat_query("gex brief please", "TEST", store, journal, NOW)
-    screen = dashboard_view(snapshot_id, signal, store, journal, [])
-    assert f"total exposure: ${profile.total_exposure:,.0f}" in chat_reply
-    assert screen.header.price == pytest.approx(102.0)
-    assert screen.header.day_change == pytest.approx(2.0)
-    assert screen.header.status == signal.status
-    assert screen.grid.conviction == pytest.approx(signal.confidence)
-    assert screen.grid.trigger == signal.trigger
-    assert screen.options.qualifying_count == 2
-    assert screen.options.regime == "short-gamma"
-    assert screen.card.open_interest == pytest.approx(2000.0)
-    assert screen.card.spread_pct == pytest.approx((3.10 - 2.90) / 3.00 * 100.0)
+    reply = route_chat("show me trade cards", "TEST", store, Journal(), CONFIG, NOW)
+    assert reply.startswith("trade cards (2):")
+    assert "short via single" in reply
+    assert "wall exposure" in reply

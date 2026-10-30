@@ -8,6 +8,7 @@ sequenceDiagram
     participant B as Bot service
     participant A as Analyst router
     participant M as Meta Model API
+    participant R as Baseten reason
     participant S as Snapshot store
     participant J as Journal
 
@@ -41,19 +42,24 @@ sequenceDiagram
     B->>T: Send reply
     T->>U: Show brief
 
-    U->>T: Ask for dashboard
+    U->>T: Ask for trade cards
     T->>B: Forward command
-    B->>A: Route dashboard request
+    B->>A: Route cards request
     A->>S: Read latest ChainSnapshot
     S-->>A: Return snapshot
-    A->>M: Render regime card art
-    M-->>A: Return art
-    Note over A: Bot draws numbers on card
-    A-->>B: Return link and card
-    B->>T: Send link reply
-    T->>U: Show dashboard link
+    alt Reason model set
+        A->>R: Request card reasons
+        R-->>A: Return reasons
+        A->>J: Journal trade_card_reason
+    else Fallback
+        A->>A: Offline reason fallback
+        A->>J: Journal reason_fallback
+    end
+    A-->>B: Return cards text
+    B->>T: Send cards reply
+    T->>U: Show trade cards
 
-    Note over B,S: Scheduled brief runs on Modal cron
+    Note over B,S: Scheduled brief runs on cron or launchd
     B->>A: Trigger session brief
     A->>S: Read latest ChainSnapshot
     S-->>A: Return snapshot

@@ -1,22 +1,20 @@
 from __future__ import annotations
 
+import html
 import json
 import os
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence
+from urllib.parse import parse_qs
 
-from bot.config import auth_token as _auth_token, dashboard_base_url as _dashboard_base_url
-from bot.dashboard import dashboard_html, screen_to_json
+from bot.config import auth_token as _auth_token
 from bot.feeds import FeedContext, default_context, ingest_bars, ingest_chain, live_context
 from bot.journal import Journal
 from bot.persist import bundle_mtimes, refresh_bundle
 from bot.research import (
-    ExpiredDashboard,
-    UnknownDashboard,
-    dashboard_link_response,
     dex_brief_response,
     handle_chat_query,
     ideas_response,
@@ -24,11 +22,11 @@ from bot.research import (
     paper_pnl_text,
     route_chat,
     scheduled_brief,
-    serve_pinned_screen,
     vex_brief_response,
 )
 from bot.shapes import OperatorConfig, default_operator_config
-from bot.store import SnapshotStore, parse_snapshot_id
+from bot.store import SnapshotStore
+from bot.tradecards import OPTIONS_DISABLED, cards_response, cards_to_json, query_trade_cards, trade_cards_html
 
 
 @dataclass(frozen=True)
@@ -64,10 +62,13 @@ def _gex_brief_handler(
     return reply
 
 
-def _dashboard_link_handler(
+def _trade_cards_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
-    return dashboard_link_response(underlying, store, journal, config, now)
+    query = args.get("query", "trade ideas") if isinstance(args, dict) else "trade ideas"
+    if not isinstance(query, str) or not query.strip():
+        query = "trade ideas"
+    return cards_response(query, underlying, store, journal, now)
 
 
 def _trade_ideas_handler(
@@ -110,8 +111,8 @@ def _paper_pnl_handler(
 
 TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_gex_brief": MuseTool("get_gex_brief", "Read the computed GEX brief for an underlying", _gex_brief_handler),
-    "get_dashboard_link": MuseTool(
-        "get_dashboard_link", "Mint a pinned dashboard link for the latest snapshot", _dashboard_link_handler
+    "get_trade_cards": MuseTool(
+        "get_trade_cards", "Read per-trade cards with reasons from stored snapshots", _trade_cards_handler
     ),
     "get_trade_ideas": MuseTool(
         "get_trade_ideas", "Rank trade ideas from stored snapshots", _trade_ideas_handler
@@ -180,8 +181,6 @@ def dispatch_tool(
     return MuseChatReply(ok=True, reply=reply, error="")
 
 
-DASHBOARD_PREFIX = "/dashboard/"
-JSON_SUFFIX = ".json"
 HEALTH_PATH = "/healthz"
 HEALTH_DETAIL_PATH = "/health"
 OPEN_PATHS = frozenset({HEALTH_PATH, HEALTH_DETAIL_PATH, "/openapi.json"})
@@ -233,10 +232,16 @@ def openapi_spec() -> dict:
                     "responses": {"200": {"description": "Ingest status"}},
                 }
             },
-            DASHBOARD_PREFIX + "{snapshot_id}": {
+            "/cards": {
                 "get": {
-                    "summary": "Pinned dashboard screen",
-                    "responses": {"200": {"description": "Dashboard page"}},
+                    "summary": "Trade cards page",
+                    "responses": {"200": {"description": "Trade cards page"}},
+                }
+            },
+            "/cards.json": {
+                "get": {
+                    "summary": "Trade cards JSON",
+                    "responses": {"200": {"description": "Trade cards data"}},
                 }
             },
         },
@@ -326,25 +331,35 @@ def route_http(
             )
             return HttpResponse.json(200, {"ok": reply.ok, "reply": reply.reply, "error": reply.error})
         return HttpResponse.json(400, {"ok": False, "reply": "", "error": f"unknown MCP method {mcp_method}"})
-    if method == "GET" and clean.startswith(DASHBOARD_PREFIX):
-        rest = clean[len(DASHBOARD_PREFIX):]
-        want_json = rest.endswith(JSON_SUFFIX)
-        if want_json:
-            rest = rest[: -len(JSON_SUFFIX)]
+    if method == "GET" and clean in ("/cards", "/cards.json"):
+        want_json = clean == "/cards.json"
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
+        query = (params.get("query", ["trade ideas"])[0] or "trade ideas").strip() or "trade ideas"
         try:
-            snapshot_id = parse_snapshot_id(rest)
-        except ValueError:
-            return HttpResponse.json(404, {"error": "not found"})
-        try:
-            screen = serve_pinned_screen(snapshot_id, store, journal, config, now)
-        except ExpiredDashboard:
-            return HttpResponse.json(410, {"error": "dashboard link expired"})
-        except UnknownDashboard:
-            return HttpResponse.json(404, {"error": "not found"})
+            cards = query_trade_cards(query, underlying, store, journal, now)
+        except ValueError as exc:
+            if want_json:
+                return HttpResponse.json(400, {"error": str(exc)})
+            return HttpResponse.html(400, _cards_error_html(str(exc)))
+        if cards is None:
+            if want_json:
+                return HttpResponse.json(403, {"error": OPTIONS_DISABLED})
+            return HttpResponse.html(403, _cards_error_html(OPTIONS_DISABLED))
         if want_json:
-            return HttpResponse.json(200, screen_to_json(screen))
-        return HttpResponse.html(200, dashboard_html(screen))
+            return HttpResponse.json(
+                200, {"underlying": underlying, "count": len(cards), "cards": cards_to_json(cards)["cards"]}
+            )
+        return HttpResponse.html(200, trade_cards_html(cards, underlying))
     return HttpResponse.json(404, {"error": "not found"})
+
+
+def _cards_error_html(message: str) -> str:
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>trade cards</title></head>"
+        f"<body><h1>trade cards</h1><p>{html.escape(message, quote=True)}</p></body></html>"
+    )
 
 
 def resolve_port(explicit: Optional[int]) -> int:
@@ -513,20 +528,12 @@ def serve(
     ).serve_forever()
 
 
-def default_dashboard_base_url(env: Mapping[str, str] | None = None) -> str:
-    value = _dashboard_base_url(env)
-    if value:
-        return value
-    port = (os.environ.get("PORT") or "").strip() or "8000"
-    return f"http://127.0.0.1:{port}"
-
-
 class Harness:
     def __init__(self, underlying: str = "SPY") -> None:
         self.underlying = underlying
         self.store = SnapshotStore()
         self.journal = Journal()
-        self.config = default_operator_config(default_dashboard_base_url())
+        self.config = default_operator_config()
         self.inbox: list[dict[str, str]] = []
         self.outbox: list[dict[str, str]] = []
         ctx = default_context(underlying)
@@ -544,8 +551,7 @@ class Harness:
             body = message.get("body", "") if isinstance(message, dict) else str(message)
             reply = handle_chat(MuseChatRequest(text=body, underlying=self.underlying), self.store, self.journal, self.config, now)
             text = reply.reply if reply.ok else reply.error
-            kind = "link" if text.startswith("dashboard for snapshot") else "text"
-            self.outbox.append({"kind": kind, "body": text})
+            self.outbox.append({"kind": "text", "body": text})
 
     def push_scheduled(self) -> None:
         body = scheduled_brief(self.underlying, self.store, self.journal, datetime.now(timezone.utc))

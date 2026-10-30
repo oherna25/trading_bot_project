@@ -19,8 +19,6 @@ from bot.store import SnapshotStore
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
 CONFIG = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
-    dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
     max_trade_size=5000.0,
@@ -65,13 +63,15 @@ def test_chat_brief_carries_profile_numbers():
     assert "direction: short confidence: 0.50 (regime fallback)" in reply.reply
 
 
-def test_dashboard_text_returns_pinned_link():
+def test_trade_cards_text_returns_cards_with_reasons(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     store = _seeded_store()
-    request = parse_chat_payload({"text": "show me the dashboard", "underlying": "TEST"})
+    request = parse_chat_payload({"text": "show me trade cards", "underlying": "TEST"})
     reply = handle_chat(request, store, Journal(), CONFIG, NOW)
     assert reply.ok is True
-    assert reply.reply.startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in reply.reply
+    assert reply.reply.startswith("trade cards (2):")
+    assert "short via" in reply.reply
 
 
 def test_blank_text_payload_raises():
@@ -95,9 +95,11 @@ def test_unknown_tool_names_tool():
     assert "nope_missing" in reply.error
 
 
-def test_registry_tools_answer():
+def test_registry_tools_answer(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     assert set(TOOL_REGISTRY) == {
-        "get_gex_brief", "get_dashboard_link", "get_trade_ideas",
+        "get_gex_brief", "get_trade_cards", "get_trade_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl",
     }
     store = _seeded_store()
@@ -105,10 +107,10 @@ def test_registry_tools_answer():
     brief = dispatch_tool("get_gex_brief", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert brief.ok is True
     assert "total exposure: $-104,040" in brief.reply
-    link = dispatch_tool("get_dashboard_link", {}, store, journal, CONFIG, NOW, underlying="TEST")
-    assert link.ok is True
-    assert link.reply.startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in link.reply
+    cards = dispatch_tool("get_trade_cards", {"query": "monthly trade cards"}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert cards.ok is True
+    assert cards.reply.startswith("trade cards")
+    assert "short via" in cards.reply
     ideas = dispatch_tool("get_trade_ideas", {"query": "weekly trade ideas"}, store, journal, CONFIG, NOW, underlying="TEST")
     assert ideas.ok is True
     assert "trade ideas" in ideas.reply
@@ -165,19 +167,21 @@ def test_route_mcp_tools_list_names_registry():
     assert response.status == 200
     body = _json_body(response)
     assert {tool["name"] for tool in body["tools"]} == {
-        "get_gex_brief", "get_dashboard_link", "get_trade_ideas",
+        "get_gex_brief", "get_trade_cards", "get_trade_ideas",
         "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl",
     }
 
 
-def test_route_mcp_tools_call_dashboard_link_pinned():
-    payload = {"method": "tools/call", "params": {"name": "get_dashboard_link", "arguments": {}, "underlying": "TEST"}}
+def test_route_mcp_tools_call_trade_cards(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
+    payload = {"method": "tools/call", "params": {"name": "get_trade_cards", "arguments": {"query": "trade cards"}, "underlying": "TEST"}}
     response = route_http("POST", "/mcp", payload, _seeded_store(), Journal(), CONFIG, NOW)
     assert response.status == 200
     body = _json_body(response)
     assert body["ok"] is True
-    assert body["reply"].startswith("dashboard for snapshot TEST:")
-    assert "https://ops.example.internal/dashboard/TEST%3A2026-10-27T14%3A30%3A00%2B00%3A00" in body["reply"]
+    assert body["reply"].startswith("trade cards")
+    assert "short via" in body["reply"]
 
 
 def test_route_mcp_unknown_method_names_it():
@@ -239,16 +243,18 @@ def test_route_unknown_path_returns_404():
     assert response.status == 404
 
 
-def test_harness_routes_text_voice_dashboard_push():
+def test_harness_routes_text_voice_cards_push(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     harness = Harness()
     harness.post("give me the gex brief", kind="text")
     harness.post("give me the gex brief", kind="voice_transcript")
-    harness.post("show me the dashboard", kind="text")
+    harness.post("show me trade cards", kind="text")
     harness.run_once()
     harness.push_scheduled()
     assert len(harness.outbox) == 4
-    assert [entry["kind"] for entry in harness.outbox] == ["text", "text", "link", "push"]
+    assert [entry["kind"] for entry in harness.outbox] == ["text", "text", "text", "push"]
     assert "total exposure:" in harness.outbox[0]["body"]
     assert "total exposure:" in harness.outbox[1]["body"]
-    assert harness.outbox[2]["body"].startswith("dashboard for snapshot")
+    assert harness.outbox[2]["body"].startswith("trade cards")
     assert "total exposure:" in harness.outbox[3]["body"]

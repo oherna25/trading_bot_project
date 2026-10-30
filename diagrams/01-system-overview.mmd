@@ -50,8 +50,13 @@ flowchart TB
 
     subgraph SURF["Surfaces"]
         CHAT["Telegram chat"]
-        DASH["Dashboard via chat link"]
+        CARDS["Trade cards page and chat"]
         CRON["Local scheduler (cron/launchd)"]
+    end
+
+    subgraph REAS["Card reasons"]
+        BASETEN["Baseten reason model"]
+        RFALL["Offline reason fallback"]
     end
 
     TRADIER --> ADAPT
@@ -96,6 +101,10 @@ flowchart TB
     CRON --> CHAT
     CHAT --> LLM
     LLM --> CHAT
-    CHAT -. dashboard link .-> DASH
-    DASH --> STORE
-    DASH --> JOUR
+    CHAT -. trade cards .-> CARDS
+    CARDS --> STORE
+    CARDS --> JOUR
+    CARDS --> BASETEN
+    CARDS --> RFALL
+    BASETEN -. reason .-> CARDS
+    RFALL -. reason .-> CARDS

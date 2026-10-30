@@ -5,7 +5,6 @@ import hashlib
 from datetime import datetime
 from typing import Any, Mapping
 
-from bot.dashboard import build_options
 from bot.journal import Journal
 from bot.models import (
     MODEL_REGISTRY,
@@ -58,7 +57,7 @@ def render_brief_card(
         journal.append(now, "card_skipped", {"reason": reason})
         return None
     spec = MODEL_REGISTRY["artist"]
-    regime = build_options(snapshot, profile).regime
+    regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
     prompt = card_prompt(regime, snapshot.underlying)
     try:
         body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post)

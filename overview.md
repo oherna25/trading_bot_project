@@ -3,9 +3,9 @@
 Design-only pseudocode for the research-first trading system. No implementation.
 The plan lives in `init.md`. Diagrams live in `diagrams/`.
 
-Dashboard rule: the dashboard has no standalone entry point. The operator asks
-the bot for the dashboard in chat and the bot replies with a link pinned to the
-snapshot under discussion.
+Trade cards rule: every recommended trade gets one card with stats plus a
+one-line reason stating why it is a good trade. Cards surface in chat text
+and on the /cards page, both built from the same ranked ideas.
 
 ## Data shapes
 
@@ -97,11 +97,26 @@ SHAPE JournalEntry
   payload
 END SHAPE
 
-SHAPE DashboardLink
+SHAPE TradeCard
+  symbol
+  direction
+  spread
+  strike
+  expiry
+  call_or_put
+  hedge_strike
+  confidence
   snapshot_id
-  url
-  created_utc
-  expires_utc
+  max_loss
+  breakeven
+  net_debit
+  spread_pct
+  wall_exposure
+  regime
+  spot
+  flip_point
+  reason
+  reason_source
 END SHAPE
 
 SHAPE ModelReceipt
@@ -188,12 +203,12 @@ END FUNCTION
 
 ## Research chat
 
-Chat is the entry point. Dashboard requests route to the link builder.
+Chat is the entry point. Card requests route to the card builder.
 All other requests run the analyst tools.
 
 ```
 FUNCTION route_chat WITH text
-  IF text asks_for_dashboard THEN RETURN dashboard_link_response
+  IF text asks_for_cards THEN RETURN cards_response
   RETURN analyst_response text
 END FUNCTION
 
@@ -227,18 +242,28 @@ FUNCTION scheduled_brief
   SEND brief TO operator_chat
 END FUNCTION
 
-FUNCTION dashboard_link_response
-  snapshot = read_latest ChainSnapshot
-  link = build_dashboard_link snapshot
-  journal APPEND event dashboard_link_sent WITH snapshot
-  RETURN reply WITH link url
+FUNCTION cards_response WITH text
+  entries = latest snapshots FOR text symbols
+  cards = build_trade_cards entries
+  journal APPEND event ideas WITH card count
+  RETURN format_trade_cards cards
 END FUNCTION
 
-FUNCTION build_dashboard_link WITH snapshot
-  path = dashboard_path_for snapshot snapshot_id
-  url = dashboard_base_url PLUS path
-  link = BUILD DashboardLink WITH snapshot_id AND url AND timestamps
-  RETURN link
+FUNCTION build_trade_cards WITH entries
+  ideas = rank_ideas entries
+  FOR EACH idea IN ideas
+    stats = idea numbers PLUS wall PLUS regime PLUS spot AND flip
+    reason = baseten_reason stats ELSE fallback_reason stats
+    journal APPEND event trade_card_reason OR reason_fallback
+    card = BUILD TradeCard WITH stats AND reason
+  END FOR
+  RETURN cards
+END FUNCTION
+
+FUNCTION baseten_reason WITH stats
+  IF reason key AND model id set THEN CALL predict WITH stats
+  IF call fails OR reason empty THEN RETURN fallback_reason stats
+  RETURN reason
 END FUNCTION
 
 FUNCTION handle_voice_note WITH audio
@@ -263,8 +288,8 @@ END FUNCTION
 
 The review note is advisory only. The autonomy gate keeps its deterministic checks.
 
-The dashboard base url and link expiry are operator config. No dashboard
-framework is named, so no host is hardcoded.
+The reason key and model id select the reason backend. Baseten writes
+each card reason when both are set, else the offline fallback runs.
 
 ## Paper trading and risk
 
@@ -329,50 +354,29 @@ FUNCTION kill_switch
 END FUNCTION
 ```
 
-## Dashboard
+## Trade cards
 
-Layout follows the reference card from top to
-bottom. The dashboard reads the same snapshot store and journal as chat. It is
-reached only through the chat-provided link, pinned to one snapshot id.
+One card per recommended trade, built from the same ranked ideas as the
+ideas reply. Chat answers card queries with text cards. The /cards page
+renders one article per card with a stat list plus a reason paragraph.
 
-Panels in order with bindings:
+Card fields in order with bindings:
 
-1. Header band. Rank chip plus scan name from the ranked Signal list.
-   Underlying logo plus symbol plus company name from ChainSnapshot
-   underlying plus the instrument master. Status pill from Signal status.
-   Price plus day change from the latest Bar close versus the prior close.
-2. Alignment strip. Checklist dots plus aligned count from Signal checklist
-   outcomes. Data coverage percent from snapshot freshness plus contract
-   coverage.
-3. Conviction grid. Conviction from Signal confidence. Trigger name from
-   Signal thesis. Confirmation score plus band from the checklist score.
-   Entry band from price distance to trigger.
-4. Options strip. Qualifying count from ChainSnapshot contracts passing the
-   selection filters. Regime band from the analyst read over the snapshot
-   plus GexProfile.
-5. Top contract card. Contract header from OptionContract strike plus expiry
-   plus call-or-put plus days to expiry. Delta plus OI plus bid-to-ask
-   percent plus bid cross ask plus contract IV from OptionContract quote
-   fields. Quality band from spread plus OI. Explainer from Signal thesis
-   plus selection reasons.
+1. Title. Symbol plus direction plus spread plus expiry from the TradeIdea.
+2. Stat list. Confidence plus max loss plus breakeven plus net debit or
+   credit plus spread width pct from the TradeIdea. Wall exposure from the
+   GexProfile strike row. Regime from the profile total sign. Spot from the
+   latest Bar close versus the profile flip point.
+3. Reason. One line stating why it is a good trade, written by the Baseten
+   reason model when configured, else the deterministic offline fallback.
 
-The top contract card gains regime art from Muse Image, and the bot draws every number on the card. Positions plus journal attach below the card per the Phase 5 scope. Signal
-display fields of status plus trigger plus entry band plus checklist plus
-coverage derive at brief time and journal with the signal.
+Card stats match the engine numbers on the same snapshot. Reasons journal
+as trade_card_reason on model success and reason_fallback otherwise.
 
 ```
-FUNCTION dashboard_view WITH snapshot_id
-  snapshot = read_snapshot snapshot_id
-  profile = compute_gex snapshot
-  signal = read_signal_for snapshot_id
-  bar = read_latest Bar FOR snapshot underlying
-  header = build_header signal AND snapshot AND bar
-  strip = build_alignment signal AND snapshot
-  grid = build_conviction signal AND bar
-  options = build_options snapshot AND profile
-  card = build_top_contract options AND signal
-  positions = read_all Position
-  journal_view = read_journal
-  RETURN screen WITH header AND strip AND grid AND options AND card AND positions AND journal_view
+FUNCTION cards_page WITH underlying
+  snapshots = read_latest ChainSnapshot FOR underlying
+  cards = build_trade_cards snapshots
+  RETURN page WITH one article PER card
 END FUNCTION
 ```

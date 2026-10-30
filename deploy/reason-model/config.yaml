@@ -1,0 +1,6 @@
+model_name: trade-reason
+python_version: py311
+requirements: []
+resources:
+  cpu: "1"
+  memory: 2Gi

@@ -13,8 +13,6 @@ from bot.store import SnapshotStore
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
 CONFIG = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
-    dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
     max_trade_size=5000.0,
@@ -349,10 +347,12 @@ def test_route_chat_ideas_unknown_symbol_errors_loudly():
         route_chat("ideas for NOPE", "TEST", store, Journal(), CONFIG, NOW)
 
 
-def test_route_chat_dashboard_stays_before_ideas():
+def test_route_chat_cards_stay_before_ideas(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     store = _seeded_store()
-    reply = route_chat("dashboard idea", "TEST", store, Journal(), CONFIG, NOW)
-    assert reply.startswith("dashboard for snapshot TEST:")
+    reply = route_chat("card idea", "TEST", store, Journal(), CONFIG, NOW)
+    assert reply.startswith("trade cards")
 
 
 def test_rank_ideas_excludes_same_day_and_expired_contracts():

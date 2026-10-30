@@ -166,26 +166,14 @@ class JournalEntry:
 
 
 @dataclass(frozen=True)
-class DashboardLink:
-    snapshot_id: str
-    url: str
-    created_utc: datetime
-    expires_utc: datetime
-
-
-@dataclass(frozen=True)
 class OperatorConfig:
-    dashboard_base_url: str
-    dashboard_link_expiry_seconds: int
     max_day_loss: float
     day_profit_target: float
     max_trade_size: float
 
 
-def default_operator_config(dashboard_base_url: str) -> OperatorConfig:
+def default_operator_config() -> OperatorConfig:
     return OperatorConfig(
-        dashboard_base_url=dashboard_base_url,
-        dashboard_link_expiry_seconds=3600,
         max_day_loss=1000.0,
         day_profit_target=500.0,
         max_trade_size=5000.0,

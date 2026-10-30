@@ -8,8 +8,6 @@ from bot.shapes import OperatorConfig, OperatorProfile, RiskLimits, RiskState, S
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
 CONFIG = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
-    dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
     max_trade_size=5000.0,

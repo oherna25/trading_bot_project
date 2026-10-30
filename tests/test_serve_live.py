@@ -1,7 +1,6 @@
 import json
 import threading
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -14,8 +13,6 @@ from bot.store import SnapshotStore
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
 CONFIG = OperatorConfig(
-    dashboard_base_url="https://ops.example.internal",
-    dashboard_link_expiry_seconds=3600,
     max_day_loss=1000.0,
     day_profit_target=500.0,
     max_trade_size=5000.0,
@@ -85,12 +82,12 @@ def _status_of(call):
         return exc.code, exc.read()
 
 
-def test_serve_dashboard_health_and_chat_over_socket():
+def test_serve_cards_health_and_chat_over_socket(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     store = _seeded_store()
     journal = Journal()
     journal.append(NOW, "snapshot_ingested", {"snapshot_id": "TEST:snap", "source_name": "tradier_sandbox"})
-    snapshot_id, _ = store.read_latest("TEST")
-    quoted = urllib.parse.quote(snapshot_id, safe="")
     with LiveServer(store, journal) as live:
         status, body = live.get("/healthz")
         assert status == 200
@@ -100,27 +97,46 @@ def test_serve_dashboard_health_and_chat_over_socket():
         health = json.loads(body)
         assert health["feed_used"] == "tradier_sandbox"
         assert health["underlyings"] == ["TEST"]
-        status, body = live.get(f"/dashboard/{quoted}")
+        status, body = live.get("/cards?underlying=TEST")
         assert status == 200
-        assert body.startswith(b"<!doctype html>")
-        status, body = live.get(f"/dashboard/{quoted}.json")
+        text = body.decode("utf-8")
+        assert text.startswith("<!doctype html>")
+        assert "<article>" in text
+        assert "long via" in text
+        status, body = live.get("/cards.json?underlying=TEST&query=monthly")
         assert status == 200
-        assert json.loads(body)["header"]["price"] == 102.0
+        doc = json.loads(body)
+        assert doc["underlying"] == "TEST"
+        assert doc["count"] == 1
+        assert len(doc["cards"]) == 1
+        assert doc["cards"][0]["symbol"] == "TEST"
+        assert doc["cards"][0]["reason_source"] == "fallback"
+        status, body = _status_of(lambda: live.get("/cards.json?underlying=NOPE"))
+        assert status == 400
+        assert "NOPE" in json.loads(body)["error"]
         status, body = live.post("/chat", {"text": "gex brief", "underlying": "TEST"})
         assert status == 200
         assert "total exposure:" in json.loads(body)["reply"]
 
 
-def test_serve_enforces_bearer_token_over_socket():
+def test_serve_enforces_bearer_token_over_socket(monkeypatch):
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     with LiveServer(_seeded_store(), Journal(), token="secret") as live:
-        status, _ = _status_of(lambda: live.get("/dashboard/TEST%3Ax"))
+        status, _ = _status_of(lambda: live.get("/cards?underlying=TEST"))
+        assert status == 401
+        status, _ = _status_of(lambda: live.get("/cards.json?underlying=TEST"))
         assert status == 401
         status, _ = _status_of(lambda: live.post("/chat", {"text": "hi"}))
         assert status == 401
         status, _ = live.get("/health")
         assert status == 200
-        status, _ = _status_of(lambda: live.get("/dashboard/TEST%3Ax", token="secret"))
-        assert status == 404
+        status, body = live.get("/cards?underlying=TEST", token="secret")
+        assert status == 200
+        assert b"<article>" in body
+        status, body = live.get("/cards.json?underlying=TEST", token="secret")
+        assert status == 200
+        assert json.loads(body)["count"] == 1
         status, body = live.post("/chat", {"text": "gex brief", "underlying": "TEST"}, token="secret")
         assert status == 200
         assert json.loads(body)["ok"] is True

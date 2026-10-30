@@ -5,10 +5,8 @@ import re
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Optional, Sequence
-from urllib.parse import quote
 
 from bot.cards import render_brief_card
-from bot.dashboard import DashboardScreen, dashboard_view
 from bot.exposure import compute_dex, compute_gex, compute_vex
 from bot.feeds import (
     BAR_FEEDS,
@@ -36,16 +34,15 @@ from bot.models import (
 from bot.shapes import (
     Bar,
     ChainSnapshot,
-    DashboardLink,
     DexProfile,
     GexProfile,
     OperatorConfig,
     PaperEvidence,
-    Position,
     Signal,
     VexProfile,
 )
-from bot.store import SnapshotId, SnapshotStore
+from bot.store import SnapshotStore
+from bot.tradecards import cards_response
 
 
 def analyst_tool(text: str, snapshot: ChainSnapshot, profile: GexProfile, bar: Optional[Bar]) -> Signal:
@@ -509,72 +506,6 @@ def scheduled_brief(
     return reply
 
 
-def build_dashboard_link(snapshot_id: str, config: OperatorConfig, now: datetime) -> DashboardLink:
-    path = "/dashboard/" + quote(snapshot_id, safe="")
-    return DashboardLink(
-        snapshot_id=snapshot_id,
-        url=config.dashboard_base_url + path,
-        created_utc=now,
-        expires_utc=now + timedelta(seconds=config.dashboard_link_expiry_seconds),
-    )
-
-
-PINNED_RENDER_QUERY = "dashboard pin"
-
-
-class UnknownDashboard(ValueError):
-    pass
-
-
-class ExpiredDashboard(UnknownDashboard):
-    pass
-
-
-def _mint_time(journal: Journal, snapshot_id: str) -> Optional[datetime]:
-    latest: Optional[datetime] = None
-    for entry in journal.entries():
-        if entry.kind == "dashboard_link_sent" and entry.payload.get("snapshot_id") == snapshot_id:
-            latest = entry.timestamp_utc
-    return latest
-
-
-def serve_pinned_screen(
-    snapshot_id: SnapshotId,
-    store: SnapshotStore,
-    journal: Journal,
-    config: OperatorConfig,
-    now: datetime,
-    positions: tuple[Position, ...] = (),
-) -> DashboardScreen:
-    snapshot = store.read_snapshot(snapshot_id)
-    if snapshot is None:
-        raise UnknownDashboard(f"unknown snapshot {snapshot_id}")
-    minted = _mint_time(journal, snapshot_id)
-    if minted is not None and (now - minted).total_seconds() > config.dashboard_link_expiry_seconds:
-        raise ExpiredDashboard(f"dashboard link for {snapshot_id} expired")
-    profile = compute_gex(snapshot, snapshot_id)
-    bar = store.read_latest_bar(snapshot.underlying)
-    signal = derive_display(
-        replace(analyst_tool(PINNED_RENDER_QUERY, snapshot, profile, bar), snapshot_id=snapshot_id),
-        snapshot,
-        profile,
-        bar,
-    )
-    return dashboard_view(snapshot_id, signal, store, journal, list(positions))
-
-
-def dashboard_link_response(
-    underlying: str, store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime
-) -> str:
-    found = store.read_latest(underlying)
-    if found is None:
-        raise ValueError(f"no snapshot stored for {underlying}")
-    snapshot_id, _ = found
-    link = build_dashboard_link(snapshot_id, config, now)
-    journal.append(now, "dashboard_link_sent", {"snapshot_id": snapshot_id, "url": link.url})
-    return f"dashboard for snapshot {snapshot_id}: {link.url}"
-
-
 def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
     profile = store.read_profile()
     if profile is not None and not profile.options_ok:
@@ -707,8 +638,8 @@ def route_chat(
         return format_summary(profile, params)
     if "profile" in lowered:
         return format_questionnaire()
-    if "dashboard" in text.lower():
-        return dashboard_link_response(underlying, store, journal, config, now)
+    if re.search(r"\bcards?\b", lowered):
+        return cards_response(text, underlying, store, journal, now)
     if "idea" in lowered:
         return ideas_response(text, underlying, store, journal, now)
     if re.search(r"\bvex\b", lowered) or "vega exposure" in lowered:

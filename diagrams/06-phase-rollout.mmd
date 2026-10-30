@@ -17,11 +17,11 @@ flowchart TB
     G3 -->|no| FIX3["Fix risk engine"]
     FIX3 --> P3
     G3 -->|yes| P4["Phase 4 autonomy gate"]
-    P3 --> P5["Phase 5 dashboard and social"]
+    P3 --> P5["Phase 5 trade cards"]
     P4 --> LIVEG["Gated live trading"]
-    P5 --> DASH["Dashboard live"]
+    P5 --> CARDS["Trade cards live"]
     LIVEG --> M0["Phase M0 model spikes"]
-    DASH --> M0
+    CARDS --> M0
     M0 --> GM0{"Spikes pass and budget set"}
     GM0 -->|no| STOPM["Stop model phases"]
     GM0 -->|yes| M1["Phase M1 Spark analyst"]

@@ -26,7 +26,6 @@ def test_parse_args_overrides():
 
 
 def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
-    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
     monkeypatch.chdir(tmp_path)
     seen = {}
 
@@ -54,8 +53,6 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
     assert seen["serve_store"] is seen["store"]
     assert seen["serve_journal"] is seen["journal"]
     assert seen["store_dir"] == str(tmp_path)
-    assert seen["config"].dashboard_base_url == "http://127.0.0.1:8000"
-    assert seen["config"].dashboard_link_expiry_seconds == 3600
     assert seen["config"].max_day_loss == 1000.0
     assert seen["config"].day_profit_target == 500.0
     assert seen["config"].max_trade_size == 5000.0
@@ -68,7 +65,6 @@ def test_main_serves_loaded_bundle(monkeypatch, capsys, tmp_path):
 
 
 def test_main_feed_failure_still_serves(monkeypatch, capsys, tmp_path):
-    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
     monkeypatch.delenv("PORT", raising=False)
     monkeypatch.chdir(tmp_path)
     seen = {}
@@ -93,7 +89,6 @@ def test_main_feed_failure_still_serves(monkeypatch, capsys, tmp_path):
 
 
 def test_main_port_env_flows_to_serve(monkeypatch, tmp_path):
-    monkeypatch.delenv("DASHBOARD_BASE_URL", raising=False)
     monkeypatch.setenv("PORT", "9002")
     monkeypatch.chdir(tmp_path)
     seen = {}

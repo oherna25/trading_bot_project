@@ -23,7 +23,7 @@ from typing import Optional
 
 from bot.config import operator_config
 from bot.feeds import FeedUnavailableError
-from bot.muse import default_dashboard_base_url, resolve_port, serve
+from bot.muse import resolve_port, serve
 from bot.persist import load_bundle, save_bundle
 from bot.research import live_brief
 from bot.schedule import normalize_underlyings
@@ -56,7 +56,7 @@ def run(
     materialize_file_secrets()
     port = resolve_port(port)
     store, journal = load_bundle(store_dir)
-    config = operator_config(default_dashboard_base_url(), store.read_profile())
+    config = operator_config(store.read_profile())
     symbols = normalize_underlyings(underlying)
     briefs = []
     failures = []
