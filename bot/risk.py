@@ -5,7 +5,58 @@ from datetime import datetime
 from typing import Optional, Sequence
 
 from bot.journal import Journal
-from bot.shapes import Fill, OperatorProfile, OrderIntent, OrderLeg, Position, RiskLimits, RiskState, Signal
+from bot.shapes import (
+    Fill,
+    OperatorProfile,
+    OrderIntent,
+    OrderLeg,
+    PortfolioView,
+    Position,
+    RiskLimits,
+    RiskState,
+    Signal,
+)
+
+SECTORS = {
+    "AAPL": "Tech", "MSFT": "Tech", "NVDA": "Tech", "GOOGL": "Tech", "GOOG": "Tech",
+    "META": "Tech", "AMZN": "Tech", "AMD": "Tech", "INTC": "Tech", "ORCL": "Tech",
+    "CRM": "Tech", "ADBE": "Tech", "AVGO": "Tech", "QCOM": "Tech",
+    "JPM": "Financials", "BAC": "Financials", "WFC": "Financials", "C": "Financials",
+    "GS": "Financials", "MS": "Financials", "AXP": "Financials", "V": "Financials",
+    "MA": "Financials", "SCHW": "Financials",
+    "TSLA": "Auto", "F": "Auto", "GM": "Auto", "RIVN": "Auto",
+    "DAL": "Travel", "UAL": "Travel", "AAL": "Travel", "LUV": "Travel",
+    "MAR": "Travel", "ABNB": "Travel", "BKNG": "Travel",
+    "JNJ": "Healthcare", "UNH": "Healthcare", "PFE": "Healthcare", "LLY": "Healthcare",
+    "MRK": "Healthcare", "ABBV": "Healthcare",
+    "XOM": "Energy", "CVX": "Energy", "COP": "Energy", "SLB": "Energy",
+    "WMT": "Consumer", "COST": "Consumer", "HD": "Consumer", "NKE": "Consumer",
+    "SBUX": "Consumer", "MCD": "Consumer", "KO": "Consumer", "PEP": "Consumer",
+    "DIS": "Media", "NFLX": "Media", "WBD": "Media",
+    "T": "Telecom", "VZ": "Telecom", "TMUS": "Telecom",
+}
+
+
+def positions_capped(view: PortfolioView, limits: RiskLimits) -> bool:
+    return limits.max_positions > 0 and view.open_positions >= limits.max_positions
+
+
+def drawdown_paused(day_pnl: float, view: PortfolioView, limits: RiskLimits) -> bool:
+    peak = view.peak_day_pnl
+    return (
+        limits.drawdown_pause_pct > 0
+        and peak is not None
+        and peak > 0
+        and (peak - day_pnl) >= limits.drawdown_pause_pct * max(peak, 0.0)
+    )
+
+
+def sector_capped(view: PortfolioView, symbol: str, limits: RiskLimits) -> bool:
+    sector = SECTORS.get(symbol)
+    if limits.max_per_sector <= 0 or sector is None:
+        return False
+    held = sum(1 for open_symbol in view.open_symbols if SECTORS.get(open_symbol) == sector)
+    return held >= limits.max_per_sector
 
 
 def fire_halt(state: RiskState) -> RiskState:
@@ -142,6 +193,7 @@ def review_intent(
     journal: Journal,
     now: datetime,
     profile: Optional[OperatorProfile] = None,
+    view: Optional[PortfolioView] = None,
 ) -> str:
     error = _schema_error(intent)
     if error is not None:
@@ -152,6 +204,15 @@ def review_intent(
         return "rejected"
     if state.kill_active:
         journal.append(now, "intent_blocked", {"reason": "kill active"})
+        return "rejected"
+    if view is not None and positions_capped(view, limits):
+        journal.append(now, "intent_vetoed", {"reason": "max positions reached"})
+        return "rejected"
+    if view is not None and drawdown_paused(state.day_pnl, view, limits):
+        journal.append(now, "intent_vetoed", {"reason": "drawdown pause active"})
+        return "rejected"
+    if view is not None and sector_capped(view, intent.symbol, limits):
+        journal.append(now, "intent_vetoed", {"reason": "sector cap reached"})
         return "rejected"
     if is_options_intent(intent) and (profile is None or not profile.options_ok):
         journal.append(now, "intent_vetoed", {"reason": "options blocked by profile"})

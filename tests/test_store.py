@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 from bot.journal import Journal
-from bot.shapes import Bar, ChainSnapshot, OptionContract
+from bot.shapes import Bar, ChainSnapshot, OperatorProfile, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -66,6 +66,53 @@ def test_restore_replaces_contents():
     assert live.list_underlyings() == ["NEW"]
     assert live.read_latest("OLD") is None
     assert len(live.read_bars("NEW")) == 1
+
+
+def test_merge_from_appends_new_ids_in_other_order():
+    live, other = SnapshotStore(), SnapshotStore()
+    first = live.save(_snapshot(NOW))
+    second = other.save(_snapshot(NOW + timedelta(hours=1)))
+    third = other.save(_snapshot(NOW + timedelta(hours=2), "QQQ"))
+    live.merge_from(other)
+    assert [sid for sid, _ in live.snapshots_in_order()] == [first, second, third]
+
+
+def test_merge_from_latest_keeps_newest_when_other_is_newer():
+    live, other = SnapshotStore(), SnapshotStore()
+    live.save(_snapshot(NOW))
+    other.save(_snapshot(NOW + timedelta(hours=1)))
+    live.merge_from(other)
+    assert live.read_latest("TEST")[1].timestamp_utc == NOW + timedelta(hours=1)
+
+
+def test_merge_from_latest_keeps_newest_when_live_is_newer():
+    live, other = SnapshotStore(), SnapshotStore()
+    live.save(_snapshot(NOW + timedelta(hours=2)))
+    other.save(_snapshot(NOW))
+    live.merge_from(other)
+    assert live.read_latest("TEST")[1].timestamp_utc == NOW + timedelta(hours=2)
+
+
+def test_merge_from_dedupes_bars():
+    live, other = SnapshotStore(), SnapshotStore()
+    live.save_bar("TEST", _bar(NOW))
+    other.save_bar("TEST", _bar(NOW))
+    other.save_bar("TEST", _bar(NOW + timedelta(days=1)))
+    live.merge_from(other)
+    assert [b.timestamp_utc for b in live.read_bars("TEST")] == [NOW, NOW + timedelta(days=1)]
+
+
+def test_merge_from_merges_iv_and_keeps_live_profile():
+    live, other = SnapshotStore(), SnapshotStore()
+    live.save_iv("SPY", "2026-10-26", 0.20)
+    other.save_iv("SPY", "2026-10-27", 0.25)
+    mine = OperatorProfile(risk_tolerance="low", portfolio_size=1000.0, knowledge="new", options_ok=False)
+    theirs = OperatorProfile(risk_tolerance="high", portfolio_size=999.0, knowledge="pro", options_ok=True)
+    live.save_profile(mine)
+    other.save_profile(theirs)
+    live.merge_from(other)
+    assert live.read_iv_history("SPY") == {"2026-10-26": 0.20, "2026-10-27": 0.25}
+    assert live.read_profile() == mine
 
 
 def test_journal_merge_adds_missing_entries_in_order():

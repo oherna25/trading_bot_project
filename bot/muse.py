@@ -5,6 +5,8 @@ import json
 import os
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional, Sequence
@@ -13,7 +15,7 @@ from urllib.parse import parse_qs
 from bot.config import auth_token as _auth_token
 from bot.feeds import FeedContext, default_context, ingest_bars, ingest_chain, live_context
 from bot.journal import Journal
-from bot.persist import bundle_mtimes, refresh_bundle
+from bot.persist import bundle_mtimes, refresh_bundle, save_bundle
 from bot.research import (
     dex_brief_response,
     handle_chat_query,
@@ -24,9 +26,11 @@ from bot.research import (
     scheduled_brief,
     vex_brief_response,
 )
+from bot.schedule import normalize_underlyings, run_session_core, tick_symbols
 from bot.shapes import OperatorConfig, default_operator_config
 from bot.store import SnapshotStore
 from bot.tradecards import OPTIONS_DISABLED, cards_response, cards_to_json, query_trade_cards, trade_cards_html
+from bot.wheel import wheel_response
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,15 @@ def _trade_ideas_handler(
     return ideas_response(query, underlying, store, journal, now)
 
 
+def _wheel_ideas_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    query = args.get("query", "wheel ideas") if isinstance(args, dict) else "wheel ideas"
+    if not isinstance(query, str) or not query.strip():
+        query = "wheel ideas"
+    return wheel_response(query, underlying, store, journal, now)
+
+
 def _vex_brief_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
@@ -109,6 +122,28 @@ def _paper_pnl_handler(
     return paper_pnl_text(journal, store)
 
 
+def _session_run_handler(
+    args: dict[str, Any],
+    store: SnapshotStore,
+    journal: Journal,
+    config: OperatorConfig,
+    now: datetime,
+    underlying: str,
+    session_controller: Optional[SessionController] = None,
+) -> str:
+    if session_controller is None:
+        raise ValueError("sessions not configured")
+    flags = args if isinstance(args, dict) else {}
+    text, _ = session_controller.run(
+        underlying,
+        live_models=bool(flags.get("live_models", False)),
+        grounding=bool(flags.get("grounding", False)),
+        cards=bool(flags.get("cards", False)),
+        now=now,
+    )
+    return text
+
+
 TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_gex_brief": MuseTool("get_gex_brief", "Read the computed GEX brief for an underlying", _gex_brief_handler),
     "get_trade_cards": MuseTool(
@@ -117,10 +152,14 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_trade_ideas": MuseTool(
         "get_trade_ideas", "Rank trade ideas from stored snapshots", _trade_ideas_handler
     ),
+    "get_wheel_ideas": MuseTool(
+        "get_wheel_ideas", "Screen cash-secured-put and covered-call premium ideas", _wheel_ideas_handler
+    ),
     "get_vex_brief": MuseTool("get_vex_brief", "Read the computed VEX brief for an underlying", _vex_brief_handler),
     "get_dex_brief": MuseTool("get_dex_brief", "Read the computed DEX brief for an underlying", _dex_brief_handler),
     "journal_tail": MuseTool("journal_tail", "Read the tail of the journal", _journal_tail_handler),
     "paper_pnl": MuseTool("paper_pnl", "Report paper P&L from journaled fills", _paper_pnl_handler),
+    "run_session": MuseTool("run_session", "Run a scheduled session now and return the brief", _session_run_handler),
 }
 
 
@@ -170,15 +209,165 @@ def dispatch_tool(
     config: OperatorConfig,
     now: datetime,
     underlying: str = "SPY",
+    session_controller: Optional[SessionController] = None,
 ) -> MuseChatReply:
     tool = TOOL_REGISTRY.get(name)
     if tool is None:
         return MuseChatReply(ok=False, reply="", error=f"unknown tool {name}")
     try:
-        reply = tool.handler(args if isinstance(args, dict) else {}, store, journal, config, now, underlying)
+        handler_args = args if isinstance(args, dict) else {}
+        if tool.handler is _session_run_handler:
+            reply = tool.handler(
+                handler_args, store, journal, config, now, underlying, session_controller
+            )
+        else:
+            reply = tool.handler(handler_args, store, journal, config, now, underlying)
     except ValueError as exc:
         return MuseChatReply(ok=False, reply="", error=str(exc))
     return MuseChatReply(ok=True, reply=reply, error="")
+
+
+SESSION_PATH = "/session"
+SESSION_TICK_SECONDS = 30.0
+
+
+@dataclass(frozen=True)
+class SessionSchedule:
+    """Typed parse of cron subset "M H * * DOW" in machine-local time.
+
+    Weekdays are Python weekdays (Monday 0 through Sunday 6).
+    """
+
+    minute: int
+    hour: int
+    weekdays: frozenset[int]
+
+    def matches(self, now: datetime) -> bool:
+        return now.minute == self.minute and now.hour == self.hour and now.weekday() in self.weekdays
+
+
+def _parse_dow_value(raw: str, text: str) -> int:
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        raise ValueError(f"invalid schedule {text!r}: bad weekday {raw!r}") from None
+    if value == 7:
+        value = 0
+    if not 0 <= value <= 6:
+        raise ValueError(f"invalid schedule {text!r}: weekday {raw!r} out of range 0-7")
+    return value
+
+
+def _parse_dow_field(field: str, text: str) -> frozenset[int]:
+    if field == "*":
+        return frozenset(range(7))
+    days: set[int] = set()
+    for part in field.split(","):
+        if not part.strip():
+            raise ValueError(f"invalid schedule {text!r}: empty weekday entry")
+        if "-" in part:
+            bounds = part.split("-")
+            if len(bounds) != 2:
+                raise ValueError(f"invalid schedule {text!r}: bad weekday range {part!r}")
+            start = _parse_dow_value(bounds[0], text)
+            end = _parse_dow_value(bounds[1], text)
+            if end < start:
+                raise ValueError(f"invalid schedule {text!r}: reversed weekday range {part!r}")
+            days.update(range(start, end + 1))
+        else:
+            days.add(_parse_dow_value(part, text))
+    return frozenset((day + 6) % 7 for day in days)
+
+
+def parse_schedule(text: str) -> SessionSchedule:
+    """Parse cron subset "M H * * DOW". Raises ValueError when malformed."""
+    fields = (text or "").split()
+    if len(fields) != 5:
+        raise ValueError(f"invalid schedule {text!r}: want 'M H * * DOW'")
+    minute_text, hour_text, day_of_month, month, dow = fields
+    try:
+        minute = int(minute_text)
+        hour = int(hour_text)
+    except ValueError:
+        raise ValueError(f"invalid schedule {text!r}: minute and hour must be numbers") from None
+    if not 0 <= minute <= 59:
+        raise ValueError(f"invalid schedule {text!r}: minute out of range 0-59")
+    if not 0 <= hour <= 23:
+        raise ValueError(f"invalid schedule {text!r}: hour out of range 0-23")
+    if day_of_month != "*" or month != "*":
+        raise ValueError(f"invalid schedule {text!r}: day-of-month and month must be '*'")
+    return SessionSchedule(minute, hour, _parse_dow_field(dow, text))
+
+
+MinuteKey = tuple[int, int, int, int, int]
+
+
+def session_due(schedule: SessionSchedule, now: datetime, last_fired: MinuteKey | None) -> bool:
+    key = (now.year, now.month, now.day, now.hour, now.minute)
+    return schedule.matches(now) and key != last_fired
+
+
+@contextmanager
+def _scratch_run(
+    lock: threading.Lock, store: SnapshotStore, journal: Journal
+) -> Iterator[tuple[SnapshotStore, Journal]]:
+    """Yield a scratch copy of live state, merging it back on clean exit.
+
+    The core runs with no lock held. A raised core skips the commit.
+    Pruning and saving stay with the caller.
+    """
+    scratch_store = SnapshotStore()
+    scratch_journal = Journal()
+    with lock:
+        scratch_store.restore(store)
+        scratch_journal.restore(journal)
+    yield scratch_store, scratch_journal
+    with lock:
+        store.merge_from(scratch_store)
+        journal.merge(scratch_journal)
+
+
+@dataclass
+class SessionController:
+    """Shared session primitive for the HTTP trigger and the timer.
+
+    run is the only entry; both drivers call it. lock is the server
+    lock, reentrant because the HTTP path already holds it.
+    """
+
+    store: SnapshotStore
+    journal: Journal
+    store_dir: str
+    lock: threading.RLock
+    context_factory: Callable[[str], FeedContext] = live_context
+
+    def run(
+        self,
+        underlying: str | Sequence[str] = "SPY",
+        live_models: bool = False,
+        grounding: bool = False,
+        cards: bool = False,
+        now: datetime | None = None,
+    ) -> tuple[str, list[str]]:
+        with self.lock:
+            symbols = tick_symbols(normalize_underlyings(underlying), self.store)
+        with _scratch_run(self.lock, self.store, self.journal) as (scratch_store, scratch_journal):
+            text = run_session_core(
+                symbols,
+                scratch_store,
+                scratch_journal,
+                self.store_dir,
+                now,
+                None,
+                None,
+                self.context_factory,
+                live_models,
+                grounding,
+                cards,
+            )
+        with self.lock:
+            save_bundle(self.store_dir, self.store, self.journal)
+        return text, symbols
 
 
 HEALTH_PATH = "/healthz"
@@ -211,6 +400,13 @@ def openapi_spec() -> dict:
                     "summary": "Chat with Muse",
                     "requestBody": {"required": True},
                     "responses": {"200": {"description": "Chat reply"}},
+                }
+            },
+            "/session": {
+                "post": {
+                    "summary": "Run a scheduled session now",
+                    "requestBody": {"required": True},
+                    "responses": {"200": {"description": "Session brief"}},
                 }
             },
             "/mcp": {
@@ -286,6 +482,7 @@ def route_http(
     now: datetime,
     auth_token: Optional[str] = None,
     authorization: str = "",
+    session_controller: Optional[SessionController] = None,
 ) -> HttpResponse:
     if method == "HEAD":
         method = "GET"
@@ -307,6 +504,28 @@ def route_http(
             return HttpResponse.json(400, {"ok": False, "reply": "", "error": str(exc)})
         reply = handle_chat(request, store, journal, config, now)
         return HttpResponse.json(200, {"ok": reply.ok, "reply": reply.reply, "error": reply.error})
+    if method == "POST" and clean == SESSION_PATH:
+        if not isinstance(payload, dict):
+            return HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid session body"})
+        underlying = payload.get("underlying", "SPY")
+        if underlying is None:
+            underlying = "SPY"
+        if not isinstance(underlying, str):
+            return HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid session body"})
+        if not underlying.strip():
+            underlying = "SPY"
+        if session_controller is None:
+            return HttpResponse.json(
+                503, {"ok": False, "reply": "", "error": "sessions not configured"}
+            )
+        text, symbols = session_controller.run(
+            underlying,
+            live_models=bool(payload.get("live_models", False)),
+            grounding=bool(payload.get("grounding", False)),
+            cards=bool(payload.get("cards", False)),
+            now=now,
+        )
+        return HttpResponse.json(200, {"ok": True, "reply": text, "underlyings": symbols})
     if method == "POST" and clean == "/mcp":
         if not isinstance(payload, dict):
             return HttpResponse.json(400, {"ok": False, "reply": "", "error": "invalid MCP envelope"})
@@ -327,7 +546,8 @@ def route_http(
             arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
             underlying = params.get("underlying") or "SPY"
             reply = dispatch_tool(
-                str(name), arguments, store, journal, config, now, underlying=str(underlying)
+                str(name), arguments, store, journal, config, now, underlying=str(underlying),
+                session_controller=session_controller,
             )
             return HttpResponse.json(200, {"ok": reply.ok, "reply": reply.reply, "error": reply.error})
         return HttpResponse.json(400, {"ok": False, "reply": "", "error": f"unknown MCP method {mcp_method}"})
@@ -390,7 +610,7 @@ def start_refresh_loop(
     context_factory: Callable[[str], FeedContext] = live_context,
     stop: Optional[threading.Event] = None,
 ) -> threading.Event:
-    from bot.schedule import normalize_underlyings, refresh_store
+    from bot.schedule import normalize_underlyings, refresh_core
 
     halt = stop or threading.Event()
     fixed = normalize_underlyings(symbols) if symbols else []
@@ -399,17 +619,54 @@ def start_refresh_loop(
         while not halt.wait(interval_seconds):
             try:
                 with lock:
-                    refresh_store(
-                        fixed or store.list_underlyings() or ["SPY"],
-                        store,
-                        journal,
+                    resolved = tick_symbols(fixed, store)
+                with _scratch_run(lock, store, journal) as (scratch_store, scratch_journal):
+                    refresh_core(
+                        resolved,
+                        scratch_store,
+                        scratch_journal,
+                        None,
+                        None,
+                        None,
+                        context_factory,
                         store_dir,
-                        context_factory=context_factory,
                     )
+                with lock:
+                    store.prune()
+                    journal.prune()
+                    save_bundle(store_dir, store, journal)
             except Exception as exc:
                 print(json.dumps({"refresh": "failed", "error": type(exc).__name__}), flush=True)
 
     threading.Thread(target=_loop, name="refresh-loop", daemon=True).start()
+    return halt
+
+
+def start_session_loop(
+    controller: SessionController,
+    schedule: SessionSchedule,
+    symbols: Sequence[str],
+    interval_seconds: float = SESSION_TICK_SECONDS,
+    stop: Optional[threading.Event] = None,
+) -> threading.Event:
+    halt = stop or threading.Event()
+    fixed = list(symbols) if symbols else ["SPY"]
+    last_fired: MinuteKey | None = None
+
+    def _loop() -> None:
+        nonlocal last_fired
+        while not halt.wait(interval_seconds):
+            try:
+                now_local = datetime.now().astimezone()
+                if not session_due(schedule, now_local, last_fired):
+                    continue
+                text, _ = controller.run(fixed)
+                last_fired = (now_local.year, now_local.month, now_local.day, now_local.hour, now_local.minute)
+                print(text, flush=True)
+            except Exception as exc:
+                print(json.dumps({"session": "failed", "error": type(exc).__name__}), flush=True)
+
+    threading.Thread(target=_loop, name="session-loop", daemon=True).start()
     return halt
 
 
@@ -424,11 +681,14 @@ def create_server(
     refresh_seconds: float = 0,
     refresh_symbols: Sequence[str] = (),
     refresh_context_factory: Callable[[str], FeedContext] = live_context,
+    session_schedule: str = "",
+    session_underlyings: Sequence[str] = (),
 ):  # -> ThreadingHTTPServer
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
     bound = resolve_port(port)
-    lock = threading.Lock()
+    lock = threading.RLock()
+    controller = SessionController(store, journal, store_dir, lock) if store_dir else None
     expected = token if token is not None else _auth_token()
     warning = open_server_warning(host, expected)
     if warning is not None:
@@ -484,6 +744,7 @@ def create_server(
                 response = route_http(
                     self.command, self.path, payload, store, journal, config, now,
                     auth_token=expected, authorization=authorization,
+                    session_controller=controller,
                 )
             self._send(response, head_only)
             self._access(response.status, started)
@@ -506,6 +767,10 @@ def create_server(
             store, journal, refresh_symbols, store_dir, refresh_seconds, lock,
             context_factory=refresh_context_factory,
         )
+    if session_schedule and store_dir and controller is not None:
+        server.session_stop = start_session_loop(  # type: ignore[attr-defined]
+            controller, parse_schedule(session_schedule), list(session_underlyings),
+        )
     return server
 
 
@@ -519,12 +784,16 @@ def serve(
     refresh_seconds: float = 0,
     refresh_symbols: Sequence[str] = (),
     refresh_context_factory: Callable[[str], FeedContext] = live_context,
+    session_schedule: str = "",
+    session_underlyings: Sequence[str] = (),
 ) -> None:
     create_server(
         store, journal, config, host, port, store_dir,
         refresh_seconds=refresh_seconds,
         refresh_symbols=refresh_symbols,
         refresh_context_factory=refresh_context_factory,
+        session_schedule=session_schedule,
+        session_underlyings=session_underlyings,
     ).serve_forever()
 
 

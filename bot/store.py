@@ -33,6 +33,7 @@ class SnapshotStore:
         self._bars: dict[str, list[Bar]] = {}
         self._bar_keys: dict[str, set[tuple[str, datetime]]] = {}
         self._profile: Optional[OperatorProfile] = None
+        self._iv: dict[str, dict[str, float]] = {}
 
     def save(self, snapshot: ChainSnapshot) -> str:
         snapshot_id = snapshot_id_for(snapshot)
@@ -103,6 +104,19 @@ class SnapshotStore:
     def read_profile(self) -> Optional[OperatorProfile]:
         return self._profile
 
+    def save_iv(self, symbol: str, day_iso: str, iv: float, keep_per_symbol: int = 600) -> None:
+        days = self._iv.setdefault(symbol, {})
+        days[day_iso] = iv
+        if len(days) > keep_per_symbol:
+            for old in sorted(days)[: len(days) - keep_per_symbol]:
+                del days[old]
+
+    def read_iv_history(self, symbol: str) -> dict[str, float]:
+        return dict(self._iv.get(symbol, {}))
+
+    def all_iv(self) -> dict[str, dict[str, float]]:
+        return {symbol: dict(days) for symbol, days in self._iv.items()}
+
     def prune(self, keep_per_underlying: int = 500) -> int:
         keep: set[str] = set()
         counts: dict[str, int] = {}
@@ -133,3 +147,27 @@ class SnapshotStore:
         self._bars = {underlying: list(bars) for underlying, bars in other._bars.items()}
         self._bar_keys = {underlying: set(keys) for underlying, keys in other._bar_keys.items()}
         self._profile = other._profile
+        self._iv = {symbol: dict(days) for symbol, days in other._iv.items()}
+
+    def merge_from(self, other: SnapshotStore) -> None:
+        for snapshot_id in other._order:
+            snapshot = other._snapshots.get(snapshot_id)
+            if snapshot is None:
+                continue
+            if snapshot_id not in self._snapshots:
+                self._snapshots[snapshot_id] = snapshot
+                self._order.append(snapshot_id)
+        for underlying, other_latest_id in other._latest.items():
+            other_latest = other._snapshots.get(other_latest_id)
+            if other_latest is None:
+                continue
+            current_id = self._latest.get(underlying)
+            current = self._snapshots.get(current_id) if current_id is not None else None
+            if current is None or other_latest.timestamp_utc > current.timestamp_utc:
+                self._latest[underlying] = other_latest_id
+        for underlying, bars in other._bars.items():
+            for bar in bars:
+                self.save_bar(underlying, bar)
+        for symbol, days in other._iv.items():
+            for day_iso, iv in days.items():
+                self.save_iv(symbol, day_iso, iv)

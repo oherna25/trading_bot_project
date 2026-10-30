@@ -52,6 +52,8 @@ def run(
     host: str = HOST,
     port: Optional[int] = None,
     refresh_seconds: float = REFRESH_SECONDS,
+    session_schedule: str = "",
+    session_underlying: Optional[str] = None,
 ) -> str:
     materialize_file_secrets()
     port = resolve_port(port)
@@ -74,9 +76,13 @@ def run(
     )
     if refresh_seconds > 0:
         print(f"refreshing {','.join(symbols)} every {refresh_seconds:g}s")
+    session_symbols = normalize_underlyings(session_underlying or underlying)
+    if session_schedule:
+        print(f"scheduled sessions ({session_schedule}) for {','.join(session_symbols)}")
     print(f"serving on {host}:{port}")
     serve(store, journal, config, host, port, store_dir,
-          refresh_seconds=refresh_seconds, refresh_symbols=symbols)
+          refresh_seconds=refresh_seconds, refresh_symbols=symbols,
+          session_schedule=session_schedule, session_underlyings=session_symbols)
     if failures and not briefs:
         return "\n".join(failures)
     return "\n---\n".join(briefs + failures)
@@ -109,12 +115,23 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=REFRESH_SECONDS,
         help=f"Re-ingest interval while serving; 0 disables (default: {REFRESH_SECONDS:g}).",
     )
+    parser.add_argument(
+        "--session-schedule",
+        default="",
+        help="Cron subset 'M H * * DOW' for in-app sessions; empty disables (default: disabled).",
+    )
+    parser.add_argument(
+        "--session-underlying",
+        default=None,
+        help="Comma-separated symbols for scheduled sessions (default: value of --underlying).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> str:
     args = parse_args(argv)
-    return run(args.underlying, args.store_dir, args.host, args.port, args.refresh_seconds)
+    return run(args.underlying, args.store_dir, args.host, args.port, args.refresh_seconds,
+               args.session_schedule, args.session_underlying)
 
 
 if __name__ == "__main__":

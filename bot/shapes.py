@@ -185,6 +185,9 @@ class RiskLimits:
     max_trade_size: float
     day_profit_target: float
     max_day_loss: float
+    max_positions: int = 0
+    drawdown_pause_pct: float = 0.0
+    max_per_sector: int = 0
 
 
 @dataclass(frozen=True)
@@ -202,3 +205,29 @@ class OperatorProfile:
     portfolio_size: float
     knowledge: str
     options_ok: bool
+
+
+@dataclass(frozen=True)
+class PremiumCandidate:
+    symbol: str
+    action: str
+    strike: float
+    expiry: str
+    dte: int
+    bid: float
+    ask: Optional[float]
+    delta: float
+    iv: Optional[float]
+    open_interest: float
+    premium_return: float
+    capital_at_risk: float
+    needs_shares: bool
+    iv_rank: Optional[float]
+    snapshot_id: str
+
+
+@dataclass(frozen=True)
+class PortfolioView:
+    open_positions: int = 0
+    open_symbols: tuple[str, ...] = ()
+    peak_day_pnl: Optional[float] = None

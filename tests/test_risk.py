@@ -4,8 +4,15 @@ from datetime import datetime, timezone
 import pytest
 
 from bot.journal import Journal
-from bot.risk import build_intent, review_intent, submit_paper
-from bot.shapes import RiskLimits, RiskState, Signal
+from bot.risk import (
+    build_intent,
+    drawdown_paused,
+    positions_capped,
+    review_intent,
+    sector_capped,
+    submit_paper,
+)
+from bot.shapes import PortfolioView, RiskLimits, RiskState, Signal
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
@@ -123,6 +130,53 @@ def test_closing_fill_books_realized_pnl():
     _, closed, final = submit_paper(sell, 110.0, updated, position, LIMITS, journal, NOW)
     assert closed.net_size == 0.0
     assert final.day_pnl == 10000.0
+
+
+def test_zero_caps_with_view_preserve_approval():
+    journal = Journal()
+    intent = build_intent(_signal(), "sig-1", _state(), journal, NOW)
+    assert review_intent(intent, _state(), LIMITS, journal, NOW, view=PortfolioView()) == "approved"
+
+
+def test_positions_cap_vetoes_at_cap():
+    limits = replace(LIMITS, max_positions=2)
+    assert positions_capped(PortfolioView(open_positions=2), limits) is True
+    assert positions_capped(PortfolioView(open_positions=1), limits) is False
+    journal = Journal()
+    intent = build_intent(_signal(), "sig-1", _state(), journal, NOW)
+    view = PortfolioView(open_positions=2, open_symbols=("AAPL", "JPM"))
+    assert review_intent(intent, _state(), limits, journal, NOW, view=view) == "rejected"
+    assert journal.entries()[-1].payload == {"reason": "max positions reached"}
+
+
+def test_drawdown_pause_math():
+    limits = replace(LIMITS, drawdown_pause_pct=0.10)
+    view = PortfolioView(peak_day_pnl=1000.0)
+    assert drawdown_paused(800.0, view, limits) is True
+    assert drawdown_paused(950.0, view, limits) is False
+    assert drawdown_paused(-5000.0, PortfolioView(), limits) is False
+    assert drawdown_paused(-5000.0, PortfolioView(peak_day_pnl=0.0), limits) is False
+    assert drawdown_paused(-5000.0, PortfolioView(peak_day_pnl=-100.0), limits) is False
+    journal = Journal()
+    intent = build_intent(_signal(), "sig-1", _state(day_pnl=800.0), journal, NOW)
+    assert review_intent(intent, _state(day_pnl=800.0), limits, journal, NOW, view=view) == "rejected"
+    assert journal.entries()[-1].payload == {"reason": "drawdown pause active"}
+
+
+def test_sector_cap_vetoes_known_sector_only():
+    limits = replace(LIMITS, max_per_sector=1)
+    view = PortfolioView(open_positions=1, open_symbols=("AAPL",))
+    assert sector_capped(view, "MSFT", limits) is True
+    assert sector_capped(view, "JPM", limits) is False
+    assert sector_capped(view, "ZZZZ", limits) is False
+    journal = Journal()
+    tech = Signal(direction="long", thesis="t", confidence=0.6, snapshot_id="MSFT:snap-1")
+    intent = build_intent(tech, "sig-1", _state(), journal, NOW)
+    assert review_intent(intent, _state(), limits, journal, NOW, view=view) == "rejected"
+    assert journal.entries()[-1].payload == {"reason": "sector cap reached"}
+    unknown = Signal(direction="long", thesis="t", confidence=0.6, snapshot_id="ZZZZ:snap-1")
+    intent = build_intent(unknown, "sig-2", _state(), journal, NOW)
+    assert review_intent(intent, _state(), limits, journal, NOW, view=view) == "approved"
 
 
 def test_day_pnl_accumulates_across_fills():

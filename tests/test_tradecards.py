@@ -157,6 +157,36 @@ def test_html_escapes_reason_with_script_tags():
 
 def test_empty_ideas_render_none_found():
     assert format_trade_cards([]) == "trade cards: none found"
+
+
+def test_cards_to_json_rounds_floats():
+    card = TradeCard(
+        symbol="TEST", direction="short", spread="774/775 put vertical", strike=775.0,
+        expiry="2026-11-20", call_or_put="put", hedge_strike=774.0, confidence=0.7255512375820845,
+        snapshot_id="TEST:x", max_loss=45.000000000000014, breakeven=773.6363636363636,
+        net_debit=86.66666666666667, spread_pct=8.000000000000007, wall_exposure=-271686.6666666667,
+        regime="short-gamma", spot=774.4999999999999, flip_point=None, reason="r",
+        reason_source="fallback",
+    )
+    (row,) = cards_to_json([card])["cards"]
+    assert row["confidence"] == 0.7256
+    assert row["max_loss"] == 45.0
+    assert row["breakeven"] == 773.64
+    assert row["net_debit"] == 86.67
+    assert row["spread_pct"] == 8.0
+    assert row["wall_exposure"] == -271686.67
+    assert row["spot"] == 774.5
+    assert row["flip_point"] is None
+
+
+def test_card_wall_matches_ideas_wall_on_same_snapshot():
+    store = _seeded_store()
+    entries = _entries(store)
+    ideas = rank_ideas(entries, None, now=NOW)
+    cards = build_trade_cards(entries, None, NOW, Journal(), env={})
+    assert len(cards) == len(ideas) == 2
+    for card, idea in zip(cards, ideas):
+        assert f"{card.wall_exposure:.1f}" in idea.thesis
     page = trade_cards_html([], "TEST")
     assert "none found" in page
     assert "<article>" not in page

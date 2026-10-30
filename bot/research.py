@@ -43,6 +43,7 @@ from bot.shapes import (
 )
 from bot.store import SnapshotStore
 from bot.tradecards import cards_response
+from bot.wheel import wheel_response
 
 
 def analyst_tool(text: str, snapshot: ChainSnapshot, profile: GexProfile, bar: Optional[Bar]) -> Signal:
@@ -638,6 +639,8 @@ def route_chat(
         return format_summary(profile, params)
     if "profile" in lowered:
         return format_questionnaire()
+    if re.search(r"\bwheels?\b", lowered):
+        return wheel_response(text, underlying, store, journal, now)
     if re.search(r"\bcards?\b", lowered):
         return cards_response(text, underlying, store, journal, now)
     if "idea" in lowered:

@@ -144,11 +144,6 @@ def resolve_direction(bar: Optional[Bar], flip: Optional[float], total_exposure:
     return "flat"
 
 
-def _contract_exposure(contract: OptionContract) -> float:
-    sign = 1.0 if contract.call_or_put == "call" else -1.0
-    return sign * (contract.gamma or 0.0) * contract.open_interest * DEFAULT_CONTRACT_MULTIPLIER
-
-
 def spread_pct(contract: OptionContract) -> Optional[float]:
     if contract.bid is None or contract.ask is None or not contract.price:
         return None
@@ -224,7 +219,7 @@ def rank_ideas(
     top_score = max(score for score, *_ in candidates)
     ranked = []
     for score, snapshot_id, snapshot, profile, bar, direction, contract, pct in candidates:
-        exposure = _contract_exposure(contract)
+        exposure = profile.per_strike_exposure.get(contract.strike, 0.0)
         regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
         hedge_strike = _hedge_strike(contract, snapshot)
         hedge = next(
@@ -240,16 +235,21 @@ def rank_ideas(
         debit = max_loss = breakeven = None
         spread_label = f"single {contract.call_or_put} {contract.strike}"
         if hedge is not None:
-            legs = even_legs(
-                2.0,
-                [
-                    (snapshot.underlying, "buy", contract.strike, contract.expiry, contract.call_or_put),
-                    (snapshot.underlying, "sell", hedge.strike, hedge.expiry, hedge.call_or_put),
-                ],
-            )
-            low, high = sorted([legs[0].strike or 0.0, legs[1].strike or 0.0])
-            spread_label = f"{low:g}/{high:g} {contract.call_or_put} vertical"
             debit, max_loss, breakeven = _vertical_numbers(contract, hedge)
+            width = abs(hedge.strike - contract.strike) * DEFAULT_CONTRACT_MULTIPLIER
+            if debit is not None and abs(debit) > width:
+                debit = max_loss = breakeven = None
+                hedge_strike = None
+            else:
+                legs = even_legs(
+                    2.0,
+                    [
+                        (snapshot.underlying, "buy", contract.strike, contract.expiry, contract.call_or_put),
+                        (snapshot.underlying, "sell", hedge.strike, hedge.expiry, hedge.call_or_put),
+                    ],
+                )
+                low, high = sorted([legs[0].strike or 0.0, legs[1].strike or 0.0])
+                spread_label = f"{low:g}/{high:g} {contract.call_or_put} vertical"
         confidence = 0.30 + 0.45 * (score / top_score if top_score > 0 else 0.0)
         if pct is not None and pct <= TIGHT_SPREAD_PCT:
             confidence += 0.10

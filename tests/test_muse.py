@@ -99,8 +99,8 @@ def test_registry_tools_answer(monkeypatch):
     monkeypatch.delenv("BASETEN_API_KEY", raising=False)
     monkeypatch.delenv("BASETEN_REASON_MODEL_ID", raising=False)
     assert set(TOOL_REGISTRY) == {
-        "get_gex_brief", "get_trade_cards", "get_trade_ideas",
-        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl",
+        "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
+        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session",
     }
     store = _seeded_store()
     journal = Journal()
@@ -114,6 +114,9 @@ def test_registry_tools_answer(monkeypatch):
     ideas = dispatch_tool("get_trade_ideas", {"query": "weekly trade ideas"}, store, journal, CONFIG, NOW, underlying="TEST")
     assert ideas.ok is True
     assert "trade ideas" in ideas.reply
+    wheel = dispatch_tool("get_wheel_ideas", {"query": "wheel ideas"}, store, journal, CONFIG, NOW, underlying="TEST")
+    assert wheel.ok is True
+    assert wheel.reply.startswith("wheel ideas")
     vex = dispatch_tool("get_vex_brief", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert vex.ok is True
     assert "VEX brief" in vex.reply
@@ -167,8 +170,8 @@ def test_route_mcp_tools_list_names_registry():
     assert response.status == 200
     body = _json_body(response)
     assert {tool["name"] for tool in body["tools"]} == {
-        "get_gex_brief", "get_trade_cards", "get_trade_ideas",
-        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl",
+        "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
+        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session",
     }
 
 

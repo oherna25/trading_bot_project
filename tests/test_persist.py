@@ -133,6 +133,14 @@ def test_scheduled_session_briefs_multiple_underlyings(tmp_path):
     assert store.list_underlyings() == ["QQQ", "SPY"]
 
 
+def test_scheduled_session_expands_to_stored_underlyings(tmp_path):
+    first = run_scheduled_session("SPY", str(tmp_path), NOW, context_factory=default_context)
+    assert "SPY GEX brief" in first
+    second = run_scheduled_session("QQQ", str(tmp_path), NOW, context_factory=default_context)
+    assert "QQQ GEX brief" in second
+    assert "SPY GEX brief" in second
+
+
 def test_scheduled_session_reports_failed_chains_and_still_persists(tmp_path):
     def exploding_factory(underlying):
         ctx = default_context(underlying)

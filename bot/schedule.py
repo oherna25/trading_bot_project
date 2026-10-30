@@ -23,8 +23,20 @@ def normalize_underlyings(underlying: str | Sequence[str]) -> list[str]:
     return ordered or ["SPY"]
 
 
-def run_scheduled_session(
+def tick_symbols(fixed: Sequence[str], store: SnapshotStore | None) -> list[str]:
+    """Requested symbols first, then every other underlying in the store."""
+    tick = list(fixed)
+    if store is not None:
+        for symbol in store.list_underlyings():
+            if symbol not in tick:
+                tick.append(symbol)
+    return tick or ["SPY"]
+
+
+def run_session_core(
     underlying: str | Sequence[str],
+    store: SnapshotStore,
+    journal: Journal,
     store_dir: str,
     now: datetime | None = None,
     chain_feeds: Sequence[str] | None = None,
@@ -34,9 +46,13 @@ def run_scheduled_session(
     grounding: bool = False,
     cards: bool = False,
 ) -> str:
+    """Ingest plus brief plus session journals against loaded state.
+
+    Shared by the standalone job and the in-app session drivers. Loads
+    nothing and saves nothing; the caller owns the bundle.
+    """
     moment = now or datetime.now(timezone.utc)
-    symbols = normalize_underlyings(underlying)
-    store, journal = load_bundle(store_dir)
+    symbols = tick_symbols(normalize_underlyings(underlying), store)
     replies = []
     failures = []
     for symbol in symbols:
@@ -60,15 +76,72 @@ def run_scheduled_session(
             failures.append(f"scheduled session failed for {symbol}: {exc}")
     if replies:
         journal.append(moment, "session_saved", {"underlyings": symbols, "store_dir": store_dir})
-    save_bundle(store_dir, store, journal)
     if failures and not replies:
         return "\n".join(failures)
     return "\n---\n".join(replies + failures)
 
 
+def run_scheduled_session(
+    underlying: str | Sequence[str],
+    store_dir: str,
+    now: datetime | None = None,
+    chain_feeds: Sequence[str] | None = None,
+    bar_feeds: Sequence[str] | None = None,
+    context_factory: Callable[[str], FeedContext] = live_context,
+    live_models: bool = False,
+    grounding: bool = False,
+    cards: bool = False,
+) -> str:
+    store, journal = load_bundle(store_dir)
+    text = run_session_core(
+        underlying,
+        store,
+        journal,
+        store_dir,
+        now,
+        chain_feeds,
+        bar_feeds,
+        context_factory,
+        live_models,
+        grounding,
+        cards,
+    )
+    save_bundle(store_dir, store, journal)
+    return text
+
+
 def session_store(underlying: str, store_dir: str) -> tuple[SnapshotStore, Journal]:
     del underlying
     return load_bundle(store_dir)
+
+
+def refresh_core(
+    underlying: str | Sequence[str],
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime | None = None,
+    chain_feeds: Sequence[str] | None = None,
+    bar_feeds: Sequence[str] | None = None,
+    context_factory: Callable[[str], FeedContext] = live_context,
+    store_dir: str = "",
+) -> dict[str, str | None]:
+    """Ingest-only refresh against passed-in state.
+
+    Appends ingest plus refresh_failed plus refreshed journals. Prunes
+    nothing and saves nothing; the caller owns the bundle.
+    """
+    moment = now or datetime.now(timezone.utc)
+    chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
+    bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
+    used: dict[str, str | None] = {}
+    for symbol in normalize_underlyings(underlying):
+        chain = ingest_first_working(chains, ingest_chain, symbol, store, journal, moment, context_factory)
+        ingest_first_working(bars, ingest_bars, symbol, store, journal, moment, context_factory)
+        if chain is None:
+            journal.append(moment, "refresh_failed", {"underlying": symbol})
+        used[symbol] = chain
+    journal.append(moment, "refreshed", {"underlyings": sorted(used), "store_dir": store_dir})
+    return used
 
 
 def refresh_store(
@@ -86,18 +159,10 @@ def refresh_store(
     The serving loop calls this on a timer so snapshots stay fresh between
     restarts. Prunes in-memory growth and persists the bundle every pass.
     """
-    moment = now or datetime.now(timezone.utc)
-    chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
-    bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
-    used: dict[str, str | None] = {}
-    for symbol in normalize_underlyings(underlying):
-        chain = ingest_first_working(chains, ingest_chain, symbol, store, journal, moment, context_factory)
-        ingest_first_working(bars, ingest_bars, symbol, store, journal, moment, context_factory)
-        if chain is None:
-            journal.append(moment, "refresh_failed", {"underlying": symbol})
-        used[symbol] = chain
+    used = refresh_core(
+        underlying, store, journal, now, chain_feeds, bar_feeds, context_factory, store_dir
+    )
     store.prune()
     journal.prune()
-    journal.append(moment, "refreshed", {"underlyings": sorted(used), "store_dir": store_dir})
     save_bundle(store_dir, store, journal)
     return used

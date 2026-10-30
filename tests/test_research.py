@@ -243,3 +243,27 @@ def test_trade_cards_output_carries_reason_text(monkeypatch):
     assert reply.startswith("trade cards (2):")
     assert "short via single" in reply
     assert "wall exposure" in reply
+
+
+def test_wheel_answers_beat_ideas_ordering():
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="TEST",
+            timestamp_utc=NOW,
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(
+                OptionContract(
+                    strike=95.0, expiry="2026-11-13", call_or_put="put", open_interest=500.0,
+                    delta=-0.20, bid=1.20, ask=1.30, iv=0.30,
+                ),
+            ),
+        )
+    )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
+                               open=99.0, high=101.0, low=98.0, close=100.0, volume=1000.0))
+    reply = route_chat("wheel ideas", "TEST", store, Journal(), CONFIG, NOW)
+    assert reply.startswith("wheel ideas (1):")
+    assert "SELL_PUT" in reply
+    assert "trade ideas (" not in reply

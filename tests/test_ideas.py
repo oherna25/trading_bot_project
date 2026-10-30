@@ -202,17 +202,38 @@ def test_rank_ideas_thesis_and_trigger_name_fields():
     assert ideas
     for idea in ideas:
         snapshot = store.read_snapshot(idea.snapshot_id)
-        contract = next(
-            c for c in snapshot.contracts_list
-            if (c.strike, c.expiry, c.call_or_put) == (idea.strike, idea.expiry, idea.call_or_put)
-        )
-        sign = 1.0 if contract.call_or_put == "call" else -1.0
-        exposure = sign * contract.gamma * contract.open_interest * 100.0
+        profile = compute_gex(snapshot, idea.snapshot_id)
+        wall = profile.per_strike_exposure[idea.strike]
         assert str(idea.strike) in idea.thesis
         assert idea.expiry in idea.thesis
-        assert f"{exposure:.1f}" in idea.thesis
+        assert f"{wall:.1f}" in idea.thesis
         assert "flip" in idea.trigger
         assert idea.thesis != idea.trigger
+
+
+def test_rank_ideas_uneconomic_vertical_falls_back_to_single():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=775.0, expiry="2026-11-20", call_or_put="put",
+                           open_interest=5000.0, gamma=0.05, price=2.50, bid=2.40, ask=2.60),
+            OptionContract(strike=774.0, expiry="2026-11-20", call_or_put="put",
+                           open_interest=4000.0, gamma=0.04, price=0.15, bid=0.10, ask=0.20),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    bar = Bar(interval="1d", timestamp_utc=NOW, open=770.0, high=776.0,
+              low=769.0, close=774.5, volume=1000.0)
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), bar)])
+    top = ideas[0]
+    assert top.spread == "single put 775.0"
+    assert top.hedge_strike is None
+    assert top.net_debit is None
+    assert top.max_loss is None
+    assert top.breakeven is None
 
 
 def test_rank_ideas_builds_defined_risk_vertical():

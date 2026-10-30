@@ -128,6 +128,30 @@ SHAPE ModelReceipt
   cost_usd
   latency_ms
 END SHAPE
+
+SHAPE PremiumCandidate
+  symbol
+  action
+  strike
+  expiry
+  dte
+  bid
+  ask
+  delta
+  iv
+  open_interest
+  premium_return
+  capital_at_risk
+  needs_shares
+  iv_rank
+  snapshot_id
+END SHAPE
+
+SHAPE PortfolioView
+  open_positions
+  open_symbols
+  peak_day_pnl
+END SHAPE
 ```
 
 ## Organizing structure
@@ -290,6 +314,38 @@ The review note is advisory only. The autonomy gate keeps its deterministic chec
 
 The reason key and model id select the reason backend. Baseten writes
 each card reason when both are set, else the offline fallback runs.
+
+## Wheel screening
+
+```
+FUNCTION screen_premium WITH entries
+  FOR EACH symbol IN entries
+    expiries = nearest 3 IN 7-30 dte, Fridays first
+    SKIP expiry WHEN earnings_map date spans it
+    FOR EACH contract ON expiries
+      DROP unless put_or_call AND oi_above_100 AND spread_ok
+      DROP unless delta 0.15-0.30 WITH sign matching side
+      DROP call WHEN no bar
+      DROP unless premium_over_capital_above_1pct
+    END FOR
+    DROP symbol survivors WHEN iv_rank_below_30 WITH 20-plus points
+  END FOR
+  SORT survivors BY premium_return DESCENDING WITH ties BY symbol strike expiry side
+  RETURN top 10 AND drop_counts BY stage
+END FUNCTION
+
+FUNCTION wheel_response WITH text
+  entries = latest snapshots FOR text symbols WITH bars, no gex profiles
+  candidates = screen_premium entries
+  RECORD per-symbol average candidate iv INTO store
+  journal APPEND event iv_recorded AND wheel_screened
+  RETURN format_wheel candidates
+END FUNCTION
+```
+
+Wheel output is research, so the profile gate never applies. Risk caps
+ride an optional PortfolioView: max positions, drawdown pause off the
+peak day PnL, and a per-sector cap over known tickers.
 
 ## Paper trading and risk
 

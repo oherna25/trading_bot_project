@@ -13,6 +13,7 @@ SNAPSHOTS_FILE = "snapshots.json"
 BARS_FILE = "bars.json"
 JOURNAL_FILE = "journal.json"
 PROFILE_FILE = "profile.json"
+IV_FILE = "iv.json"
 
 
 def _freeze(value: Any) -> Any:
@@ -164,6 +165,7 @@ def _read_json(path: str) -> Any:
 KEEP_SNAPSHOTS_PER_UNDERLYING = 500
 KEEP_BARS_PER_UNDERLYING = 500
 KEEP_JOURNAL_ENTRIES = 20000
+KEEP_IV_PER_SYMBOL = 600
 
 
 def save_bundle(
@@ -173,6 +175,7 @@ def save_bundle(
     keep_snapshots: int = KEEP_SNAPSHOTS_PER_UNDERLYING,
     keep_bars: int = KEEP_BARS_PER_UNDERLYING,
     keep_journal: int = KEEP_JOURNAL_ENTRIES,
+    keep_iv: int = KEEP_IV_PER_SYMBOL,
 ) -> None:
     os.makedirs(store_dir, exist_ok=True)
     counts: dict[str, int] = {}
@@ -205,6 +208,13 @@ def save_bundle(
         os.path.join(store_dir, PROFILE_FILE),
         _freeze_profile(profile) if profile is not None else None,
     )
+    _write_json(
+        os.path.join(store_dir, IV_FILE),
+        {
+            symbol: {day: days[day] for day in sorted(days)[-keep_iv:]}
+            for symbol, days in store.all_iv().items()
+        },
+    )
 
 
 def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
@@ -229,10 +239,18 @@ def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
         raw_profile = _read_json(profile_path)
         if raw_profile is not None:
             store.save_profile(_thaw_profile(raw_profile))
+    iv_path = os.path.join(store_dir, IV_FILE)
+    if os.path.exists(iv_path):
+        raw_iv = _read_json(iv_path)
+        if isinstance(raw_iv, dict):
+            for symbol, days in raw_iv.items():
+                if isinstance(days, dict):
+                    for day, value in days.items():
+                        store.save_iv(str(symbol), str(day), float(value))
     return store, journal
 
 
-BUNDLE_FILES = (SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE)
+BUNDLE_FILES = (SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE)
 
 
 def bundle_mtimes(store_dir: str) -> dict[str, float]:

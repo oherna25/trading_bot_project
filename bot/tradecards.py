@@ -245,6 +245,10 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
     return "\n".join(lines)
 
 
+def _rounded(value: Optional[float], places: int) -> Optional[float]:
+    return None if value is None else round(value, places)
+
+
 def cards_to_json(cards: Sequence[TradeCard]) -> dict:
     return {
         "cards": [
@@ -252,20 +256,20 @@ def cards_to_json(cards: Sequence[TradeCard]) -> dict:
                 "symbol": card.symbol,
                 "direction": card.direction,
                 "spread": card.spread,
-                "strike": card.strike,
+                "strike": _rounded(card.strike, 2),
                 "expiry": card.expiry,
                 "call_or_put": card.call_or_put,
-                "hedge_strike": card.hedge_strike,
-                "confidence": card.confidence,
+                "hedge_strike": _rounded(card.hedge_strike, 2),
+                "confidence": _rounded(card.confidence, 4),
                 "snapshot_id": card.snapshot_id,
-                "max_loss": card.max_loss,
-                "breakeven": card.breakeven,
-                "net_debit": card.net_debit,
-                "spread_pct": card.spread_pct,
-                "wall_exposure": card.wall_exposure,
+                "max_loss": _rounded(card.max_loss, 2),
+                "breakeven": _rounded(card.breakeven, 2),
+                "net_debit": _rounded(card.net_debit, 2),
+                "spread_pct": _rounded(card.spread_pct, 4),
+                "wall_exposure": _rounded(card.wall_exposure, 2),
                 "regime": card.regime,
-                "spot": card.spot,
-                "flip_point": card.flip_point,
+                "spot": _rounded(card.spot, 2),
+                "flip_point": _rounded(card.flip_point, 2),
                 "reason": card.reason,
                 "reason_source": card.reason_source,
             }

@@ -159,7 +159,8 @@ def test_main_passes_refresh_to_serve(monkeypatch, tmp_path):
     monkeypatch.setattr(run_app, "live_brief", lambda *args: "brief text")
     monkeypatch.setattr(run_app, "serve", fake_serve)
     run_app.main(["--underlying", "SPY,QQQ", "--store-dir", str(tmp_path), "--refresh-seconds", "60"])
-    assert seen == {"refresh_seconds": 60.0, "refresh_symbols": ["SPY", "QQQ"]}
+    assert seen == {"refresh_seconds": 60.0, "refresh_symbols": ["SPY", "QQQ"],
+                    "session_schedule": "", "session_underlyings": ["SPY", "QQQ"]}
 
 
 def test_materialize_file_secrets_prefers_real_env(monkeypatch, tmp_path):
