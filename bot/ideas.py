@@ -360,7 +360,9 @@ def rank_ideas(
         earnings_map = earnings or {}
         ref = now if now is not None else snapshot.timestamp_utc
         earnings_day = earnings_map.get(snapshot.underlying)
-        event_risk = earnings_day.isoformat() if spans_earnings(ref, contract.expiry, earnings_day) else None
+        event_risk = None
+        if earnings_day is not None and spans_earnings(ref, contract.expiry, earnings_day):
+            event_risk = earnings_day.isoformat()
         if event_risk is not None:
             confidence = max(EARNINGS_CONFIDENCE_FLOOR, confidence - EARNINGS_CONFIDENCE_HAIRCUT)
         ranked.append(
@@ -389,7 +391,7 @@ def rank_ideas(
     )
     histories = iv_history or {}
     rank_by_symbol = {symbol: _iv_rank(history) for symbol, history in histories.items()}
-    ideas = []
+    ideas: list[TradeIdea] = []
     per_direction: dict[str, int] = {}
     for row in ranked:
         (

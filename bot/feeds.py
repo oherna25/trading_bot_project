@@ -269,7 +269,7 @@ def _alpaca(ctx: FeedContext) -> dict[str, Any]:
     )
     node = payload.get("bars")
     rows = node.get(ctx.underlying, []) if isinstance(node, dict) else _as_list(node)
-    bars = [
+    bars: list[dict[str, Any]] = [
         {
             "timestamp": datetime.fromisoformat(str(row["t"]).replace("Z", "+00:00")),
             "open": float(row["o"]),
@@ -372,7 +372,7 @@ def _yfinance(ctx: FeedContext) -> dict[str, Any]:
     stamps = node.get("timestamp") or []
     quotes = _as_list((node.get("indicators") or {}).get("quote"))
     quote = quotes[0] if quotes else {}
-    bars = []
+    bars: list[dict[str, Any]] = []
     for stamp, o, h, low, c, v in zip(
         stamps,
         quote.get("open") or [],
@@ -418,7 +418,7 @@ def _alpha_vantage(ctx: FeedContext) -> dict[str, Any]:
             or "no daily series"
         )
         raise FeedUnavailableError(f"alpha vantage: {note}")
-    bars = []
+    bars: list[dict[str, Any]] = []
     for day, node in series.items():
         try:
             stamp = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
@@ -468,8 +468,11 @@ def fetch_alpaca_iv(ctx: FeedContext) -> dict[str, Any]:
     for snap in (snaps or {}).values():
         if not isinstance(snap, dict):
             continue
+        raw_iv = snap.get("impliedVolatility")
+        if raw_iv is None:
+            continue
         try:
-            value = float(snap.get("impliedVolatility"))
+            value = float(raw_iv)
         except (TypeError, ValueError):
             continue
         if value > 0:
@@ -501,8 +504,11 @@ def fetch_yahoo_iv(ctx: FeedContext) -> dict[str, Any]:
     for row in _as_list(leg.get("calls")) + _as_list(leg.get("puts")):
         if not isinstance(row, dict):
             continue
+        raw_iv = row.get("impliedVolatility")
+        if raw_iv is None:
+            continue
         try:
-            value = float(row.get("impliedVolatility"))
+            value = float(raw_iv)
         except (TypeError, ValueError):
             continue
         if value > 0:

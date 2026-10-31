@@ -77,7 +77,7 @@ def test_default_runner_needs_binary(tmp_path, monkeypatch):
 def _seeded_parts():
     from bot.exposure import compute_gex
     from bot.shapes import Bar, ChainSnapshot, OptionContract
-    from bot.store import SnapshotStore, snapshot_id_for
+    from bot.store import SnapshotStore
 
     store = SnapshotStore()
     snapshot = ChainSnapshot(

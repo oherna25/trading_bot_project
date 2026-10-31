@@ -39,7 +39,11 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/persist.py` | `save_bundle`, `load_bundle`: JSON snapshots plus bars plus journal plus profile plus IV plus holdings, retention caps, `refresh_bundle` for live reload |
 | `bot/schedule.py` | `run_scheduled_session`: multi-underlying ingest plus brief plus persist in one job; `refresh_store`: ingest-only timer refresh |
 | `bot/exposure.py` | `compute_gex` ($GEX per 1% move with spot, interpolated flip), `compute_vex`, `compute_dex` |
-| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, trade cards, VEX/DEX briefs, change alerts, `journal_tail_text`, `paper_pnl_text`, profile questionnaire, trade ideas, `advisory_review` |
+| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, trade cards, VEX/DEX briefs, change alerts, `journal_tail_text`, `paper_pnl_text`, profile questionnaire, trade ideas, `advisory_review` (facade over the four `research_*` libs below) |
+| `bot/research_analyst.py` | Spark, local, grounded, and advisory analyst backends |
+| `bot/research_formatters.py` | Brief and exposure formatting over engine profiles |
+| `bot/research_paper.py` | Paper trade execution and PnL reporting |
+| `bot/research_ingest.py` | Feed ingest helpers and option IV recording |
 | `bot/risk.py` | `build_intent`, `even_legs`, `review_intent` with profile gating, `submit_paper`, `paper_fill_price`, `realized_pnl`, halt/kill transitions |
 | `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch`, `reset_autonomy`, `submit_live` |
 | `bot/venue.py` | Tradier live venue: `occ_symbol`, equity, single-option, and combo orders, `LiveAck` |
@@ -71,7 +75,11 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/config.py` | Single dotenv plus environment reader, bearer token, profile-to-limits `operator_config` |
 | `bot/metareason.py` | Meta reason-model client: `generate_reason`, backend selection |
 | `bot/baseten.py` | Dormant Baseten client (`predict_url`, Inference API slugs) for later |
-| `bot/muse.py` | Muse chat transport: `parse_chat_payload`, `handle_chat`, `TOOL_REGISTRY`, `dispatch_tool`, `openapi_spec`, `route_http`, `create_server`, `serve` with timer refresh, open-server warning, drill `Harness` |
+| `bot/muse.py` | Muse chat transport: `parse_chat_payload`, `handle_chat`, `TOOL_REGISTRY`, `dispatch_tool`, `openapi_spec`, `route_http`, `create_server`, `serve` with timer refresh, open-server warning, drill `Harness` (facade over the four `muse_*` libs below) |
+| `bot/muse_tools.py` | MCP tool handlers plus `TOOL_REGISTRY` |
+| `bot/muse_chat.py` | Chat payload parsing, LLM routing, `dispatch_tool` |
+| `bot/muse_session.py` | Session trigger path, schedule parsing, `SessionController` |
+| `bot/muse_http.py` | HTTP primitives, `openapi_spec`, `route_http` |
 | `bot/video.py` | HyperFrames video brief: frozen scene model, timeline-free composition HTML, project writer, npx render shell, chat plus tool plus session wiring |
 
 ## Feeds
@@ -123,7 +131,7 @@ Python 3.11+. All commands run from the repo root. Create the venv and install t
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install pytest
+.venv/bin/pip install pytest ruff mypy
 ```
 
 ### Configuration
@@ -140,7 +148,7 @@ Fully offline, no network:
 make test
 ```
 
-Optional checks, using the configs in `pyproject.toml` (each skips when its tool is not installed):
+Lint and types, using the configs in `pyproject.toml` (both run in CI; each skips when its tool is not installed):
 
 ```bash
 make lint       # ruff check

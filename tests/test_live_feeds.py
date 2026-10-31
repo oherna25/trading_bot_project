@@ -650,7 +650,8 @@ def test_live_brief_without_paper_trade_journals_no_fill():
 
 
 def test_urllib_get_retries_transient_then_succeeds(monkeypatch):
-    import io, json as _json, urllib.error
+    import json as _json
+    import urllib.error
     from bot import feeds
     attempts = {"n": 0}
 

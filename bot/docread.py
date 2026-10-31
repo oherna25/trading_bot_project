@@ -42,7 +42,7 @@ def _clean_box(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     try:
-        box = {
+        box: dict[str, Any] = {
             "x": int(raw.get("x", 0)),
             "y": int(raw.get("y", 0)),
             "w": int(raw.get("w", 0)),

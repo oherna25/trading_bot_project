@@ -304,7 +304,7 @@ def narrated_alerts(
 
 
 def _providers(env: Mapping[str, str]) -> list[tuple[str, str, dict[str, str]]]:
-    providers = []
+    providers: list[tuple[str, str, dict[str, str]]] = []
     webhook = env.get(DISCORD_ENV, "")
     if webhook:
         providers.append(("discord", webhook, {}))

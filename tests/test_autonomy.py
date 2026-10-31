@@ -7,7 +7,7 @@ from bot.autonomy import LiveDisabledError, check_promotion, enable_live, kill_s
 from bot.journal import Journal
 from bot.risk import review_intent
 from bot.shapes import OrderIntent, PaperEvidence, RiskLimits, RiskState
-from bot.venue import LiveAck, LiveConfigError, TradierVenue
+from bot.venue import LiveConfigError
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 

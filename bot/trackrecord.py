@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote as _urlencode
 
-from bot.diff import compact_dollars, signed_dollars
+from bot.diff import signed_dollars
 from bot.journal import Journal
 from bot.store import SnapshotStore
 

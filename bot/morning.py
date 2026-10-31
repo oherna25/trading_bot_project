@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Mapping
 from zoneinfo import ZoneInfo
 
 from bot.alerts import collect_alerts, narrate_alert, push_text

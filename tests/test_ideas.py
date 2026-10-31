@@ -394,7 +394,8 @@ def test_rank_ideas_flags_earnings_and_iv_rank():
 def test_rank_ideas_haircuts_confidence_on_spanned_earnings():
     store = _seeded_store()
     entry = _entry(store, "TEST")
-    key = lambda i: (i.expiry, i.strike, i.call_or_put)
+    def key(i):
+        return (i.expiry, i.strike, i.call_or_put)
     plain = {key(i): i.confidence for i in rank_ideas([entry], now=NOW)}
     flagged = rank_ideas([entry], now=NOW, earnings={"TEST": date(2026, 11, 5)})
     assert flagged != []

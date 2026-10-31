@@ -13,7 +13,7 @@ from bot.shapes import (
 ONE_PERCENT_MOVE = 0.01
 
 _CACHE_LIMIT = 256
-_profile_cache: OrderedDict[tuple, object] = OrderedDict()
+_profile_cache: OrderedDict[tuple, tuple[tuple, object]] = OrderedDict()
 
 
 def _normalize_side(call_or_put: str) -> str | None:

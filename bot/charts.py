@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from bot.diff import compact_dollars
 from bot.exposure import compute_gex
@@ -174,8 +174,8 @@ def gamma_chart_html(
     )
 
 
-def board_rows(store: SnapshotStore) -> list[dict[str, object]]:
-    rows = []
+def board_rows(store: SnapshotStore) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for symbol in sorted(store.list_underlyings()):
         found = store.read_latest(symbol)
         if found is None:

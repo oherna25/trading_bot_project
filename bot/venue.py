@@ -131,8 +131,11 @@ class TradierVenue:
         status = str(node.get("status") or "")
         if status != "filled":
             raise LiveOrderError(f"order {order_id} not filled: {status or 'unknown'}; manage it manually")
+        raw_price = node.get("avg_fill_price")
+        if raw_price is None:
+            raise LiveOrderError(f"order {order_id} filled without a price")
         try:
-            fill_price = float(node.get("avg_fill_price"))
+            fill_price = float(raw_price)
         except (TypeError, ValueError):
             raise LiveOrderError(f"order {order_id} filled without a price") from None
         if fill_price <= 0:
@@ -173,6 +176,12 @@ class TradierVenue:
                 ) from None
             order_ids.append(ack.order_id)
             total_quantity += ack.quantity
+            if ack.fill_price is None:
+                filled = ", ".join(order_ids) if order_ids else "none"
+                raise LiveOrderError(
+                    f"combo leg {index + 1}/{len(specs)} ({side} {symbol}) filled without a price; "
+                    f"filled orders [{filled}] need manual management"
+                )
             net_premium += ack.fill_price if side == "buy" else -ack.fill_price
         return LiveAck(
             order_id="+".join(order_ids),

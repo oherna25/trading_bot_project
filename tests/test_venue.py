@@ -230,3 +230,16 @@ def test_submit_live_blocks_while_halted():
         submit_live(_intent(), _state(halt_active=True), None, LIMITS, journal, NOW, venue, 100.0)
     assert journal.entries()[-1].kind == "live_blocked"
     assert venue.calls == []
+
+
+def test_place_combo_without_leg_price_reports_filled_orders(monkeypatch):
+    venue = _combo_venue([(11, 2.5, "filled"), (12, 1.0, "filled")], [])
+    real = TradierVenue._place_and_verify
+
+    def priceless(self, **kwargs):
+        ack = real(self, **kwargs)
+        return LiveAck(order_id=ack.order_id, status=ack.status, fill_price=None, quantity=ack.quantity)
+
+    monkeypatch.setattr(TradierVenue, "_place_and_verify", priceless)
+    with pytest.raises(LiveOrderError, match=r"filled without a price.*filled orders \[11\]"):
+        venue.place_order(_combo_intent(), 2.5)

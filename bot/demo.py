@@ -13,10 +13,10 @@ from bot.replay import replay_report
 from bot.research import handle_chat_query
 from bot.shock import shock_text
 from bot.store import SnapshotStore, need_snapshot_text
-
-SHOCK_BUTTON_PCTS = (-2.0, -1.0, 1.0, 2.0)
 from bot.tradecards import PROFILE_REQUIRED, bar_at_or_before, build_trade_cards, format_sized_cards
 from bot.wheel import wheel_response
+
+SHOCK_BUTTON_PCTS = (-2.0, -1.0, 1.0, 2.0)
 
 
 def demo_cards(
@@ -102,7 +102,8 @@ def demo_html(underlying: str, store: SnapshotStore, journal: Journal, now: date
     wheel = wheel_response("wheel ideas", underlying, store, journal, now)
     replay_text, _, _ = replay_report(underlying, store)
     link = f"/card?underlying={_urlencode(underlying)}&snapshot={_urlencode(snapshot_id)}&index=0"
-    section = lambda title, body: f"<h2>{title}</h2><pre>{html.escape(body)}</pre>"
+    def section(title, body):
+        return f"<h2>{title}</h2><pre>{html.escape(body)}</pre>"
     if store.read_profile() is not None and cards:
         take = (
             "<form class=\"block\" method=\"post\" action=\"/action\">"

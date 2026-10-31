@@ -144,7 +144,6 @@ def test_scheduled_session_expands_to_stored_underlyings(tmp_path):
 
 def test_scheduled_session_reports_failed_chains_and_still_persists(tmp_path):
     def exploding_factory(underlying):
-        ctx = default_context(underlying)
         raise RuntimeError("feed down")
 
     reply = run_scheduled_session("TEST", str(tmp_path), NOW, context_factory=exploding_factory)

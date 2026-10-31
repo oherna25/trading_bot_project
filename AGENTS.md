@@ -10,11 +10,11 @@ a signed action.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install pytest
+.venv/bin/pip install pytest ruff mypy
 .venv/bin/python -m pytest tests/ -q
 ```
 
-CI runs `python -m pytest tests/ -q` on Python 3.11 and 3.12
+CI runs pytest plus `ruff check` plus `mypy` on Python 3.11 and 3.12
 (`.github/workflows/pytest.yml`). `make test` runs the same suite.
 
 ## Operating rules
@@ -43,10 +43,12 @@ market APIs -> feeds -> store -> exposure -> research -> risk -> paper venue
 | Feeds | `bot/feeds.py` | `FEED_REGISTRY`, `ingest_chain`, `ingest_bars`, `live_context` |
 | Store | `bot/store.py` | `SnapshotStore`, `read_latest`, `prune`, `restore` |
 | Exposure | `bot/exposure.py` | `compute_gex`, `compute_vex`, `compute_dex` |
-| Research | `bot/research.py` (~1200 lines) | `route_chat`, `handle_chat_query`, `live_brief`, `scheduled_brief` |
+| Research | `bot/research.py` (facade) | `route_chat`, `handle_chat_query`, `live_brief`, `scheduled_brief` |
+| Research libs | `bot/research_analyst.py`, `research_formatters.py`, `research_paper.py`, `research_ingest.py` | Analyst backends, brief formatting, paper trading, ingest |
 | Risk | `bot/risk.py` | `build_intent`, `review_intent`, `submit_paper` |
 | Autonomy | `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch` |
-| HTTP/MCP | `bot/muse.py` (~2100 lines) | `TOOL_REGISTRY`, `route_http`, `serve`, `Harness` |
+| HTTP/MCP | `bot/muse.py` (facade) | `TOOL_REGISTRY`, `route_http`, `serve`, `Harness` |
+| Muse libs | `bot/muse_tools.py`, `muse_chat.py`, `muse_session.py`, `muse_http.py` | Tool handlers, chat routing, sessions, HTTP routes |
 | Ideas/cards | `bot/ideas.py`, `bot/tradecards.py`, `bot/wheel.py` | `rank_ideas`, `query_trade_cards`, `screen_premium` |
 | Replay | `bot/replay.py` | `replay_week`, `paper_evidence_from_journal` |
 | Persist/job | `bot/persist.py`, `bot/schedule.py` | `save_bundle`, `load_bundle`, `run_scheduled_session` |

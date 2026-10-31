@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from bot.diff import compact_dollars
 from bot.exposure import compute_gex

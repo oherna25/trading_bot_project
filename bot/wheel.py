@@ -124,7 +124,7 @@ def screen_premium(
     for snapshot_id, snapshot, bar in entries:
         picked = {
             parsed.isoformat()
-            for raw in pick_expiries({c.expiry for c in snapshot.contracts_list}, ref)
+            for raw in pick_expiries(sorted({c.expiry for c in snapshot.contracts_list}), ref)
             if (parsed := expiry_of(raw)) is not None
         }
         spot = bar.close if bar is not None else None
@@ -163,6 +163,14 @@ def screen_premium(
             if ret is None or ret < WHEEL_MIN_PREMIUM_RETURN:
                 dropped["premium_return"] += 1
                 continue
+            if side == "put":
+                capital = contract.strike * 100.0
+            elif spot is not None:
+                capital = spot * 100.0
+            else:
+                dropped["no_bar"] += 1
+                continue
+            assert contract.bid is not None, "spread_ok requires a positive bid"
             symbol_hits.append(
                 PremiumCandidate(
                     symbol=snapshot.underlying,
@@ -176,7 +184,7 @@ def screen_premium(
                     iv=contract.iv,
                     open_interest=contract.open_interest,
                     premium_return=ret,
-                    capital_at_risk=contract.strike * 100.0 if side == "put" else spot * 100.0,
+                    capital_at_risk=capital,
                     needs_shares=side == "call",
                     iv_rank=None,
                     snapshot_id=snapshot_id,

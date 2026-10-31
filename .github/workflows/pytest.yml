@@ -15,5 +15,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
+      - run: pip install pytest ruff mypy
       - run: python -m pytest tests/ -q
+      - run: ruff check bot tests run_app.py run_session.py
+      - run: mypy bot run_app.py run_session.py
