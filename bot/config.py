@@ -9,8 +9,18 @@ from bot.shapes import OperatorConfig, OperatorProfile
 DOTENV_PATH = ".env"
 AUTH_TOKEN_ENV = "MUSE_AUTH_TOKEN"
 
+_dotenv_cache: dict[str, tuple[float, int, dict[str, str]]] = {}
+
 
 def read_dotenv(path: str = DOTENV_PATH) -> dict[str, str]:
+    try:
+        stat = os.stat(path)
+        stamp = (stat.st_mtime, stat.st_size)
+    except OSError:
+        return {}
+    cached = _dotenv_cache.get(path)
+    if cached is not None and cached[0] == stamp[0] and cached[1] == stamp[1]:
+        return dict(cached[2])
     values: dict[str, str] = {}
     try:
         with open(path) as handle:
@@ -25,6 +35,7 @@ def read_dotenv(path: str = DOTENV_PATH) -> dict[str, str]:
         key, value = key.strip(), value.strip().strip("'\"")
         if key and value:
             values.setdefault(key, value)
+    _dotenv_cache[path] = (stamp[0], stamp[1], dict(values))
     return values
 
 

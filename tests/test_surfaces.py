@@ -135,7 +135,7 @@ def test_tool_share_card_bad_index():
 def test_tool_narrated_alerts_empty_store():
     reply = dispatch_tool("get_narrated_alerts", {}, SnapshotStore(), Journal(), CONFIG, NOW,
                           underlying="TEST")
-    assert reply.ok and reply.reply == "alerts: none"
+    assert reply.ok and reply.reply.startswith("alerts (0) at 2026-10-27T14:30:00+00:00")
 
 
 def test_tool_tier_status():

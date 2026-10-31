@@ -9,12 +9,13 @@ from datetime import datetime
 from typing import Sequence
 
 from bot.charts import CALL_COLOR, PUT_COLOR, board_rows, gamma_svg
+from bot.diff import compact_dollars
 from bot.exposure import compute_gex
 from bot.ideas import cached_earnings, rank_ideas
 from bot.ivrank import histories_for
 from bot.journal import Journal
 from bot.research import paper_pnl_text
-from bot.store import SnapshotStore
+from bot.store import SnapshotStore, empty_store_text, need_snapshot_text
 
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
@@ -55,15 +56,7 @@ class RenderResult:
 
 
 def _money(value: float) -> str:
-    sign = "-" if value < 0 else ""
-    magnitude = abs(value)
-    if magnitude >= 1e9:
-        return f"{sign}${magnitude / 1e9:.1f}B"
-    if magnitude >= 1e6:
-        return f"{sign}${magnitude / 1e6:.0f}M"
-    if magnitude >= 1e3:
-        return f"{sign}${magnitude / 1e3:.0f}K"
-    return f"{sign}${magnitude:.0f}"
+    return compact_dollars(value)
 
 
 def _regime(symbol: str, store: SnapshotStore) -> str:
@@ -91,7 +84,7 @@ def _title_body(symbols: Sequence[str], store: SnapshotStore, now: datetime) -> 
 def _gamma_body(symbol: str, store: SnapshotStore) -> str:
     found = store.read_latest(symbol)
     if found is None:
-        return f"<p>no snapshot stored for {html.escape(symbol)}</p>"
+        return f"<p>{html.escape(need_snapshot_text(symbol, store))}</p>"
     snapshot_id, snapshot = found
     bar = store.read_latest_bar(symbol)
     spot = bar.close if bar is not None else None
@@ -114,7 +107,7 @@ def _gamma_body(symbol: str, store: SnapshotStore) -> str:
 def _board_body(store: SnapshotStore) -> str:
     rows = board_rows(store)
     if not rows:
-        return "<p>no snapshots stored</p>"
+        return f"<p>{html.escape(empty_store_text())}</p>"
     cells = [
         "<table><tr><th>symbol</th><th>regime</th><th>total gex</th><th>spot</th><th>flip</th></tr>"
     ]
@@ -236,10 +229,12 @@ def composition_html(brief: VideoBrief, *, storyboard: bool = False) -> str:
             "max-width:1920px;margin:0 auto;padding:48px}"
             ".clip{position:static;margin:0 0 32px}</style>"
         )
+    from bot.theme import BRAND
+
     return (
         "<!doctype html><html><head><meta charset=\"utf-8\">"
         f"<meta name=\"viewport\" content=\"width={VIDEO_WIDTH}, height={VIDEO_HEIGHT}\">"
-        f"<title>{html.escape(brief.composition_id)}</title><style>{style}</style>"
+        f"<title>{html.escape(brief.composition_id)} | {BRAND}</title><style>{style}</style>"
         f"{override}</head><body>"
         f"<div data-composition-id=\"{html.escape(brief.composition_id, quote=True)}\" "
         f"data-start=\"0\" data-width=\"{VIDEO_WIDTH}\" data-height=\"{VIDEO_HEIGHT}\" "

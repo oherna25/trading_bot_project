@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from bot.feeds import FEED_REGISTRY, ingest_chain
 from bot.journal import Journal
-from bot.replay import paper_evidence_from_journal, replay_response, replay_week
+from bot.replay import paper_evidence_from_journal, replay_report, replay_response, replay_week
 from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
@@ -120,6 +120,15 @@ def test_replay_response_feeds_pnl_without_touching_live_positions():
     assert "total replay pnl:" in paper_pnl_text(journal, store)
 
 
+def test_replay_report_lists_trade_log_and_day_span():
+    text, fills, _ = replay_report("TEST", _stored_week())
+    assert fills
+    for stamp, fill in fills:
+        assert f"{fill['side']} {fill['size']:g} TEST @ {fill['price']:.2f}" in text
+    assert "distinct days" in text
+    assert "only direction flips trade" in text
+
+
 def test_replay_holds_same_side_and_closes_on_flip():
     journal = replay_week(
         [_flippable_snapshot(0), _flippable_snapshot(1), _flippable_snapshot(2)],
@@ -139,7 +148,9 @@ def test_replay_response_needs_two_snapshots_and_bars():
     store = SnapshotStore()
     store.save(_flippable_snapshot(0))
     store.save(_flippable_snapshot(1))
-    assert replay_response("TEST", store, Journal(), DAY) == "replay TEST: needs stored bars"
+    assert replay_response("TEST", store, Journal(), DAY) == (
+        "replay TEST: needs stored bars -- say load TEST to fetch bars"
+    )
 
 
 def test_replay_tool_and_keyword_reach_replay():
@@ -155,3 +166,15 @@ def test_replay_tool_and_keyword_reach_replay():
     assert tool_reply.reply.startswith("replay TEST: 3 snapshots, ")
     chat = route_chat("replay the last squeeze day", "TEST", _stored_week(), Journal(), config, DAY)
     assert chat.startswith("replay TEST: 3 snapshots, ")
+
+
+def test_spy_benchmark_ignores_bars_outside_replay_window():
+    from bot.replay import _spy_benchmark
+    store = SnapshotStore()
+    store.save_bar("SPY", Bar(interval="1d", timestamp_utc=DAY - timedelta(days=30),
+                              open=100.0, high=101.0, low=99.0, close=100.0, volume=100.0))
+    store.save_bar("SPY", Bar(interval="1d", timestamp_utc=DAY + timedelta(days=30),
+                              open=200.0, high=201.0, low=199.0, close=200.0, volume=100.0))
+    line, payload = _spy_benchmark(store, DAY - timedelta(days=1), DAY + timedelta(days=1), [])
+    assert "n/a" in line
+    assert payload["spy_benchmark_pct"] is None

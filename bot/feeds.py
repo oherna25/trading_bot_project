@@ -4,6 +4,7 @@ import http.cookiejar
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -50,8 +51,20 @@ def _urllib_get(url: str, headers: dict[str, str] | None, params: dict[str, Any]
     query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v is not None})
     full_url = url + ("?" + query if query else "")
     request = urllib.request.Request(full_url, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            last_error = exc
+            if exc.code not in (429, 500, 502, 503, 504):
+                raise
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = exc
+        if attempt < 2:
+            time.sleep(0.25 * (2**attempt))
+    raise FeedUnavailableError(f"feed request failed after retries: {type(last_error).__name__}") from last_error
 
 
 def _canned_get(url: str, headers: dict[str, str] | None, params: dict[str, Any] | None, timeout: float) -> Any:

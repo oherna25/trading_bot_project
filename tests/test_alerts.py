@@ -35,10 +35,17 @@ def _seeded_store(close=100.0) -> SnapshotStore:
 
 
 def test_wall_proximity_fires_near_and_silent_far():
+    from bot.diff import compact_dollars
+    from bot.exposure import compute_gex
+
     journal = Journal()
-    alerts = wall_proximity_alerts("TEST", _seeded_store(close=100.2), journal, NOW)
+    store = _seeded_store(close=100.2)
+    alerts = wall_proximity_alerts("TEST", store, journal, NOW)
     assert len(alerts) == 1
     assert "0.2% from the 100 wall" in alerts[0]
+    snapshot_id, snapshot = store.read_latest("TEST")
+    profile = compute_gex(snapshot, snapshot_id, spot=100.2)
+    assert f"({compact_dollars(profile.per_strike_exposure[100.0])})" in alerts[0]
     assert journal.entries()[-1].kind == "alert"
     assert wall_proximity_alerts("TEST", _seeded_store(close=110.0), Journal(), NOW) == []
 
@@ -78,8 +85,31 @@ def test_push_alerts_failure_journals_without_raising():
         "TEST", _seeded_store(close=100.2), journal, NOW,
         {"DISCORD_WEBHOOK_URL": "https://discord.example/hook"}, failing,
     )
-    assert pushed != []
+    assert pushed == []
     assert journal.entries()[-1].kind == "alert_failed"
+
+
+def test_push_alerts_retries_only_the_failed_provider():
+    calls = []
+
+    attempts = {"telegram": 0}
+
+    def flaky(url, *args):
+        calls.append(url)
+        if "telegram" in url:
+            attempts["telegram"] += 1
+            if attempts["telegram"] == 1:
+                raise RuntimeError("down")
+
+    journal = Journal()
+    env = {"DISCORD_WEBHOOK_URL": "https://discord.example/hook",
+           "TELEGRAM_BOT_TOKEN": "tok-1", "TELEGRAM_CHAT_ID": "42"}
+    first = push_alerts("TEST", _seeded_store(close=100.2), journal, NOW, env, flaky)
+    assert first != []
+    calls.clear()
+    second = push_alerts("TEST", _seeded_store(close=100.2), journal, NOW, env, flaky)
+    assert second != []
+    assert calls == ["https://api.telegram.org/bottok-1/sendMessage"]
 
 
 def _growth_store(old_oi, new_oi, span_minutes=60, new_strikes=()) -> SnapshotStore:
@@ -160,6 +190,31 @@ def test_collect_alerts_pushes_wall_growth_once():
     assert len(pushed) == 1
     assert calls != []
     assert push_alerts("TEST", store, journal, NOW, dict(ENV), stub) == []
+
+
+def test_alerts_header_stamps_count_time_and_other_surface():
+    from bot.alerts import alerts_header
+
+    assert alerts_header(0, NOW, "/alerts") == (
+        f"alerts (0) at {NOW.isoformat()} -- same list as /alerts"
+    )
+    assert alerts_header(2, NOW, "the dashboard digest") == (
+        f"alerts (2) at {NOW.isoformat()} -- same list as the dashboard digest"
+    )
+
+
+def test_slash_and_dashboard_carry_same_alert_stamp():
+    from bot.alerts import collect_alerts
+    from bot.dashboard import dashboard_text
+    from bot.muse import dispatch_tool
+    from bot.config import OperatorConfig
+
+    config = OperatorConfig(max_day_loss=1000.0, day_profit_target=500.0, max_trade_size=5000.0)
+    expected = len(collect_alerts("TEST", _seeded_store(), Journal(), NOW))
+    slash = dispatch_tool("get_alerts", {}, _seeded_store(), Journal(), config, NOW, underlying="TEST")
+    dash = dashboard_text(_seeded_store(), Journal(), NOW)
+    assert f"alerts ({expected}) at {NOW.isoformat()}" in slash.reply
+    assert f"alerts ({expected}) at {NOW.isoformat()}" in dash
 
 
 def test_collect_alerts_includes_regime_flip():

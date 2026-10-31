@@ -202,7 +202,7 @@ def test_refresh_loop_tick_does_not_block_locked_reads(tmp_path):
     lock = threading.Lock()
 
     def slow_factory(symbol):
-        time.sleep(1.0)
+        time.sleep(0.3)
         return default_context(symbol)
 
     stop = threading.Event()

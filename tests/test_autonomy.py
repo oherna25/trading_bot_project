@@ -110,3 +110,12 @@ def test_kill_switch_halts_and_needs_operator_reset():
     assert not cleared.kill_active
     assert not cleared.halt_active
     assert review_intent(_intent(), cleared, LIMITS, journal, NOW) == "approved"
+
+
+def test_submit_live_risk_review_rejects_oversized_intent():
+    journal = Journal()
+    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    oversized = OrderIntent(symbol="TEST", side="buy", size=999999.0,
+                            risk_numbers={"size": 999999.0}, signal_id="sig-9")
+    with pytest.raises(LiveDisabledError):
+        submit_live(oversized, _state(), None, LIMITS, journal, NOW, venue=object(), reference_price=100.0)  # type: ignore[arg-type]

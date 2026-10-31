@@ -129,6 +129,9 @@ def test_info_explains_app_features():
         "voice:", "sessions:",
     ):
         assert feature in reply
+    assert "DISCORD_WEBHOOK_URL" in reply
+    assert "META_MODEL_API_KEY" in reply
+    assert "POST /session" in reply
 
 
 def test_profile_dispatch_reads_saved_profile():
@@ -142,10 +145,11 @@ def test_dashboard_dispatch_shows_header_and_board_line():
     assert "dashboard 2026-10-27" in reply
     assert "1 underlyings, 1 snapshots" in reply
     assert "TEST: short-gamma" in reply
+    assert "wall 100 -$104K" in reply
 
 
 def test_alerts_dispatch_reports_none_when_quiet():
-    assert _slash("/alerts") == "alerts: none"
+    assert _slash("/alerts").startswith("alerts (0) at 2026-10-27T14:30:00+00:00")
 
 
 def test_alerts_aggregates_every_underlying():
@@ -191,7 +195,7 @@ def test_holdings_dispatch_reads_book():
 def test_brief_dispatch_returns_gex_brief():
     reply = _slash("/brief")
     assert "GEX brief" in reply
-    assert "total exposure: $-104,040" in reply
+    assert "total exposure: -$104K" in reply
 
 
 def test_cards_dispatch_returns_trade_cards():
@@ -237,7 +241,10 @@ def test_pnl_dispatch_returns_paper_pnl():
 
 def test_tool_error_returns_failure_line():
     reply = _slash("/brief", _seeded_store(), underlying="MISSING")
-    assert reply == "/brief failed: no snapshot stored for MISSING"
+    assert reply == (
+        "/brief failed: no snapshot stored for MISSING (store has: TEST)"
+        " -- say load MISSING and I'll fetch it"
+    )
 
 
 def test_route_chat_slash_profile_beats_questionnaire_keyword():
@@ -300,7 +307,7 @@ def test_new_tools_dispatch_directly():
     assert "dashboard 2026-10-27" in dashboard.reply
     alerts = dispatch_tool("get_alerts", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert alerts.ok is True
-    assert alerts.reply == "alerts: none"
+    assert alerts.reply.startswith("alerts (0) at 2026-10-27T14:30:00+00:00")
     holdings = dispatch_tool("get_holdings", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert holdings.ok is True
     assert holdings.reply.startswith("holdings: none saved")

@@ -124,7 +124,10 @@ def build_intent(
         "risk_per_trade": state.risk_per_trade,
     }
     if max_loss_per_contract is not None and max_loss_per_contract > 0:
-        contracts = max(1, int(budget // max_loss_per_contract))
+        contracts = int(budget // max_loss_per_contract)
+        if contracts < 1:
+            journal.append(now, "intent_skipped", {"signal_id": signal_id, "reason": "risk budget below one contract max loss"})
+            return None
         size = contracts * max_loss_per_contract
         risk_numbers["max_loss_per_contract"] = max_loss_per_contract
         risk_numbers["contracts"] = float(contracts)
@@ -231,12 +234,19 @@ def update_position(
     position: Optional[Position], intent: OrderIntent, fill: Fill, mark_price: Optional[float] = None
 ) -> Position:
     signed = fill.size if intent.side == "buy" else -fill.size
-    if position is None:
+    if position is None or position.net_size == 0:
         average = fill.price
         net = signed
     else:
         net = position.net_size + signed
-        average = (position.average_price * position.net_size + fill.price * signed) / net if net != 0 else 0.0
+        if net == 0:
+            average = 0.0
+        elif (position.net_size > 0) == (signed > 0):
+            average = (position.average_price * position.net_size + fill.price * signed) / net
+        elif abs(signed) < abs(position.net_size):
+            average = position.average_price
+        else:
+            average = fill.price
     mark = mark_price if mark_price is not None else fill.price
     return Position(symbol=intent.symbol, net_size=net, average_price=average, unrealized_pnl=(mark - average) * net)
 

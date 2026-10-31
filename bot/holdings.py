@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime
 from typing import Any
@@ -7,7 +8,7 @@ from typing import Any
 from bot.diff import compact_dollars
 from bot.exposure import compute_gex
 from bot.shapes import GexProfile, Holding
-from bot.store import SnapshotStore
+from bot.store import SnapshotStore, need_snapshot_text
 
 KINDS = ("stock", "call", "put")
 SIDES = ("long", "short")
@@ -19,6 +20,12 @@ SPOKEN_HOLDING_RE = re.compile(
 )
 SPOKEN_SPLIT_RE = re.compile(r"\s+and\s+|\s*,\s*|\s+plus\s+", re.IGNORECASE)
 SPOKEN_HOLDINGS_USAGE = "say holdings like: long 100 SPY stock and short 2 SPY put 760"
+HOLDINGS_WRITE_RE = re.compile(r"\b(save|set|add|record|update|remember)\b", re.IGNORECASE)
+HOLDINGS_FORMAT = (
+    'holdings format: [{"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100}]'
+    ' (add "strike" plus "expiry" for options), a single object, {"positions": [...]},'
+    ' or plain words like "long 100 SPY stock"'
+)
 
 
 def parse_holdings(raw: Any) -> list[Holding]:
@@ -143,8 +150,7 @@ def save_spoken_holdings(transcript: str, store: SnapshotStore, journal: Any, no
     return "\n".join(lines)
 
 
-def save_holdings_text(raw: Any, store: SnapshotStore, journal: Any, now: datetime) -> str:
-    holdings = parse_holdings(raw)
+def _store_holdings(holdings: list, store: SnapshotStore, journal: Any, now: datetime) -> str:
     store.save_holdings(holdings)
     journal.append(now, "holdings_saved", {"count": len(holdings)})
     if not holdings:
@@ -154,16 +160,52 @@ def save_holdings_text(raw: Any, store: SnapshotStore, journal: Any, now: dateti
     return "\n".join(lines)
 
 
+def save_holdings_text(raw: Any, store: SnapshotStore, journal: Any, now: datetime) -> str:
+    return _store_holdings(parse_holdings(raw), store, journal, now)
+
+
+def normalize_holdings_input(raw: Any) -> list[dict]:
+    if isinstance(raw, str):
+        try:
+            return normalize_holdings_input(json.loads(raw))
+        except ValueError:
+            raise ValueError(f"could not parse holdings JSON -- {HOLDINGS_FORMAT}") from None
+    if isinstance(raw, dict):
+        for key in ("holdings", "positions"):
+            if isinstance(raw.get(key), (list, dict, str)):
+                return normalize_holdings_input(raw[key])
+        if "symbol" in raw or "kind" in raw:
+            return [raw]
+        if raw and all(isinstance(value, dict) for value in raw.values()):
+            return [{"symbol": key, **value} for key, value in raw.items()]
+        raise ValueError(HOLDINGS_FORMAT)
+    if isinstance(raw, list):
+        return raw
+    raise ValueError(HOLDINGS_FORMAT)
+
+
+def save_holdings_shapes(raw: Any, store: SnapshotStore, journal: Any, now: datetime) -> str:
+    try:
+        normalized = normalize_holdings_input(raw)
+        holdings = parse_holdings(normalized)
+    except ValueError as exc:
+        message = str(exc)
+        if HOLDINGS_FORMAT not in message:
+            message = f"{message} -- {HOLDINGS_FORMAT}"
+        raise ValueError(message) from None
+    return _store_holdings(holdings, store, journal, now)
+
+
 def holdings_text(store: SnapshotStore) -> str:
     holdings = store.read_holdings()
     if not holdings:
-        return "holdings: none saved (set them with the set_holdings tool)"
+        return "holdings: none saved -- chat 'save holding long 100 SPY stock' or call set_holdings"
     lines = ["your book vs current positioning:"]
     for holding in holdings:
         found = store.read_latest(holding.symbol)
         bar = store.read_latest_bar(holding.symbol)
         if found is None or bar is None:
-            lines.append(f"{describe_holding(holding)}: no snapshot stored")
+            lines.append(f"{describe_holding(holding)}: {need_snapshot_text(holding.symbol, store)}")
             continue
         snapshot_id, snapshot = found
         profile = compute_gex(snapshot, snapshot_id, spot=bar.close)

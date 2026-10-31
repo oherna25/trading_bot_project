@@ -245,3 +245,33 @@ class PortfolioView:
     open_positions: int = 0
     open_symbols: tuple[str, ...] = ()
     peak_day_pnl: Optional[float] = None
+
+
+THEME_CHOICES = ("dark", "light")
+MAX_REFRESH_SECONDS = 3600
+
+
+@dataclass(frozen=True)
+class DashboardSettings:
+    theme: str = "dark"
+    default_underlying: str = "SPY"
+    refresh_seconds: int = 60
+
+
+def dashboard_settings_from(raw: Any) -> DashboardSettings:
+    if not isinstance(raw, dict):
+        raise ValueError("settings must be an object with theme, default_underlying, refresh_seconds")
+    theme = str(raw.get("theme", "dark")).strip().lower()
+    if theme not in THEME_CHOICES:
+        raise ValueError(f"theme must be one of {', '.join(THEME_CHOICES)}; got {raw.get('theme')!r}")
+    underlying = str(raw.get("default_underlying", "SPY")).strip().upper()
+    if not underlying:
+        raise ValueError("default_underlying must be a non-empty ticker symbol")
+    refresh_raw = raw.get("refresh_seconds", 60)
+    try:
+        refresh = int(refresh_raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError(f"refresh_seconds must be an integer 0-{MAX_REFRESH_SECONDS}; got {refresh_raw!r}") from None
+    if isinstance(refresh_raw, bool) or not 0 <= refresh <= MAX_REFRESH_SECONDS:
+        raise ValueError(f"refresh_seconds must be an integer 0-{MAX_REFRESH_SECONDS}; got {refresh_raw!r}")
+    return DashboardSettings(theme=theme, default_underlying=underlying, refresh_seconds=refresh)

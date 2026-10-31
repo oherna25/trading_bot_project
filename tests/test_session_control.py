@@ -229,7 +229,7 @@ def test_session_run_does_not_block_locked_reads(tmp_path):
     journal = Journal()
 
     def slow_factory(symbol):
-        time.sleep(1.0)
+        time.sleep(0.3)
         return default_context(symbol)
 
     controller = SessionController(store, journal, str(tmp_path), threading.RLock(), slow_factory)

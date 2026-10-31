@@ -4,12 +4,16 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Optional, Sequence
 
+from bot.diff import compact_dollars, signed_dollars
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.research import analyst_tool, derive_display
 from bot.risk import build_intent, review_intent, submit_paper
 from bot.shapes import Bar, ChainSnapshot, OrderIntent, PaperEvidence, Position, RiskLimits, RiskState
 from bot.store import SnapshotStore, snapshot_id_for
+
+REPLAY_COMMISSION_DEFAULT = 0.0
+REPLAY_SLIPPAGE_BPS_DEFAULT = 0.0
 
 
 def _bar_at(bars: Sequence[Bar], moment: datetime) -> Optional[Bar]:
@@ -25,6 +29,8 @@ def replay_week(
     bars: Optional[Sequence[Bar]] = None,
     state: Optional[RiskState] = None,
     limits: Optional[RiskLimits] = None,
+    commission_per_fill: float = REPLAY_COMMISSION_DEFAULT,
+    slippage_bps: float = REPLAY_SLIPPAGE_BPS_DEFAULT,
 ) -> Journal:
     ordered = sorted(snapshot_list, key=lambda s: s.timestamp_utc)
     if bars is None:
@@ -74,7 +80,8 @@ def replay_week(
             if held == 0:
                 if review_intent(intent, active_state, active_limits, journal, stamp) == "approved":
                     _, position, active_state = submit_paper(
-                        intent, spot_bar.close, active_state, position, active_limits, journal, stamp
+                        intent, spot_bar.close, active_state, position, active_limits, journal, stamp,
+                        slippage_bps=slippage_bps, fees=commission_per_fill,
                     )
                     action = "open"
                 else:
@@ -98,7 +105,8 @@ def replay_week(
                 )
                 if review_intent(close, active_state, active_limits, journal, stamp) == "approved":
                     _, position, active_state = submit_paper(
-                        close, spot_bar.close, active_state, position, active_limits, journal, stamp
+                        close, spot_bar.close, active_state, position, active_limits, journal, stamp,
+                        slippage_bps=slippage_bps, fees=commission_per_fill,
                     )
                     action = "close"
                 else:
@@ -116,11 +124,65 @@ def replay_week(
     return journal
 
 
+def _slippage_total(fills: list[tuple[datetime, dict]]) -> float:
+    total = 0.0
+    for _, fill in fills:
+        mark = fill.get("mark_price")
+        price = fill.get("price")
+        size = fill.get("size")
+        if mark is None or price is None or size is None:
+            continue
+        total += abs(float(price) - float(mark)) * abs(float(size))
+    return total
+
+
+def _spy_benchmark(
+    store: SnapshotStore,
+    first_ts: datetime,
+    last_ts: datetime,
+    fills: list[tuple[datetime, dict]],
+) -> tuple[str, dict]:
+    spy_bars = store.read_bars("SPY")
+    if len(spy_bars) < 2:
+        return (
+            "buy-and-hold SPY benchmark n/a (no stored SPY bars)"
+            " -- next: say load SPY to fetch bars",
+            {"spy_benchmark_pnl": None, "spy_benchmark_pct": None, "spy_benchmark_shares": 0.0},
+        )
+    in_span = [bar for bar in spy_bars if first_ts <= bar.timestamp_utc <= last_ts]
+    if len(in_span) < 2:
+        return (
+            "buy-and-hold SPY benchmark n/a (fewer than 2 SPY bars inside the replay window)"
+            " -- next: say load SPY to fetch bars",
+            {"spy_benchmark_pnl": None, "spy_benchmark_pct": None, "spy_benchmark_shares": 0.0},
+        )
+    first, last = in_span[0], in_span[-1]
+    if fills:
+        notional = abs(float(fills[0][1]["size"])) * float(fills[0][1]["price"])
+        shares = notional / first.close if first.close else 0.0
+    else:
+        shares = 100.0
+    pnl = (last.close - first.close) * shares
+    pct = (last.close - first.close) / first.close * 100.0 if first.close else 0.0
+    line = (
+        f"buy-and-hold SPY benchmark {signed_dollars(pnl)} ({pct:+.1f}%) over "
+        f"{first.timestamp_utc.date().isoformat()} to {last.timestamp_utc.date().isoformat()} "
+        f"({shares:g} shares, {first.close:.2f} to {last.close:.2f})"
+    )
+    return line, {
+        "spy_benchmark_pnl": pnl,
+        "spy_benchmark_pct": pct,
+        "spy_benchmark_shares": shares,
+    }
+
+
 def replay_report(
     underlying: str,
     store: SnapshotStore,
     clean_days_target: int = 10,
     drawdown_bound: float = 500.0,
+    commission_per_fill: float = REPLAY_COMMISSION_DEFAULT,
+    slippage_bps: float = REPLAY_SLIPPAGE_BPS_DEFAULT,
 ) -> tuple[str, list[tuple[datetime, dict]], dict]:
     snaps = [
         (snapshot_id, snapshot)
@@ -128,12 +190,20 @@ def replay_report(
         if snapshot.underlying == underlying
     ]
     if len(snaps) < 2:
-        return f"replay {underlying}: needs at least 2 stored snapshots (has {len(snaps)})", [], {}
+        return (
+            f"replay {underlying}: needs at least 2 stored snapshots (has {len(snaps)})"
+            f" -- say load {underlying} to fetch more",
+            [],
+            {},
+        )
     bars = store.read_bars(underlying)
     if not bars:
-        return f"replay {underlying}: needs stored bars", [], {}
+        return f"replay {underlying}: needs stored bars -- say load {underlying} to fetch bars", [], {}
     scratch = Journal()
-    replay_week([snapshot for _, snapshot in snaps], scratch, bars=bars)
+    replay_week(
+        [snapshot for _, snapshot in snaps], scratch, bars=bars,
+        commission_per_fill=commission_per_fill, slippage_bps=slippage_bps,
+    )
     evidence = paper_evidence_from_journal(scratch, clean_days_target, drawdown_bound)
     fills = [
         (entry.timestamp_utc, {**entry.payload, "venue": "replay"})
@@ -142,6 +212,12 @@ def replay_report(
     ]
     steps = [entry for entry in scratch.entries() if entry.kind == "backtest_step"]
     last_pnl = float(steps[-1].payload.get("day_pnl", 0.0)) if steps else 0.0
+    commission_total = len(fills) * commission_per_fill
+    slip_total = _slippage_total(fills)
+    total_costs = commission_total + slip_total
+    first_ts = min(snapshot.timestamp_utc for _, snapshot in snaps)
+    last_ts = max(snapshot.timestamp_utc for _, snapshot in snaps)
+    benchmark_line, benchmark = _spy_benchmark(store, first_ts, last_ts, fills)
     summary = {
         "underlying": underlying,
         "snapshots": len(snaps),
@@ -149,14 +225,40 @@ def replay_report(
         "day_pnl": last_pnl,
         "clean_days": evidence.clean_days,
         "max_drawdown": evidence.max_drawdown,
+        "commission_per_fill": commission_per_fill,
+        "slippage_bps": slippage_bps,
+        "commission_total": commission_total,
+        "slippage_total": slip_total,
+        "total_costs": total_costs,
+        **benchmark,
     }
-    text = (
+    days = sorted({entry.timestamp_utc.date().isoformat() for entry in scratch.entries()})
+    lines = [
         f"replay {underlying}: {len(snaps)} snapshots, {len(fills)} fill{'s' if len(fills) != 1 else ''}, "
-        f"day pnl {last_pnl:+.2f}\n"
+        f"day pnl {signed_dollars(last_pnl)}",
+        f"{benchmark_line} vs strategy {signed_dollars(last_pnl)}",
+        f"costs: {compact_dollars(total_costs)} total "
+        f"({compact_dollars(commission_total)} commission, {len(fills)} fills x "
+        f"{compact_dollars(commission_per_fill)}/fill, plus {compact_dollars(slip_total)} "
+        f"slippage @ {slippage_bps:g} bps; defaults: commission "
+        f"{compact_dollars(REPLAY_COMMISSION_DEFAULT)} per fill, slippage "
+        f"{REPLAY_SLIPPAGE_BPS_DEFAULT:g} bps)",
         f"clean days {evidence.clean_days}/{evidence.clean_days_target}, "
-        f"max drawdown {evidence.max_drawdown:.2f} (bound {evidence.drawdown_bound:.2f})"
-    )
-    return text, fills, summary
+        f"max drawdown {compact_dollars(evidence.max_drawdown)} "
+        f"(bound {compact_dollars(evidence.drawdown_bound)})",
+        f"span {days[0]} to {days[-1]} ({len(days)} distinct days; clean target counts distinct days)",
+    ]
+    if fills:
+        lines.append("trade log:")
+        for stamp, fill in fills:
+            lines.append(
+                f"  fill {stamp:%m-%d %H:%M}: {fill['side']} {fill['size']:g} "
+                f"{fill['symbol']} @ {fill['price']:.2f}"
+            )
+    else:
+        lines.append("trade log: no fills (no direction flip in span)")
+    lines.append("replay holds same-side signals and only direction flips trade, so trends yield few fills")
+    return "\n".join(lines), fills, summary
 
 
 def replay_response(
@@ -166,8 +268,13 @@ def replay_response(
     now: datetime,
     clean_days_target: int = 10,
     drawdown_bound: float = 500.0,
+    commission_per_fill: float = REPLAY_COMMISSION_DEFAULT,
+    slippage_bps: float = REPLAY_SLIPPAGE_BPS_DEFAULT,
 ) -> str:
-    text, fills, summary = replay_report(underlying, store, clean_days_target, drawdown_bound)
+    text, fills, summary = replay_report(
+        underlying, store, clean_days_target, drawdown_bound,
+        commission_per_fill, slippage_bps,
+    )
     if not summary:
         return text
     for stamp, payload in fills:

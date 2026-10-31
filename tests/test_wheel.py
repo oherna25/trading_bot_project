@@ -195,7 +195,7 @@ def test_wheel_response_formats_header_and_call_shares_note():
     assert "SELL_PUT strike 95" in reply
     assert "SELL_CALL strike 105" in reply
     assert "return 1.26%" in reply
-    assert "capital $9,500" in reply
+    assert "capital $10K" in reply
     assert "dte 17" in reply
     assert "delta -0.20" in reply
     assert "needs 100 shares" in reply
@@ -228,9 +228,35 @@ def test_wheel_response_empty_reports_none_found():
 def test_wheel_response_unknown_symbol_matches_ideas_error_shape():
     store = SnapshotStore()
     store.save(_snapshot("TEST", _contract(95.0, FRIDAY, "put")))
-    with pytest.raises(ValueError, match=r"no snapshot stored for QQQ \(store has: TEST\); ingest it first"):
+    with pytest.raises(ValueError, match=r"no snapshot stored for QQQ \(store has: TEST\) -- say load QQQ"):
         wheel_response("wheel ideas for QQQ", "TEST", store, Journal(), NOW)
 
 
 def test_format_wheel_empty_reports_none_found():
     assert format_wheel([]) == "wheel ideas: none found"
+
+
+def test_wheel_response_marks_covered_calls_from_holdings():
+    from bot.shapes import Holding
+
+    store = _wheel_store()
+    store.save_holdings([Holding(symbol="TEST", kind="stock", side="long", qty=130.0)])
+    reply = wheel_response("wheel ideas", "TEST", store, Journal(), NOW)
+    assert "you hold 130 TEST" in reply
+    assert "covered by your 130 shares" in reply
+    assert "needs 100 shares" not in reply
+
+
+def test_wheel_response_notes_short_share_count():
+    from bot.shapes import Holding
+
+    store = _wheel_store()
+    store.save_holdings([Holding(symbol="TEST", kind="stock", side="long", qty=40.0)])
+    reply = wheel_response("wheel ideas", "TEST", store, Journal(), NOW)
+    assert "needs 100 shares (you hold 40)" in reply
+
+
+def test_wheel_response_adds_plain_english_so_what():
+    reply = wheel_response("wheel ideas", "TEST", _wheel_store(), Journal(), NOW)
+    assert "so what:" in reply
+    assert "stays above 95" in reply or "stays below 105" in reply

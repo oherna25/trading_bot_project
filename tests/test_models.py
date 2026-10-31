@@ -248,7 +248,7 @@ def test_live_brief_numbers_match_offline_numbers():
     live_journal = Journal()
     live_reply, live_signal = handle_chat_query("brief", "TEST", _seeded_store(), live_journal, NOW,
                                                 live_models=True, env=FULL_ENV, http_post=live_post)
-    for line in ("total exposure: $-104,040", "walls: 100 $-104,040"):
+    for line in ("total exposure: -$104K", "walls: 100 -$104K"):
         assert line in offline_reply
         assert line in live_reply
     assert live_signal.thesis == "Model thesis."

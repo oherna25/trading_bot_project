@@ -247,3 +247,19 @@ def test_backfill_chat_keyword_and_tool():
     tool_reply = dispatch_tool("backfill_iv", {}, store, Journal(), stub_config, NOW, underlying="TEST")
     assert tool_reply.ok
     assert "no new samples" in tool_reply.reply
+
+
+def test_backfill_never_uses_a_future_bar():
+    store = SnapshotStore()
+    store.save(ChainSnapshot(
+        underlying="TEST", timestamp_utc=NOW, source_name="t", latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=500.0, gamma=0.05, price=2.50, bid=2.40, ask=2.60),
+        ),
+    ))
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW + timedelta(days=10),
+                               open=100.0, high=101.0, low=99.0, close=100.0, volume=100.0))
+    reply = backfill_iv_history(store, Journal(), NOW)
+    assert "no new samples" in reply
+    assert store.read_iv_history("TEST") == {}

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable, Sequence
 
 from bot.alerts import push_alerts
+from bot.customalerts import evaluate_alert_rules
 from bot.feeds import BAR_FEEDS, CHAIN_FEEDS, FeedContext, FeedUnavailableError, ingest_bars, ingest_chain, live_context
 from bot.ivrank import backfill_iv_history
 from bot.journal import Journal
@@ -84,6 +85,11 @@ def run_session_core(
         journal.append(moment, "session_saved", {"underlyings": symbols, "store_dir": store_dir})
     if failures and not replies:
         return "\n".join(failures)
+    from bot.morning import maybe_send_open_brief
+
+    morning = maybe_send_open_brief(store, journal, moment, live_models=live_models)
+    if morning is not None:
+        replies.append(morning)
     return "\n---\n".join(replies + failures)
 
 
@@ -160,6 +166,7 @@ def refresh_core(
             ingest_first_working(("finnhub",), ingest_bars, symbol, store, journal, moment, context_factory)
         if chain is None:
             journal.append(moment, "refresh_failed", {"underlying": symbol})
+        evaluate_alert_rules(store, journal, moment, symbol)
         used[symbol] = chain
     backfill_iv_history(store, journal, moment)
     journal.append(moment, "refreshed", {"underlyings": sorted(used), "store_dir": store_dir})

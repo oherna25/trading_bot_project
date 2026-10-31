@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.request
 from datetime import datetime
 from typing import Any, Mapping
 
 from bot.config import read_dotenv as _read_dotenv
+from bot.customalerts import evaluate_alert_rules
+from bot.diff import compact_dollars
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.localmodels import LocalRunner, local_available, run_local
@@ -75,7 +78,7 @@ def wall_proximity_alerts(
     distance_pct = abs(spot - strike) / spot * 100.0
     if distance_pct > WALL_PROXIMITY_PCT:
         return []
-    text = f"ALERT: {underlying} is {distance_pct:.1f}% from the {strike:g} wall (${wall:,.0f})"
+    text = f"ALERT: {underlying} is {distance_pct:.1f}% from the {strike:g} wall ({compact_dollars(wall)})"
     journal.append(now, "alert", {"underlying": underlying, "text": text})
     return [text]
 
@@ -124,11 +127,16 @@ def wall_growth_alerts(
     return alerts
 
 
+def alerts_header(count: int, now: datetime, other: str) -> str:
+    return f"alerts ({count}) at {now.isoformat()} -- same list as {other}"
+
+
 def collect_alerts(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> list[str]:
     return (
         change_alerts(underlying, store, journal, now)
         + wall_proximity_alerts(underlying, store, journal, now)
         + wall_growth_alerts(underlying, store, journal, now)
+        + evaluate_alert_rules(store, journal, now, underlying)
     )
 
 
@@ -199,15 +207,23 @@ def narrate_alert(
     return narration, model_id
 
 
-def alert_noise(text: str, journal: Journal, now: datetime) -> str | None:
+def alert_fingerprint(text: str) -> str:
+    return " ".join(re.sub(r"\d+(?:\.\d+)?", "#", text.lower()).split())
+
+
+def alert_noise(
+    text: str, journal: Journal, now: datetime, underlying: str | None = None
+) -> str | None:
     if "stale" not in text.lower():
         return None
+    fingerprint = alert_fingerprint(text)
     seen = [
         entry
         for entry in journal.entries()
         if entry.kind == "alert"
-        and entry.payload.get("text") == text
         and entry.timestamp_utc.date() == now.date()
+        and alert_fingerprint(str(entry.payload.get("text", ""))) == fingerprint
+        and (underlying is None or entry.payload.get("underlying") in (None, underlying))
     ]
     if len(seen) > 1:
         return "repeat stale alert today"
@@ -245,7 +261,7 @@ def filter_noise(
 ) -> list[str]:
     kept = []
     for text in alerts:
-        reason = alert_noise(text, journal, now)
+        reason = alert_noise(text, journal, now, underlying)
         if reason is not None:
             journal.append(
                 now, "alert_dropped", {"underlying": underlying, "text": text, "reason": reason}
@@ -305,6 +321,34 @@ def _payload(provider: str, text: str, env: Mapping[str, str]) -> dict[str, Any]
     return {"content": text}
 
 
+def push_text(
+    text: str,
+    journal: Journal,
+    now: datetime,
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
+    kind: str = "text_sent",
+    extra: dict[str, Any] | None = None,
+) -> list[str]:
+    values = _read_alert_env(env)
+    providers = _providers(values)
+    if not providers:
+        return []
+    post = http_post or _post_json
+    pushed = []
+    for name, url, headers in providers:
+        try:
+            post(url, headers, _payload(name, text, values), ALERT_TIMEOUT_SECONDS)
+        except Exception as exc:
+            journal.append(
+                now, "alert_failed", {"provider": name, "reason": type(exc).__name__}
+            )
+            continue
+        journal.append(now, kind, {"provider": name, **(extra or {})})
+        pushed.append(f"{name}: {text[:80]}")
+    return pushed
+
+
 def push_alerts(
     underlying: str,
     store: SnapshotStore,
@@ -326,21 +370,24 @@ def push_alerts(
         return []
     post = http_post or _post_json
     sent_before = {
-        (entry.payload.get("underlying"), entry.payload.get("text"))
+        (entry.payload.get("underlying"), entry.payload.get("provider"), alert_fingerprint(str(entry.payload.get("text", ""))))
         for entry in journal.entries()
         if entry.kind == "alert_sent"
+        and entry.timestamp_utc.date() == now.date()
     }
     pushed = []
     for text in alerts:
-        if (underlying, text) in sent_before:
-            continue
+        fingerprint = alert_fingerprint(text)
         send_text = text
         if narrate:
             narration, source = narrate_alert(
                 text, underlying, journal, now, live_models, env, http_post, local_runner
             )
             send_text = f"{text}\nwhy: {narration} [{source}]"
+        newly_delivered = False
         for name, url, headers in providers:
+            if (underlying, name, fingerprint) in sent_before:
+                continue
             try:
                 post(url, headers, _payload(name, send_text, values), ALERT_TIMEOUT_SECONDS)
             except Exception as exc:
@@ -349,5 +396,8 @@ def push_alerts(
                 )
                 continue
             journal.append(now, "alert_sent", {"underlying": underlying, "text": text, "provider": name})
-        pushed.append(send_text)
+            sent_before.add((underlying, name, fingerprint))
+            newly_delivered = True
+        if newly_delivered:
+            pushed.append(send_text)
     return pushed

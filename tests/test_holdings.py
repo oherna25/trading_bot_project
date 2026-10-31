@@ -2,8 +2,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from bot.holdings import holdings_text, parse_holdings, save_holdings_text
+from bot.holdings import holdings_text, parse_holdings, save_holdings_shapes, save_holdings_text
 from bot.journal import Journal
+from bot.research import route_chat
 from bot.shapes import Bar, ChainSnapshot, OptionContract, default_operator_config
 from bot.store import SnapshotStore
 
@@ -112,3 +113,43 @@ def test_holdings_persist_round_trip(tmp_path):
     assert loaded.read_holdings() == store.read_holdings()
     assert (tmp_path / HOLDINGS_FILE).exists()
     assert "SHORT 1 TEST put 105" in holdings_text(loaded)
+
+
+def test_save_holdings_shapes_accept_string_dict_list_positions():
+    cases = [
+        '[{"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100}]',
+        {"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100},
+        [{"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100}],
+        {"positions": [{"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100}]},
+        {"holdings": [{"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100}]},
+        {"SPY": {"kind": "stock", "side": "long", "qty": 100}},
+    ]
+    for raw in cases:
+        store, journal = SnapshotStore(), Journal()
+        reply = save_holdings_shapes(raw, store, journal, NOW)
+        assert "saved 1 holding" in reply
+        assert store.read_holdings()[0].symbol == "SPY"
+
+
+def test_save_holdings_shapes_rejects_loudly_with_format():
+    for raw in (42, {"foo": 1}, "not json", [{"kind": "stock"}], None):
+        with pytest.raises(ValueError, match="holdings format"):
+            save_holdings_shapes(raw, SnapshotStore(), Journal(), NOW)
+
+
+def test_chat_save_holding_plain_english():
+    store, journal = SnapshotStore(), Journal()
+    reply = route_chat("save holding long 100 SPY stock", "TEST", store, journal, CONFIG, NOW)
+    assert "saved 1 holding" in reply
+    assert store.read_holdings()[0].qty == 100.0
+
+
+def test_chat_save_holding_garbage_shows_format():
+    reply = route_chat("save holding xyz", "TEST", SnapshotStore(), Journal(), CONFIG, NOW)
+    assert "holdings format" in reply
+
+
+def test_chat_read_intent_still_reads():
+    for text in ("show my holdings", "holdings", "my book"):
+        reply = route_chat(text, "TEST", SnapshotStore(), Journal(), CONFIG, NOW)
+        assert reply == "holdings: none saved -- chat 'save holding long 100 SPY stock' or call set_holdings"

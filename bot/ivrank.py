@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import bisect
 import math
 from datetime import datetime
 from typing import Mapping, Sequence
@@ -65,12 +66,14 @@ def implied_volatility(
         return None
     if _bs_price(spot, strike, years, high, call_or_put, rate) < mid:
         return None
-    for _ in range(200):
+    for _ in range(60):
         guess = (low + high) / 2.0
         if _bs_price(spot, strike, years, guess, call_or_put, rate) < mid:
             low = guess
         else:
             high = guess
+        if high - low < 1e-7:
+            break
     vol = (low + high) / 2.0
     if abs(_bs_price(spot, strike, years, vol, call_or_put, rate) - mid) > 1e-6 * max(1.0, mid):
         return None
@@ -128,15 +131,18 @@ def backfill_iv_history(store, journal, now) -> str:
     skipped = 0
     without_iv = 0
     filled_symbols = 0
+    snapshots_by_symbol: dict[str, list] = {}
+    for _, snapshot in store.snapshots_in_order():
+        snapshots_by_symbol.setdefault(snapshot.underlying, []).append(snapshot)
     for symbol in sorted(store.list_underlyings()):
         history = store.read_iv_history(symbol)
+        bars = store.read_bars(symbol)
+        bar_times = [bar.timestamp_utc for bar in bars]
         samples = 0
         inverted = 0
         first = None
         last = None
-        for _, snapshot in store.snapshots_in_order():
-            if snapshot.underlying != symbol:
-                continue
+        for snapshot in snapshots_by_symbol.get(symbol, []):
             key = snapshot.timestamp_utc.isoformat()
             if key in history:
                 skipped += 1
@@ -145,9 +151,8 @@ def backfill_iv_history(store, journal, now) -> str:
             if ivs:
                 average = sum(ivs) / len(ivs)
             else:
-                bars = store.read_bars(symbol)
-                eligible = [b for b in bars if b.timestamp_utc <= snapshot.timestamp_utc]
-                bar = eligible[-1] if eligible else (bars[-1] if bars else None)
+                bar_index = bisect.bisect_right(bar_times, snapshot.timestamp_utc) - 1
+                bar = bars[bar_index] if bar_index >= 0 else None
                 if bar is None:
                     without_iv += 1
                     continue

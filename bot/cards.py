@@ -6,6 +6,7 @@ import html
 from datetime import datetime
 from typing import Any, Mapping
 
+from bot.diff import compact_dollars
 from bot.journal import Journal
 from bot.models import (
     MODEL_REGISTRY,
@@ -16,8 +17,8 @@ from bot.models import (
     receipt_payload,
     select_backend,
 )
-from bot.shapes import ChainSnapshot, GexProfile, ModelReceipt, Signal
-from bot.store import SnapshotStore
+from bot.shapes import ChainSnapshot, DashboardSettings, GexProfile, ModelReceipt, Signal
+from bot.store import SnapshotStore, need_snapshot_text
 from bot.tradecards import PROFILE_REQUIRED, TradeCard
 
 SHARE_CACHE_MAX = 100
@@ -68,12 +69,14 @@ def share_numbers(card: TradeCard) -> dict[str, Any]:
 
 def _money(value: Any) -> str:
     try:
-        return f"${float(value):,.0f}"
+        return compact_dollars(float(value))
     except (TypeError, ValueError):
         return "n/a"
 
 
 def share_text(card: TradeCard, art_hash: str | None = None) -> str:
+    from bot.theme import BRAND
+
     wall = _money(card.wall_exposure) if card.wall_exposure is not None else "n/a"
     spot = f"{card.spot:g}" if card.spot is not None else "n/a"
     flip = f"{card.flip_point:g}" if card.flip_point is not None else "none"
@@ -87,6 +90,7 @@ def share_text(card: TradeCard, art_hash: str | None = None) -> str:
         lines.append(f"art {art_hash[:12]}")
     else:
         lines.append("art: needs live models")
+    lines.append(f"{BRAND} live demo: /demo?underlying={card.symbol}")
     return "\n".join(lines)
 
 
@@ -95,7 +99,13 @@ def share_html(
     art: bytes | None = None,
     url: str | None = None,
     art_hash: str | None = None,
+    settings: DashboardSettings | None = None,
 ) -> str:
+    from urllib.parse import quote as _urlencode
+
+    from bot.theme import BRAND, page
+
+    resolved = settings or DashboardSettings()
     if art is not None:
         body = base64.b64encode(art).decode("ascii")
         media = f'<img alt="trade card art" src="data:image/png;base64,{body}">'
@@ -106,11 +116,19 @@ def share_html(
     else:
         media = "<p>art: needs live models</p>"
         caption_hash = None
-    return (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
-        f"<title>{html.escape(card.symbol)} trade card</title></head><body>"
-        f"<h1>{html.escape(card.symbol)} {html.escape(card.direction)}</h1>"
-        f"{media}<pre>{html.escape(share_text(card, caption_hash), quote=False)}</pre></body></html>"
+    title = f"{card.symbol} trade card"
+    demo_href = f"/demo?underlying={_urlencode(card.symbol)}"
+    loop = (
+        f"<p>Shared via {html.escape(BRAND)}. "
+        f"<a href=\"{html.escape(demo_href, quote=True)}\">Open the live demo</a>.</p>"
+    )
+    content = (
+        f"{media}<pre>{html.escape(share_text(card, caption_hash), quote=False)}</pre>{loop}"
+    )
+    return page(
+        title, f"{card.symbol} {card.direction}", f"snapshot {card.snapshot_id}",
+        content, card.symbol, "cards", resolved,
+        f"/share?underlying={card.symbol}",
     )
 
 
@@ -307,7 +325,7 @@ def share_card(
     if snapshot_id is None:
         latest = store.read_latest(underlying)
         if latest is None:
-            raise ValueError(f"no snapshot stored for {underlying}")
+            raise ValueError(need_snapshot_text(underlying, store))
         snapshot_id = latest[0]
     _, cards = demo_cards(underlying, store, journal, now, snapshot_id, env, http_post)
     if not cards:

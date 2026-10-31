@@ -8,6 +8,7 @@ from bot.muse import (
     Harness,
     dispatch_tool,
     handle_chat,
+    health_detail,
     openapi_spec,
     parse_chat_payload,
     route_http,
@@ -61,7 +62,7 @@ def test_chat_brief_carries_profile_numbers():
     reply = handle_chat(request, store, Journal(), CONFIG, NOW)
     assert reply.ok is True
     assert reply.error == ""
-    assert "total exposure: $-104,040" in reply.reply
+    assert "total exposure: -$104K" in reply.reply
     assert "strike 100.0:" not in reply.reply
     assert "direction: short confidence: 0.50 (regime fallback)" in reply.reply
 
@@ -88,14 +89,47 @@ def test_missing_snapshot_yields_error_naming_underlying():
     request = parse_chat_payload({"text": "gex brief", "underlying": "MISSING"})
     reply = handle_chat(request, SnapshotStore(), Journal(), CONFIG, NOW)
     assert reply.ok is False
-    assert reply.reply == ""
+    assert "MISSING" in reply.reply
     assert "MISSING" in reply.error
 
 
 def test_unknown_tool_names_tool():
     reply = dispatch_tool("nope_missing", {}, _seeded_store(), Journal(), CONFIG, NOW, underlying="TEST")
     assert reply.ok is False
+    assert "nope_missing" in reply.reply
     assert "nope_missing" in reply.error
+
+
+def test_set_holdings_accepts_bare_dict_and_rejects_loudly():
+    store = _seeded_store()
+    reply = dispatch_tool(
+        "set_holdings",
+        {"symbol": "SPY", "kind": "stock", "side": "long", "qty": 100},
+        store, Journal(), CONFIG, NOW, underlying="TEST",
+    )
+    assert reply.ok and "saved 1 holding" in reply.reply
+    assert store.read_holdings()[0].symbol == "SPY"
+    bad = dispatch_tool("set_holdings", {}, _seeded_store(), Journal(), CONFIG, NOW,
+                        underlying="TEST")
+    assert bad.ok is False
+    assert "holdings format" in bad.reply
+
+
+def test_chat_http_error_carries_message_in_reply():
+    response = route_http("POST", "/chat", {"text": "brief", "underlying": "TSLA"},
+                          SnapshotStore(), Journal(), CONFIG, NOW)
+    body = _json_body(response)
+    assert body["ok"] is False
+    assert "TSLA" in body["reply"]
+
+
+def test_mcp_error_carries_message_in_reply():
+    response = route_http("POST", "/mcp", {"method": "tools/call",
+                          "params": {"name": "get_gex_brief", "arguments": {}, "underlying": "TSLA"}},
+                          SnapshotStore(), Journal(), CONFIG, NOW)
+    body = _json_body(response)
+    assert body["ok"] is False
+    assert "TSLA" in body["reply"]
 
 
 def test_registry_tools_answer(monkeypatch):
@@ -108,12 +142,17 @@ def test_registry_tools_answer(monkeypatch):
         "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
         "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
         "read_document", "share_card", "get_narrated_alerts", "get_tier_status",
+        "set_settings", "get_settings", "load_snapshot", "set_profile",
+        "get_earnings_radar", "take_paper_trade", "get_trackrecord",
+        "explain_position", "onboarding_step",
+        "set_alert_rule", "list_alert_rules", "cancel_alert_rule",
+        "get_open_brief", "get_live_board",
     }
     store = _seeded_store()
     journal = Journal()
     brief = dispatch_tool("get_gex_brief", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert brief.ok is True
-    assert "total exposure: $-104,040" in brief.reply
+    assert "total exposure: -$104K" in brief.reply
     cards = dispatch_tool("get_trade_cards", {"query": "monthly trade cards"}, store, journal, CONFIG, NOW, underlying="TEST")
     assert cards.ok is True
     assert cards.reply.startswith("trade cards")
@@ -160,7 +199,7 @@ def test_registry_tools_answer(monkeypatch):
     assert "TEST:" in dashboard.reply
     alerts = dispatch_tool("get_alerts", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert alerts.ok is True
-    assert "alerts: none" in alerts.reply
+    assert "alerts (0) at 2026-10-27T14:30:00+00:00" in alerts.reply
     holdings_read = dispatch_tool("get_holdings", {}, store, journal, CONFIG, NOW, underlying="TEST")
     assert holdings_read.ok is True
     assert holdings_read.reply.startswith("holdings: none saved")
@@ -188,7 +227,7 @@ def test_route_chat_round_trip_carries_profile_numbers():
     assert response.status == 200
     body = _json_body(response)
     assert body["ok"] is True
-    assert "total exposure: $-104,040" in body["reply"]
+    assert "total exposure: -$104K" in body["reply"]
 
 
 def test_route_chat_rejects_non_dict_and_blank_payloads():
@@ -211,6 +250,11 @@ def test_route_mcp_tools_list_names_registry():
         "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
         "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
         "read_document", "share_card", "get_narrated_alerts", "get_tier_status",
+        "set_settings", "get_settings", "load_snapshot", "set_profile",
+        "get_earnings_radar", "take_paper_trade", "get_trackrecord",
+        "explain_position", "onboarding_step",
+        "set_alert_rule", "list_alert_rules", "cancel_alert_rule",
+        "get_open_brief", "get_live_board",
     }
 
 
@@ -279,6 +323,22 @@ def test_health_reports_last_ingest_and_feed():
     assert body["underlyings"] == ["TEST"]
 
 
+def test_health_reports_push_providers_and_model_key():
+    store = SnapshotStore()
+    journal = Journal()
+    full = health_detail(store, journal, NOW, env={
+        "DISCORD_WEBHOOK_URL": "https://discord.example/hook",
+        "TELEGRAM_BOT_TOKEN": "tok",
+        "TELEGRAM_CHAT_ID": "chat",
+        "META_MODEL_API_KEY": "key-1",
+    })
+    assert full["push_providers"] == ["discord", "telegram"]
+    assert full["model_key_set"] is True
+    bare = health_detail(store, journal, NOW, env={})
+    assert bare["push_providers"] == []
+    assert bare["model_key_set"] is False
+
+
 def test_iv_rank_tool_reports_histories():
     store = _seeded_store()
     for day in range(12):
@@ -336,3 +396,15 @@ def test_harness_routes_text_voice_cards_push(monkeypatch):
     assert "total exposure:" in harness.outbox[1]["body"]
     assert harness.outbox[2]["body"].startswith("trade cards")
     assert "total exposure:" in harness.outbox[3]["body"]
+
+
+def test_content_length_parses_and_rejects_bad_values():
+    from bot.muse import content_length
+    assert content_length({"Content-Length": "42"}) == 42
+    assert content_length({}) == 0
+    for bad in ("abc", "-3"):
+        try:
+            content_length({"Content-Length": bad})
+        except ValueError:
+            continue
+        raise AssertionError(f"expected ValueError for {bad!r}")

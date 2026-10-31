@@ -124,3 +124,25 @@ def test_journal_merge_adds_missing_entries_in_order():
     added = live.merge(disk)
     assert added == 1
     assert [e.kind for e in live.entries()] == ["snapshot_ingested", "signal"]
+
+
+def test_out_of_order_save_keeps_latest_and_previous_by_timestamp():
+    store = SnapshotStore()
+    late = ChainSnapshot(underlying="TEST", timestamp_utc=NOW + timedelta(hours=2),
+                         source_name="t", latency_ms=1.0, contracts_list=())
+    early = ChainSnapshot(underlying="TEST", timestamp_utc=NOW,
+                          source_name="t", latency_ms=1.0, contracts_list=())
+    late_id = store.save(late)
+    early_id = store.save(early)
+    assert store.read_latest("TEST")[0] == late_id
+    assert store.read_previous("TEST", late_id)[0] == early_id
+    assert [sid for sid, _ in store.snapshots_in_order()] == [early_id, late_id]
+
+
+def test_bars_stay_sorted_and_latest_is_newest():
+    store = SnapshotStore()
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW, open=1.0, high=1.0, low=1.0, close=3.0, volume=1.0))
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW - timedelta(days=2), open=1.0, high=1.0, low=1.0, close=1.0, volume=1.0))
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW - timedelta(days=1), open=1.0, high=1.0, low=1.0, close=2.0, volume=1.0))
+    assert [bar.close for bar in store.read_bars("TEST")] == [1.0, 2.0, 3.0]
+    assert store.read_latest_bar("TEST").close == 3.0

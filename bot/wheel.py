@@ -4,11 +4,12 @@ from dataclasses import replace
 from datetime import date, datetime, timedelta
 from typing import Mapping, Optional, Sequence
 
+from bot.diff import compact_dollars
 from bot.ideas import symbols_for, unknown_symbols
 from bot.ivrank import histories_for, iv_rank
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, OptionContract, PremiumCandidate
-from bot.store import SnapshotStore
+from bot.store import SnapshotStore, need_snapshot_text
 
 WHEEL_MIN_DTE = 7
 WHEEL_MAX_DTE = 30
@@ -83,6 +84,7 @@ def pick_expiries(
         if dte < min_dte or dte > max_dte:
             continue
         seen.setdefault(raw, parsed)
+    seen = {parsed.isoformat(): parsed for parsed in seen.values()}
     ordered = sorted(seen.items(), key=lambda item: (0 if item[1].weekday() == 4 else 1, item[1]))
     return [raw for raw, _ in ordered[:count]]
 
@@ -109,8 +111,22 @@ def screen_premium(
     earnings_map = earnings or {}
     dropped = {stage: 0 for stage in DROP_STAGES}
     survivors: list[PremiumCandidate] = []
+    expiry_cache: dict[str, Optional[date]] = {}
+
+    def expiry_of(raw: str) -> Optional[date]:
+        if raw not in expiry_cache:
+            try:
+                expiry_cache[raw] = datetime.fromisoformat(raw).date()
+            except ValueError:
+                expiry_cache[raw] = None
+        return expiry_cache[raw]
+
     for snapshot_id, snapshot, bar in entries:
-        picked = set(pick_expiries({c.expiry for c in snapshot.contracts_list}, ref))
+        picked = {
+            parsed.isoformat()
+            for raw in pick_expiries({c.expiry for c in snapshot.contracts_list}, ref)
+            if (parsed := expiry_of(raw)) is not None
+        }
         spot = bar.close if bar is not None else None
         symbol_hits: list[PremiumCandidate] = []
         for contract in snapshot.contracts_list:
@@ -118,10 +134,10 @@ def screen_premium(
             if side not in ("put", "call"):
                 dropped["side"] += 1
                 continue
-            if contract.expiry not in picked:
+            expiry_date = expiry_of(contract.expiry)
+            if expiry_date is None or expiry_date.isoformat() not in picked:
                 dropped["expiry"] += 1
                 continue
-            expiry_date = datetime.fromisoformat(contract.expiry).date()
             if spans_earnings(ref, expiry_date, earnings_map.get(snapshot.underlying)):
                 dropped["earnings"] += 1
                 continue
@@ -175,11 +191,36 @@ def screen_premium(
     return survivors[:WHEEL_MAX_RESULTS], dropped
 
 
-def format_wheel(candidates: Sequence[PremiumCandidate]) -> str:
+def _long_shares(store: SnapshotStore) -> dict[str, float]:
+    shares: dict[str, float] = {}
+    for holding in store.read_holdings():
+        if holding.kind == "stock" and holding.side == "long":
+            shares[holding.symbol] = shares.get(holding.symbol, 0.0) + holding.qty
+    return shares
+
+
+def _wheel_so_what(top: PremiumCandidate) -> str:
+    direction = "above" if top.action == "SELL_PUT" else "below"
+    return (
+        f"so what: top idea collects {compact_dollars(top.bid * 100.0)} "
+        f"({top.premium_return * 100.0:.2f}%) in {top.dte}d if {top.symbol} "
+        f"stays {direction} {top.strike:g}."
+    )
+
+
+def format_wheel(
+    candidates: Sequence[PremiumCandidate], shares: Optional[Mapping[str, float]] = None
+) -> str:
     candidates = list(candidates)
     if not candidates:
         return "wheel ideas: none found"
+    held = shares or {}
     lines = [f"wheel ideas ({len(candidates)}):"]
+    covered = sorted(
+        {c.symbol for c in candidates if c.action == "SELL_CALL" and held.get(c.symbol, 0.0) >= 100}
+    )
+    for symbol in covered:
+        lines.append(f"you hold {held[symbol]:g} {symbol} -- the SELL_CALL below is covered by your shares")
     for number, candidate in enumerate(candidates, 1):
         quote = f"bid {candidate.bid:.2f}"
         if candidate.ask is not None:
@@ -192,13 +233,20 @@ def format_wheel(candidates: Sequence[PremiumCandidate]) -> str:
             f"delta {candidate.delta:.2f}",
             quote,
             f"return {candidate.premium_return * 100.0:.2f}%",
-            f"capital ${candidate.capital_at_risk:,.0f}",
+            f"capital {compact_dollars(candidate.capital_at_risk)},",
         ]
         if candidate.needs_shares:
-            parts.append("needs 100 shares")
+            owned = held.get(candidate.symbol, 0.0)
+            if owned >= 100:
+                parts.append(f"covered by your {owned:g} shares")
+            elif owned > 0:
+                parts.append(f"needs 100 shares (you hold {owned:g})")
+            else:
+                parts.append("needs 100 shares")
         if candidate.iv_rank is not None:
             parts.append(f"iv rank {candidate.iv_rank:.1f}")
         lines.append(" ".join(parts))
+    lines.append(_wheel_so_what(candidates[0]))
     return "\n".join(lines)
 
 
@@ -213,11 +261,7 @@ def wheel_response(
     unknown = unknown_symbols(text, store)
     if unknown:
         missing = ", ".join(unknown)
-        available = ", ".join(store.list_underlyings()) or "none"
-        raise ValueError(
-            f"no snapshot stored for {missing} (store has: {available}); "
-            f"ingest it first, e.g. run_session.py --underlying {unknown[0]}"
-        )
+        raise ValueError(need_snapshot_text(missing, store))
     entries: list[tuple[str, ChainSnapshot, Optional[Bar]]] = []
     used: list[str] = []
     snapshot_ids: list[str] = []
@@ -230,13 +274,19 @@ def wheel_response(
         used.append(symbol)
         snapshot_ids.append(snapshot_id)
     if not entries:
-        raise ValueError(f"no snapshot stored for {underlying}")
+        raise ValueError(need_snapshot_text(underlying, store))
     candidates, dropped = screen_premium(
         entries, now, iv_history=histories_for(store, used), earnings=earnings
     )
     day_iso = now.date().isoformat()
+    ivs_by_symbol: dict[str, list[float]] = {}
+    counts: dict[str, int] = {symbol: 0 for symbol in used}
+    for candidate in candidates:
+        counts[candidate.symbol] = counts.get(candidate.symbol, 0) + 1
+        if candidate.iv is not None:
+            ivs_by_symbol.setdefault(candidate.symbol, []).append(candidate.iv)
     for symbol in used:
-        ivs = [c.iv for c in candidates if c.symbol == symbol and c.iv is not None]
+        ivs = ivs_by_symbol.get(symbol, [])
         if not ivs:
             continue
         average = sum(ivs) / len(ivs)
@@ -244,10 +294,9 @@ def wheel_response(
         journal.append(
             now, "iv_recorded", {"symbol": symbol, "date": day_iso, "iv": average, "points": len(ivs)}
         )
-    counts = {symbol: sum(1 for c in candidates if c.symbol == symbol) for symbol in used}
     journal.append(
         now,
         "wheel_screened",
         {"symbols": used, "counts": counts, "dropped": dropped, "snapshot_ids": snapshot_ids},
     )
-    return format_wheel(candidates)
+    return format_wheel(candidates, _long_shares(store))

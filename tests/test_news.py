@@ -76,4 +76,7 @@ def test_shock_news_passthrough_without_snapshot():
     journal = Journal()
     reply = shock_news_response("TEST", SnapshotStore(), journal, NOW, -2.0,
                                 live_models=True, env=dict(ENV), http_post=explode)
-    assert reply == "shock TEST: no snapshot stored"
+    assert reply == (
+        "shock TEST: no snapshot stored for TEST (store has: none)"
+        " -- say load TEST and I'll fetch it"
+    )

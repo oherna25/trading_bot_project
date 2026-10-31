@@ -64,6 +64,36 @@ def test_demo_page_walks_all_four_sections():
     assert "/card?underlying=TEST" in page
 
 
+def test_demo_page_links_shock_buttons():
+    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
+    assert "5. Shock" in page
+    assert "/shock?underlying=TEST" in page
+    for pct in ("pct=-2", "pct=-1", "pct=1", "pct=2"):
+        assert pct in page
+
+
+def test_shock_route_renders_text_and_buttons():
+    response = route_http(
+        "GET", "/shock?underlying=TEST&pct=-2", {}, _seeded_store(), Journal(), CONFIG, NOW
+    )
+    assert response.status == 200
+    body = response.body.decode("utf-8")
+    assert "shock -2.0%" in body
+    for pct in ("pct=-2", "pct=-1", "pct=1", "pct=2"):
+        assert pct in body
+    assert "/demo?underlying=TEST" in body
+
+
+def test_shock_route_validates_pct_and_underlying():
+    store = _seeded_store()
+    bad_pct = route_http(
+        "GET", "/shock?underlying=TEST&pct=x", {}, store, Journal(), CONFIG, NOW
+    )
+    assert bad_pct.status == 400
+    missing = route_http("GET", "/shock", {}, store, Journal(), CONFIG, NOW)
+    assert missing.status == 400
+
+
 def test_demo_page_journals_no_fills():
     journal = Journal()
     demo_html("TEST", _seeded_store(), journal, NOW)

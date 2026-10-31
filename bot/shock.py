@@ -6,7 +6,7 @@ from datetime import datetime
 from bot.diff import compact_dollars, signed_dollars
 from bot.exposure import compute_gex
 from bot.journal import Journal
-from bot.store import SnapshotStore
+from bot.store import SnapshotStore, need_snapshot_text
 from bot.tradecards import PROFILE_REQUIRED, TradeCard, query_trade_cards
 
 SHOCK_USAGE = "shock needs a percent, e.g. shock SPY -2%"
@@ -48,11 +48,11 @@ def shock_text(
 ) -> str:
     found = store.read_latest(underlying)
     if found is None:
-        return f"shock {underlying}: no snapshot stored"
+        return f"shock {underlying}: {need_snapshot_text(underlying, store)}"
     snapshot_id, snapshot = found
     bar = store.read_latest_bar(underlying)
     if bar is None:
-        return f"shock {underlying}: needs a stored bar for spot"
+        return f"shock {underlying}: needs a stored bar for spot -- say load {underlying} to fetch bars"
     spot = bar.close
     shocked = spot * (1.0 + shock_pct / 100.0)
     profile = compute_gex(snapshot, snapshot_id, spot=spot)

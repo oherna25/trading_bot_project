@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence
 from urllib.parse import urlencode
 
 from bot.config import read_dotenv as _read_dotenv
+from bot.diff import compact_dollars
 from bot.ivrank import iv_rank as _iv_rank
 from bot.risk import even_legs
 from bot.shapes import (
@@ -228,17 +229,24 @@ def spread_pct(contract: OptionContract) -> Optional[float]:
     return (contract.ask - contract.bid) / contract.price * 100.0
 
 
-def _hedge_strike(anchor: OptionContract, snapshot: ChainSnapshot) -> Optional[float]:
-    peers = sorted(
-        {
-            c.strike
-            for c in snapshot.contracts_list
-            if c.expiry == anchor.expiry and c.call_or_put == anchor.call_or_put and c.strike != anchor.strike
-        }
-    )
-    if not peers:
-        return None
-    return min(peers, key=lambda strike: abs(strike - anchor.strike))
+def _contract_index(
+    snapshot: ChainSnapshot,
+) -> tuple[dict[tuple[str, str], list[float]], dict[tuple[str, str, float], OptionContract]]:
+    strikes: dict[tuple[str, str], list[float]] = {}
+    by_key: dict[tuple[str, str, float], OptionContract] = {}
+    for contract in snapshot.contracts_list:
+        key = (contract.expiry, contract.call_or_put)
+        strikes.setdefault(key, []).append(contract.strike)
+        by_key[(contract.expiry, contract.call_or_put, contract.strike)] = contract
+    return {key: sorted(set(values)) for key, values in strikes.items()}, by_key
+
+
+def _hedge_strike(anchor: OptionContract, strikes: list[float]) -> Optional[float]:
+    if anchor.call_or_put == "call":
+        above = [strike for strike in strikes if strike > anchor.strike]
+        return above[0] if above else None
+    below = [strike for strike in strikes if strike < anchor.strike]
+    return below[-1] if below else None
 
 
 def _single_numbers(
@@ -289,8 +297,11 @@ def rank_ideas(
     iv_history: Optional[Mapping[str, Sequence[float]]] = None,
     earnings: Optional[Mapping[str, date]] = None,
 ) -> list[TradeIdea]:
+    indexes: dict[str, tuple[dict[tuple[str, str], list[float]], dict[tuple[str, str, float], OptionContract]]] = {}
     candidates = []
     for snapshot_id, snapshot, profile, bar in entries:
+        if snapshot_id not in indexes:
+            indexes[snapshot_id] = _contract_index(snapshot)
         ref = now if now is not None else snapshot.timestamp_utc
         direction = resolve_direction(bar, profile.flip_point, profile.total_exposure)
         if direction == "flat":
@@ -315,16 +326,12 @@ def rank_ideas(
     for score, snapshot_id, snapshot, profile, bar, direction, contract, pct in candidates:
         exposure = profile.per_strike_exposure.get(contract.strike, 0.0)
         regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
-        hedge_strike = _hedge_strike(contract, snapshot)
-        hedge = next(
-            (
-                c
-                for c in snapshot.contracts_list
-                if c.expiry == contract.expiry
-                and c.call_or_put == contract.call_or_put
-                and c.strike == hedge_strike
-            ),
-            None,
+        strikes_by_key, contracts_by_key = indexes[snapshot_id]
+        hedge_strike = _hedge_strike(contract, strikes_by_key.get((contract.expiry, contract.call_or_put), []))
+        hedge = (
+            contracts_by_key.get((contract.expiry, contract.call_or_put, hedge_strike))
+            if hedge_strike is not None
+            else None
         )
         debit, max_loss, breakeven = _single_numbers(contract)
         spread_label = f"single {contract.call_or_put} {contract.strike}"
@@ -380,6 +387,8 @@ def rank_ideas(
     ranked.sort(
         key=lambda c: (-c[0], -c[1], c[3].underlying, c[7].strike, c[7].expiry, c[7].call_or_put)
     )
+    histories = iv_history or {}
+    rank_by_symbol = {symbol: _iv_rank(history) for symbol, history in histories.items()}
     ideas = []
     per_direction: dict[str, int] = {}
     for row in ranked:
@@ -415,12 +424,11 @@ def rank_ideas(
             trigger = f"enter on spot confirming {direction} ({regime}, no flip in chain)"
         thesis = (
             f"{snapshot.underlying} {direction} via {spread_label} {contract.expiry}: "
-            f"wall exposure {exposure:.1f} at {contract.strike}, {regime}"
+            f"wall exposure {compact_dollars(exposure)} at {contract.strike}, {regime}"
         )
         if max_loss is not None and breakeven is not None:
-            thesis += f", max loss ${max_loss:.0f}, breakeven {breakeven:.1f}"
-        histories = iv_history or {}
-        rank = _iv_rank(histories.get(snapshot.underlying, ()))
+            thesis += f", max loss {compact_dollars(max_loss)}, breakeven {breakeven:.1f}"
+        rank = rank_by_symbol.get(snapshot.underlying)
         ideas.append(
             TradeIdea(
                 symbol=snapshot.underlying,

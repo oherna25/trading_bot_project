@@ -184,7 +184,7 @@ def test_format_trade_cards_rounds_header_numbers():
     text = format_trade_cards([card])
     assert "max loss 40.0" in text
     assert "breakeven 97.5" in text
-    assert "wall -2352664863.87" in text
+    assert "wall -$2.4B" in text
     assert "spot 102.0" in text
     assert "40.000000000000036" not in text
 
@@ -216,7 +216,9 @@ def test_card_wall_matches_ideas_wall_on_same_snapshot():
     cards = build_trade_cards(entries, None, NOW, Journal(), env={})
     assert len(cards) == len(ideas) == 2
     for card, idea in zip(cards, ideas):
-        assert f"{card.wall_exposure:.1f}" in idea.thesis
+        from bot.diff import compact_dollars
+
+        assert compact_dollars(card.wall_exposure) in idea.thesis
     page = trade_cards_html([], "TEST")
     assert "none found" in page
     assert "<article>" not in page

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
+from bot.diff import compact_dollars
 from bot.exposure import compute_gex
-from bot.shapes import Bar, ChainSnapshot, GexProfile
-from bot.store import SnapshotStore
+from bot.shapes import Bar, ChainSnapshot, DashboardSettings, GexProfile
+from bot.store import SnapshotStore, empty_store_text
 
 CHART_WIDTH = 920
 CHART_HEIGHT = 420
@@ -16,18 +17,13 @@ CALL_COLOR = "#1a7f37"
 PUT_COLOR = "#cf222e"
 AXIS_COLOR = "#57606a"
 FLIP_COLOR = "#24292f"
+QUOTE_FRESH_SECONDS = 300
+SNAPSHOT_FRESH_SECONDS = 6 * 3600
+LIVE_POLL_SECONDS = 5
 
 
 def _money(value: float) -> str:
-    sign = "-" if value < 0 else ""
-    magnitude = abs(value)
-    if magnitude >= 1e9:
-        return f"{sign}${magnitude / 1e9:.1f}B"
-    if magnitude >= 1e6:
-        return f"{sign}${magnitude / 1e6:.0f}M"
-    if magnitude >= 1e3:
-        return f"{sign}${magnitude / 1e3:.0f}K"
-    return f"{sign}${magnitude:.0f}"
+    return compact_dollars(value)
 
 
 def chart_strikes(profile: GexProfile, max_strikes: int = CHART_MAX_STRIKES) -> list[float]:
@@ -148,7 +144,11 @@ def gamma_chart_html(
     profile: GexProfile,
     bar: Optional[Bar],
     now: Optional[datetime] = None,
+    settings: Optional[DashboardSettings] = None,
 ) -> str:
+    from bot.theme import page
+
+    resolved = settings or DashboardSettings()
     regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
     spot = f"{bar.close:.2f}" if bar is not None else "unknown"
     flip = f"{profile.flip_point:.1f}" if profile.flip_point is not None else "none"
@@ -156,26 +156,21 @@ def gamma_chart_html(
     if now is not None:
         seconds = max(0, int((now - snapshot.timestamp_utc).total_seconds()))
         age = f" age {seconds // 60}m{seconds % 60:02d}s" if seconds >= 60 else f" age {seconds}s"
+    refresh = resolved.refresh_seconds if resolved.refresh_seconds > 0 else CHART_REFRESH_SECONDS
     title = f"{underlying} gamma by strike"
-    style = (
-        "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
-        "margin:2rem;color:#24292f;background:#fff}"
-        "h1{font-size:1.4rem;margin:0 0 .25rem}"
-        "p.stats{margin:.25rem 0 1rem;color:#57606a}"
-        "p.meta{margin:1rem 0 0;color:#57606a;font-size:.85rem}"
+    sub = (
+        f"spot {spot} | total {_money(profile.total_exposure)} "
+        f"| flip {flip} | {regime}"
     )
-    return (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
-        f"<meta http-equiv=\"refresh\" content=\"{CHART_REFRESH_SECONDS}\">"
-        f"<title>{html.escape(title)}</title><style>{style}</style></head><body>"
-        f"<h1>{html.escape(title)}</h1>"
-        f"<p class=\"stats\">spot {html.escape(spot)} | total {_money(profile.total_exposure)} "
-        f"| flip {html.escape(flip)} | {html.escape(regime)}</p>"
-        f"{gamma_svg(profile)}"
-        f"<p class=\"meta\">snapshot {html.escape(profile.snapshot_id)}{html.escape(age)} "
+    body = (
+        f"<div class=\"chart-panel\">{gamma_svg(profile)}</div>"
+        f"<p class=\"sub\">snapshot {html.escape(profile.snapshot_id)}{html.escape(age)} "
         f"source {html.escape(snapshot.source_name)} | refreshes every "
-        f"{CHART_REFRESH_SECONDS}s</p>"
-        "</body></html>"
+        f"{refresh}s</p>"
+    )
+    return page(
+        title, title, sub, body, underlying, "chart", resolved,
+        f"/chart?underlying={underlying}",
     )
 
 
@@ -210,33 +205,54 @@ def board_rows(store: SnapshotStore) -> list[dict[str, object]]:
     return rows
 
 
-def regime_board_html(store: SnapshotStore, now: datetime | None = None) -> str:
-    del now
-    title = "Dealer positioning board"
-    style = (
-        "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
-        "margin:2rem;color:#24292f;background:#fff}"
-        "h1{font-size:1.4rem;margin:0 0 1rem}"
-        "table{border-collapse:collapse;min-width:52rem}"
-        "th,td{border:1px solid #d0d7de;padding:.4rem .7rem;text-align:right;font-variant-numeric:tabular-nums}"
-        "th{background:#f6f8fa;text-align:right}"
-        "td:first-child,th:first-child{text-align:left}"
-        ".long{color:#1a7f37}.short{color:#cf222e}"
-    )
-    head = (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
-        f"<meta http-equiv=\"refresh\" content=\"{CHART_REFRESH_SECONDS}\">"
-        f"<title>{html.escape(title)}</title><style>{style}</style></head><body>"
-        f"<h1>{html.escape(title)}</h1>"
-    )
+def _age_seconds(now: datetime, then: datetime | None) -> int | None:
+    if then is None:
+        return None
+    if (now.tzinfo is None) != (then.tzinfo is None):
+        utc = timezone.utc
+        now = now if now.tzinfo is not None else now.replace(tzinfo=utc)
+        then = then if then.tzinfo is not None else then.replace(tzinfo=utc)
+    return max(0, int((now - then).total_seconds()))
+
+
+def _age_text(now: datetime, then: datetime | None) -> str:
+    seconds = _age_seconds(now, then)
+    if seconds is None:
+        return "none"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 48:
+        return f"{hours}h{minutes:02d}m"
+    days, hours = divmod(hours, 24)
+    return f"{days}d{hours:02d}h"
+
+
+def _freshness(now: datetime, then: datetime | None, limit_seconds: int) -> str:
+    age = _age_seconds(now, then)
+    if age is None:
+        return "stale"
+    return "fresh" if age <= limit_seconds else "stale"
+
+
+def _badge(label: str, state: str) -> str:
+    return f"<span class=\"{state}\">{html.escape(label)}</span>"
+
+
+def live_board_fragment(store: SnapshotStore, now: datetime) -> str:
     rows = board_rows(store)
     if not rows:
-        return head + "<p>no snapshots stored</p></body></html>"
+        return f"<p>{html.escape(empty_store_text())}</p>"
     cells = [
         "<table><tr><th>symbol</th><th>regime</th><th>total gex</th><th>spot</th>"
-        "<th>flip</th><th>flip dist %</th><th>biggest wall</th></tr>"
+        "<th>flip</th><th>flip dist %</th><th>biggest wall</th>"
+        "<th>feed</th><th>quote</th></tr>"
     ]
     for row in rows:
+        symbol = str(row["symbol"])
         regime = str(row["regime"])
         cls = "long" if regime == "long-gamma" else "short"
         dist = row["flip_distance_pct"]
@@ -247,11 +263,79 @@ def regime_board_html(store: SnapshotStore, now: datetime | None = None) -> str:
         flip_text = f"{flip:.1f}" if flip is not None else "n/a"
         strike, wall = row["wall_strike"], row["wall_value"]
         wall_text = f"{strike:g} {_money(float(wall))}" if strike is not None else "n/a"
+        found = store.read_latest(symbol)
+        bar = store.read_latest_bar(symbol)
+        feed_state = _freshness(
+            now, found[1].timestamp_utc if found else None, SNAPSHOT_FRESH_SECONDS
+        )
+        quote_state = _freshness(
+            now, bar.timestamp_utc if bar else None, QUOTE_FRESH_SECONDS
+        )
+        feed_label = found[1].source_name if found else "none"
+        quote_label = f"quote {_age_text(now, bar.timestamp_utc if bar else None)}"
         cells.append(
-            f"<tr><td>{html.escape(str(row['symbol']))}</td>"
+            f"<tr><td>{html.escape(symbol)}</td>"
             f"<td class=\"{cls}\">{regime}</td>"
             f"<td>{_money(float(row['total']))}</td><td>{spot_text}</td>"
-            f"<td>{flip_text}</td><td>{dist_text}</td><td>{wall_text}</td></tr>"
+            f"<td>{flip_text}</td><td>{dist_text}</td><td>{wall_text}</td>"
+            f"<td>{_badge(feed_label, feed_state)}</td>"
+            f"<td>{_badge(quote_label, quote_state)}</td></tr>"
         )
     cells.append("</table>")
-    return head + "".join(cells) + "</body></html>"
+    cells.append(
+        "<p class=\"sub\">quote green at 5m or fresher, amber older; "
+        "feed green at 6h or fresher, amber older</p>"
+    )
+    return "".join(cells)
+
+
+def live_board_text(store: SnapshotStore, now: datetime) -> str:
+    rows = board_rows(store)
+    if not rows:
+        return f"live board: {empty_store_text()}"
+    lines = [
+        f"live board {now.isoformat()} -- quote green at 5m or fresher, amber older; "
+        f"feed green at 6h or fresher, amber older"
+    ]
+    for row in rows:
+        symbol = str(row["symbol"])
+        spot = row["spot"]
+        spot_text = f"{spot:.2f}" if spot is not None else "n/a"
+        strike, wall = row["wall_strike"], row["wall_value"]
+        wall_text = f"{strike:g} {_money(float(wall))}" if strike is not None else "none"
+        found = store.read_latest(symbol)
+        bar = store.read_latest_bar(symbol)
+        feed_state = _freshness(
+            now, found[1].timestamp_utc if found else None, SNAPSHOT_FRESH_SECONDS
+        )
+        quote_state = _freshness(
+            now, bar.timestamp_utc if bar else None, QUOTE_FRESH_SECONDS
+        )
+        feed_label = found[1].source_name if found else "none"
+        quote_label = f"quote {_age_text(now, bar.timestamp_utc if bar else None)}"
+        lines.append(
+            f"{symbol}: {row['regime']} spot {spot_text} wall {wall_text} | "
+            f"feed {feed_label} {feed_state} | {quote_label} {quote_state}"
+        )
+    return "\n".join(lines)
+
+
+def regime_board_html(store: SnapshotStore, now: datetime | None = None) -> str:
+    from bot.theme import page
+
+    settings = store.read_settings()
+    title = "Dealer positioning board"
+    rows = board_rows(store)
+    stamp = now.isoformat() if now is not None else ""
+    sub = f"{len(rows)} underlyings, from stored snapshots {stamp}".strip()
+    moment = now or datetime.now(timezone.utc)
+    poll_ms = LIVE_POLL_SECONDS * 1000
+    script = (
+        f"<script>setInterval(async()=>{{try{{const r=await fetch(\"/board/live\");"
+        f"if(r.ok)document.getElementById(\"live-board\").innerHTML=await r.text();}}"
+        f"catch(e){{}}}},{poll_ms});</script>"
+    )
+    body = f"<div id=\"live-board\">{live_board_fragment(store, moment)}</div>{script}"
+    return page(
+        title, title, sub, body, settings.default_underlying, "board", settings, "/board",
+    )

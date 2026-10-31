@@ -96,3 +96,12 @@ def test_paper_trade_skips_without_bar():
     assert note == ""
     assert journal.entries()[-1].kind == "trade_skipped"
     assert journal.entries()[-1].payload["reason"] == "no bar"
+
+
+def test_paper_trade_step_blocks_after_day_loss_breach():
+    journal = Journal()
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "price": 100.0, "size": 1000.0, "venue": "paper"})
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "sell", "price": 90.0, "size": 1000.0, "venue": "paper"})
+    bar = Bar(interval="1d", timestamp_utc=NOW, open=95.0, high=96.0, low=94.0, close=95.0, volume=100.0)
+    assert paper_trade_step("TEST", _signal("long"), bar, journal, NOW) == ""
+    assert journal.entries()[-1].kind == "intent_vetoed"

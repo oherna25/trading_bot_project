@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from bot.journal import Journal
-from bot.risk import fire_halt, fire_kill, operator_reset, realized_pnl, update_day_pnl, update_position
+from bot.risk import fire_halt, fire_kill, operator_reset, realized_pnl, review_intent, update_day_pnl, update_position
 from bot.shapes import Fill, OrderIntent, PaperEvidence, Position, RiskLimits, RiskState
 from bot.venue import TradierVenue
 
@@ -79,6 +79,9 @@ def submit_live(
         if journal is not None and now is not None:
             journal.append(now, "live_blocked", {"reason": "halt active" if state.halt_active else "kill active"})
         raise LiveDisabledError("live ordering is halted")
+    if state is not None and limits is not None and journal is not None and now is not None:
+        if review_intent(intent, state, limits, journal, now) != "approved":
+            raise LiveDisabledError("live intent rejected by risk review")
     active_venue = venue or TradierVenue.from_env()
     ack = active_venue.place_order(intent, reference_price)
     moment = now or datetime.now(timezone.utc)

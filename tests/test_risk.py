@@ -179,6 +179,39 @@ def test_sector_cap_vetoes_known_sector_only():
     assert review_intent(intent, _state(), limits, journal, NOW, view=view) == "approved"
 
 
+def test_partial_close_keeps_average_cost_and_books_each_leg_once():
+    journal = Journal()
+    state = _state()
+    buy = build_intent(_signal(), "sig-1", state, journal, NOW)
+    _, position, updated = submit_paper(replace(buy, size=1000.0), 100.0, state, None, LIMITS, journal, NOW)
+    sell = replace(buy, side="sell", size=400.0)
+    _, position, updated = submit_paper(sell, 110.0, updated, position, LIMITS, journal, NOW)
+    assert position.net_size == 600.0
+    assert position.average_price == pytest.approx(100.0)
+    assert position.unrealized_pnl == pytest.approx(6000.0)
+    assert updated.day_pnl == pytest.approx(10000.0)
+
+
+def test_flip_through_zero_opens_at_fill_price():
+    journal = Journal()
+    state = _state()
+    buy = build_intent(_signal(), "sig-1", state, journal, NOW)
+    _, position, updated = submit_paper(replace(buy, size=1000.0), 100.0, state, None, LIMITS, journal, NOW)
+    sell = replace(buy, side="sell", size=1500.0)
+    _, position, updated = submit_paper(sell, 110.0, updated, position, LIMITS, journal, NOW)
+    assert position.net_size == -500.0
+    assert position.average_price == pytest.approx(110.0)
+    assert position.unrealized_pnl == pytest.approx(0.0)
+    assert updated.day_pnl == pytest.approx(10000.0)
+
+
+def test_options_sizing_never_exceeds_risk_budget():
+    journal = Journal()
+    small = _state(account_size=10000.0, risk_per_trade=0.01)
+    assert build_intent(_signal(), "sig-1", small, journal, NOW, max_loss_per_contract=250.0) is None
+    assert journal.entries()[-1].kind == "intent_skipped"
+
+
 def test_day_pnl_accumulates_across_fills():
     journal = Journal()
     state = _state()

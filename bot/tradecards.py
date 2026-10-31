@@ -6,17 +6,20 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
 
+from bot.diff import compact_dollars
 from bot.metareason import generate_reason, select_reason_backend
 from bot.exposure import compute_gex
 from bot.ideas import cached_earnings, parse_timeframe, rank_ideas, symbols_for, unknown_symbols
 from bot.ivrank import histories_for
 from bot.journal import Journal
 from bot.models import HttpPost
-from bot.shapes import Bar, ChainSnapshot, GexProfile
-from bot.store import SnapshotStore
+from bot.shapes import Bar, ChainSnapshot, DashboardSettings, GexProfile
+from bot.store import SnapshotStore, need_snapshot_text
 
 OPTIONS_DISABLED = "options ideas are disabled by your saved profile"
 PROFILE_REQUIRED = "trade cards need a saved operator profile; reply profile for the questionnaire"
+SIZING_HINT = "save a profile for sizing -- next: reply profile for the questionnaire"
+SIZED_DEFAULT_CONTRACTS = 3
 REASON_CACHE_MAX = 2000
 
 _reason_cache: dict[str, str] = {}
@@ -240,11 +243,7 @@ def query_trade_cards(
     unknown = unknown_symbols(text, store)
     if unknown:
         missing = ", ".join(unknown)
-        available = ", ".join(store.list_underlyings()) or "none"
-        raise ValueError(
-            f"no snapshot stored for {missing} (store has: {available}); "
-            f"ingest it first, e.g. run_session.py --underlying {unknown[0]}"
-        )
+        raise ValueError(need_snapshot_text(missing, store))
     max_days = parse_timeframe(text)
     entries = []
     used = []
@@ -266,7 +265,10 @@ def query_trade_cards(
         used.append(symbol)
         snapshot_ids.append(snapshot_id)
     if not entries:
-        raise ValueError(f"no snapshot stored for {underlying}")
+        raise ValueError(need_snapshot_text(underlying, store))
+    fetched = cached_earnings(used, now)
+    for symbol, day in fetched.items():
+        store.save_earnings(symbol, day.isoformat())
     cards = build_trade_cards(
         entries,
         max_days,
@@ -275,7 +277,7 @@ def query_trade_cards(
         env,
         http_post,
         iv_history=histories_for(store, used),
-        earnings=cached_earnings(used, now),
+        earnings={**store.all_earnings(), **fetched},
     )
     journal.append(
         now,
@@ -292,6 +294,63 @@ def query_trade_cards(
     return cards
 
 
+def risk_cap_for(profile) -> float:
+    from bot.profile import suggest_params
+
+    params = suggest_params(profile)
+    return float(params["risk_per_trade"] * params["account_size"])
+
+
+def size_for_card(
+    max_loss: float | None, cap: float, default: int = SIZED_DEFAULT_CONTRACTS
+) -> tuple[int, float | None, str]:
+    cap_text = compact_dollars(cap)
+    if max_loss is None or max_loss <= 0:
+        return (
+            1,
+            None,
+            f"1 contract, uncapped dollars at risk, within your {cap_text} cap unknown -- size by feel",
+        )
+    affordable = int(cap // max_loss)
+    if affordable >= default:
+        at_risk = default * max_loss
+        return (
+            default,
+            at_risk,
+            f"{default} contracts, {compact_dollars(at_risk)} at risk, within your {cap_text} cap",
+        )
+    if affordable >= 1:
+        at_risk = affordable * max_loss
+        word = "contract" if affordable == 1 else "contracts"
+        return (
+            affordable,
+            at_risk,
+            f"{affordable} {word}, {compact_dollars(at_risk)} at risk, "
+            f"within your {cap_text} cap (shrunk from {default} to fit your cap)",
+        )
+    return (
+        1,
+        max_loss,
+        f"1 contract, {compact_dollars(max_loss)} at risk, over your {cap_text} cap "
+        f"-- shrunk from {default} to 1, still over",
+    )
+
+
+def format_sized_cards(cards: Sequence[TradeCard], profile) -> str:
+    cards = list(cards)
+    if not cards:
+        return "trade cards: none found"
+    if profile is None:
+        return format_trade_cards(cards) + "\n" + SIZING_HINT
+    cap = risk_cap_for(profile)
+    base = format_trade_cards(cards).splitlines()
+    out = [base[0]]
+    for card, line in zip(cards, base[1:]):
+        _, _, sizing = size_for_card(card.max_loss, cap)
+        out.append(f"{line} | {sizing}")
+    return "\n".join(out)
+
+
 def cards_response(
     text: str,
     underlying: str,
@@ -306,7 +365,7 @@ def cards_response(
         if store.read_profile() is None:
             return PROFILE_REQUIRED
         return OPTIONS_DISABLED
-    return format_trade_cards(cards)
+    return format_sized_cards(cards, store.read_profile())
 
 
 def format_trade_cards(cards: Sequence[TradeCard]) -> str:
@@ -319,7 +378,7 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
             f"{number}. {card.symbol} {card.direction} {card.spread} "
             f"expiry {card.expiry} confidence {card.confidence:.2f} "
             f"max loss {_rounded(card.max_loss, 2)} breakeven {_rounded(card.breakeven, 2)} "
-            f"wall {_rounded(card.wall_exposure, 2)} {card.regime} "
+            f"wall {compact_dollars(card.wall_exposure) if card.wall_exposure is not None else 'none'} {card.regime} "
             f"spot {_rounded(card.spot, 2)} flip {_rounded(card.flip_point, 2)}"
         )
         if card.earnings_date is not None:
@@ -366,7 +425,7 @@ def cards_to_json(cards: Sequence[TradeCard]) -> dict:
 
 
 def _money(value: Optional[float]) -> str:
-    return f"${value:.0f}" if value is not None else "n/a"
+    return compact_dollars(value) if value is not None else "n/a"
 
 
 def _net_text(net_debit: Optional[float]) -> str:
@@ -377,26 +436,26 @@ def _net_text(net_debit: Optional[float]) -> str:
     return f"${-net_debit:.0f} credit"
 
 
-def trade_cards_html(cards: Sequence[TradeCard], underlying: str) -> str:
+def trade_cards_html(
+    cards: Sequence[TradeCard],
+    underlying: str,
+    settings: Optional[DashboardSettings] = None,
+    start_index: int = 0,
+    profile=None,
+) -> str:
+    from bot.theme import page
+
+    resolved = settings or DashboardSettings()
     cards = list(cards)
     title = f"{underlying} trade cards"
-    style = (
-        "body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
-        "margin:2rem;line-height:1.5;color:#222}"
-        "article{border:1px solid #ccc;padding:1.5rem;margin:0 0 1.5rem;max-width:42rem}"
-        "h1{font-weight:600}h2{font-weight:600;margin:0 0 1rem}"
-        "ul{list-style:none;padding:0;margin:0 0 1rem}"
-        "li{margin:0 0 .25rem}p{margin:0}"
-    )
-    head = (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
-        f"<title>{html.escape(title)}</title><style>{style}</style></head><body>"
-        f"<h1>{html.escape(title)}</h1>"
-    )
     if not cards:
-        return head + "<p>trade cards: none found</p></body></html>"
-    parts = [head]
-    for card in cards:
+        return page(
+            title, title, f"{len(cards)} cards", "<p>trade cards: none found</p>",
+            underlying, "cards", resolved, f"/cards?underlying={underlying}",
+        )
+    parts = []
+    for offset, card in enumerate(cards):
+        index = start_index + offset
         stats = [
             f"confidence {card.confidence:.2f}",
             f"max loss {_money(card.max_loss)}",
@@ -414,13 +473,28 @@ def trade_cards_html(cards: Sequence[TradeCard], underlying: str) -> str:
             stats.append(f"earnings {card.earnings_date} inside expiry")
         if card.iv_rank is not None:
             stats.append(f"iv rank {card.iv_rank:.1f}")
+        if profile is None:
+            stats.append(SIZING_HINT)
+        else:
+            _, _, sizing = size_for_card(card.max_loss, risk_cap_for(profile))
+            stats.append(f"size: {sizing}")
         items = "".join(f"<li>{html.escape(item)}</li>" for item in stats)
+        take = (
+            "<form class=\"block\" method=\"post\" action=\"/action\">"
+            "<input type=\"hidden\" name=\"tool\" value=\"take_paper_trade\">"
+            f"<input type=\"hidden\" name=\"underlying\" value=\"{html.escape(card.symbol, quote=True)}\">"
+            f"<input type=\"hidden\" name=\"snapshot\" value=\"{html.escape(card.snapshot_id, quote=True)}\">"
+            f"<input type=\"hidden\" name=\"index\" value=\"{index}\">"
+            "<button class=\"solid\" type=\"submit\">take this trade (paper)</button></form>"
+        )
         parts.append(
             "<article>"
             f"<h2>{html.escape(card.symbol)} {html.escape(card.direction)} "
             f"{html.escape(card.spread)} expiry {html.escape(card.expiry)}</h2>"
-            f"<ul>{items}</ul><p>{html.escape(card.reason)}</p>"
+            f"<ul>{items}</ul><p>{html.escape(card.reason)}</p>{take}"
             "</article>"
         )
-    parts.append("</body></html>")
-    return "".join(parts)
+    return page(
+        title, title, f"{len(cards)} cards, from stored snapshots", "".join(parts),
+        underlying, "cards", resolved, f"/cards?underlying={underlying}",
+    )

@@ -103,3 +103,22 @@ def test_dex_uses_signed_delta_times_open_interest():
     profile = compute_dex(snapshot, "TEST:snap-1")
     assert profile.per_strike_exposure == pytest.approx({100.0: 1000.0})
     assert profile.total_exposure == pytest.approx(1000.0)
+
+
+def test_gex_normalizes_side_case_and_ignores_unknown_side():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=STAMP,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="CALL", open_interest=10.0, gamma=0.10),
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put", open_interest=10.0, gamma=0.10),
+            OptionContract(strike=105.0, expiry="2026-11-20", call_or_put="straddle", open_interest=10.0, gamma=0.10),
+        ),
+    )
+    profile = compute_gex(snapshot, "TEST:snap-case")
+    assert profile.total_exposure == pytest.approx(0.0)
+    assert profile.call_exposure == pytest.approx(100.0)
+    assert profile.put_exposure == pytest.approx(-100.0)
+    assert 105.0 not in profile.per_strike_exposure

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from bot.cards import render_brief_card
+from bot.diff import compact_dollars, signed_dollars, snapshot_diff_text
 from bot.exposure import compute_dex, compute_gex, compute_vex
 from bot.feeds import (
     BAR_FEEDS,
@@ -32,7 +33,7 @@ from bot.ivrank import backfill_iv_history, histories_for
 from bot.journal import Journal
 from bot.localmodels import LocalRunner, local_available, run_local
 from bot.profile import build_profile, format_questionnaire, format_summary, parse_answers, suggest_params
-from bot.risk import build_intent, review_intent, submit_paper
+from bot.risk import build_intent, realized_pnl, review_intent, submit_paper, update_position
 from bot.tiers import select_model_tier
 from bot.models import (
     MODEL_REGISTRY,
@@ -49,16 +50,19 @@ from bot.shapes import (
     Bar,
     ChainSnapshot,
     DexProfile,
+    Fill,
     GexProfile,
     OperatorConfig,
+    OrderIntent,
     PaperEvidence,
+    Position,
     RiskLimits,
     RiskState,
     Signal,
     VexProfile,
 )
-from bot.store import SnapshotStore
-from bot.tradecards import cards_response
+from bot.store import SnapshotStore, need_snapshot_text
+from bot.tradecards import PROFILE_REQUIRED, cards_response
 from bot.wheel import wheel_response
 
 
@@ -384,7 +388,34 @@ def derive_display(signal: Signal, snapshot: ChainSnapshot, profile: GexProfile,
 
 
 def _money(value: float) -> str:
-    return f"${value:,.0f}"
+    return compact_dollars(value)
+
+
+def _gex_so_what(profile: GexProfile, spot: Optional[float]) -> str:
+    regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
+    dealers = "dampen" if regime == "long-gamma" else "amplify"
+    bits = [f"{regime}: dealers {dealers} moves"]
+    walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))
+    if walls:
+        strike = walls[0][0]
+        if spot:
+            dist = abs(strike - spot) / spot * 100.0
+            pin = "pinned near " if dist <= 0.5 else ""
+            bits.append(f"nearest magnet: {pin}{strike:g} ({dist:.1f}% away)")
+        else:
+            bits.append(f"nearest magnet: {strike:g}")
+    if profile.flip_point is not None and spot:
+        side = "above" if spot >= profile.flip_point else "below"
+        bits.append(f"spot sits {side} flip {profile.flip_point:.1f}")
+    return "so what: " + "; ".join(bits) + "."
+
+
+def _exposure_so_what(kind: str, profile: VexProfile | DexProfile) -> str:
+    walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))
+    heavy = f"; heaviest strike {walls[0][0]:g}" if walls else ""
+    if kind == "VEX":
+        return f"so what: a 1pt IV rise is worth {compact_dollars(profile.total_exposure)} across the chain{heavy}."
+    return f"so what: net {compact_dollars(profile.total_exposure)} share-equivalents{heavy}."
 
 
 def _format_age(age: timedelta) -> str:
@@ -412,12 +443,18 @@ def format_brief(
     regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
     units = "$GEX per 1% move" if profile.spot else "raw gamma x OI (no spot)"
     spot_text = f"{spot:.2f}" if spot is not None else "unknown"
+    stale_quote = False
     if spot is not None and bar is not None and now is not None:
-        spot_text += f" (quote {_format_age(now - bar.timestamp_utc)})"
+        quote_age = now - bar.timestamp_utc
+        snap_age = now - snapshot.timestamp_utc
+        spot_text += f" (quote {_format_age(quote_age)})"
+        stale_quote = quote_age > timedelta(minutes=15) and quote_age > 3 * snap_age
     lines = [
         f"{snapshot.underlying} GEX brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
         f"spot {spot_text} | coverage {signal.coverage * 100.0:.0f}% | regime {regime}",
     ]
+    if stale_quote:
+        lines.append("STALE -- refresh the quote before trading")
     front = f"; front {profile.front_expiry}: {_money(profile.front_exposure)}" if profile.front_expiry else ""
     lines.append(f"total exposure: {_money(profile.total_exposure)} ({units}{front})")
     if profile.flip_point is not None and spot:
@@ -431,6 +468,7 @@ def format_brief(
     lines.append(f"calls {_money(profile.call_exposure)} / puts {_money(profile.put_exposure)}")
     walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:10]
     lines.append("walls: " + "; ".join(f"{strike:g} {_money(value)}" for strike, value in walls))
+    lines.append(_gex_so_what(profile, spot))
     if previous is None:
         lines.append("change vs previous: n/a (first snapshot)")
     else:
@@ -500,7 +538,7 @@ def wall_migration_text(underlying: str, store: SnapshotStore, now: datetime) ->
         for strike, delta in movers:
             before = first.per_strike_exposure.get(strike, 0.0)
             after = last.per_strike_exposure.get(strike, 0.0)
-            lines.append(f"  {strike:g}: {_money(before)} -> {_money(after)} ({delta:+,.0f})")
+            lines.append(f"  {strike:g}: {_money(before)} -> {_money(after)} ({signed_dollars(delta)})")
     flips = [profile.flip_point for profile in profiles if profile.flip_point is not None]
     if flips:
         lines.append("flip path: " + " -> ".join(f"{flip:.1f}" for flip in flips))
@@ -534,8 +572,9 @@ def format_exposure_brief(
     lines = [
         f"{snapshot.underlying} {kind} brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
         f"spot {spot_text}",
-        f"total exposure: {profile.total_exposure:.1f} ({units})",
-        "walls: " + "; ".join(f"{strike:g} {value:.1f}" for strike, value in walls),
+        f"total exposure: {compact_dollars(profile.total_exposure)} ({units})",
+        "walls: " + "; ".join(f"{strike:g} {compact_dollars(value)}" for strike, value in walls),
+        _exposure_so_what(kind, profile),
     ]
     return "\n".join(lines)
 
@@ -554,7 +593,7 @@ def handle_chat_query(
 ) -> tuple[str, Signal]:
     found = store.read_latest(underlying)
     if found is None:
-        raise ValueError(f"no snapshot stored for {underlying}")
+        raise ValueError(need_snapshot_text(underlying, store))
     snapshot_id, snapshot = found
     bar = store.read_latest_bar(underlying)
     spot = bar.close if bar is not None else None
@@ -640,11 +679,7 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
     unknown = unknown_symbols(text, store)
     if unknown:
         missing = ", ".join(unknown)
-        available = ", ".join(store.list_underlyings()) or "none"
-        raise ValueError(
-            f"no snapshot stored for {missing} (store has: {available}); "
-            f"ingest it first, e.g. run_session.py --underlying {unknown[0]}"
-        )
+        raise ValueError(need_snapshot_text(missing, store))
     max_days = parse_timeframe(text)
     entries = []
     used = []
@@ -666,7 +701,7 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
         used.append(symbol)
         snapshot_ids.append(snapshot_id)
     if not entries:
-        raise ValueError(f"no snapshot stored for {underlying}")
+        raise ValueError(need_snapshot_text(underlying, store))
     ideas = rank_ideas(
         entries,
         max_days,
@@ -685,7 +720,7 @@ def ideas_response(text: str, underlying: str, store: SnapshotStore, journal: Jo
 def vex_brief_response(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
     found = store.read_latest(underlying)
     if found is None:
-        raise ValueError(f"no snapshot stored for {underlying}")
+        raise ValueError(need_snapshot_text(underlying, store))
     snapshot_id, snapshot = found
     bar = store.read_latest_bar(underlying)
     profile = compute_vex(snapshot, snapshot_id)
@@ -696,7 +731,7 @@ def vex_brief_response(underlying: str, store: SnapshotStore, journal: Journal, 
 def dex_brief_response(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
     found = store.read_latest(underlying)
     if found is None:
-        raise ValueError(f"no snapshot stored for {underlying}")
+        raise ValueError(need_snapshot_text(underlying, store))
     snapshot_id, snapshot = found
     bar = store.read_latest_bar(underlying)
     profile = compute_dex(snapshot, snapshot_id)
@@ -734,6 +769,37 @@ def open_trade_size(journal: Journal, symbol: str) -> float:
     return net
 
 
+def paper_state_from_journal(journal: Journal, symbol: str, mark: float, now: datetime) -> RiskState:
+    positions: dict[str, Optional[Position]] = {}
+    day_pnl = 0.0
+    for entry in journal.entries():
+        if entry.kind != "fill" or entry.payload.get("venue", "paper") == "replay":
+            continue
+        fill_symbol = entry.payload.get("symbol")
+        price = entry.payload.get("price")
+        size = entry.payload.get("size")
+        if not fill_symbol or price is None or size is None:
+            continue
+        intent = OrderIntent(
+            symbol=str(fill_symbol),
+            side=str(entry.payload.get("side", "buy")),
+            size=float(size),
+            risk_numbers={},
+            signal_id="journal-replay",
+            legs=(),
+        )
+        fill = Fill(price=float(price), size=float(size), timestamp_utc=entry.timestamp_utc, venue="paper")
+        old = positions.get(str(fill_symbol))
+        if entry.timestamp_utc.date() == now.date():
+            day_pnl += realized_pnl(old, intent, fill)
+            day_pnl -= float(entry.payload.get("fees") or 0.0)
+        positions[str(fill_symbol)] = update_position(old, intent, fill, float(price))
+    current = positions.get(symbol)
+    if current is not None and current.net_size != 0:
+        day_pnl += (mark - current.average_price) * current.net_size
+    return replace(PAPER_TRADE_STATE, day_pnl=day_pnl)
+
+
 def paper_trade_step(
     symbol: str,
     signal: Signal,
@@ -747,13 +813,72 @@ def paper_trade_step(
     if open_trade_size(journal, symbol) != 0:
         journal.append(now, "trade_skipped", {"underlying": symbol, "reason": "position open"})
         return ""
-    intent = build_intent(signal, f"live-{signal.snapshot_id}", PAPER_TRADE_STATE, journal, now)
+    state = paper_state_from_journal(journal, symbol, bar.close, now)
+    intent = build_intent(signal, f"live-{signal.snapshot_id}", state, journal, now)
     if intent is None:
         return ""
-    if review_intent(intent, PAPER_TRADE_STATE, PAPER_TRADE_LIMITS, journal, now) != "approved":
+    if review_intent(intent, state, PAPER_TRADE_LIMITS, journal, now) != "approved":
         return ""
-    fill, _, _ = submit_paper(intent, bar.close, PAPER_TRADE_STATE, None, PAPER_TRADE_LIMITS, journal, now)
+    fill, _, _ = submit_paper(intent, bar.close, state, None, PAPER_TRADE_LIMITS, journal, now)
     return f"paper trade: {intent.side} {intent.size:.0f} {symbol} @ {fill.price:.2f}"
+
+
+def take_card_trade(
+    index: int,
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    snapshot_id: str | None = None,
+) -> str:
+    from bot.demo import demo_cards
+
+    if store.read_profile() is None:
+        return PROFILE_REQUIRED + " -- next: POST /profile with risk_tolerance, portfolio_size, knowledge, options_ok"
+    if snapshot_id is None:
+        latest = store.read_latest(underlying)
+        if latest is None:
+            raise ValueError(need_snapshot_text(underlying, store))
+        snapshot_id = latest[0]
+    _, cards = demo_cards(underlying, store, journal, now, snapshot_id)
+    if not cards:
+        raise ValueError(
+            f"no cards for {underlying} snapshot {snapshot_id} "
+            f"-- next: GET /cards?underlying={underlying} to see what is stored"
+        )
+    if index < 0 or index >= len(cards):
+        raise ValueError(
+            f"index {index} out of range (0-{len(cards) - 1}) "
+            f"-- next: pick an index from GET /cards?underlying={underlying}"
+        )
+    card = cards[index]
+    if card.direction not in ("long", "short"):
+        return (
+            f"card {index} for {card.symbol} is flat "
+            f"-- next: pick another index from GET /cards?underlying={underlying}"
+        )
+    bar = store.read_latest_bar(card.symbol)
+    if bar is None:
+        return f"no stored bar for {card.symbol} -- next: say load {card.symbol} and I'll fetch it"
+    signal = Signal(
+        direction=card.direction, thesis=card.reason,
+        confidence=card.confidence, snapshot_id=card.snapshot_id,
+    )
+    note = paper_trade_step(card.symbol, signal, bar, journal, now)
+    if note:
+        for entry in reversed(journal.entries()):
+            if entry.kind == "fill" and entry.payload.get("symbol") == card.symbol:
+                entry.payload["card_snapshot"] = card.snapshot_id
+                entry.payload["card_index"] = index
+                break
+        return note
+    reason = journal.entries()[-1].payload.get("reason", "vetoed") if journal.entries() else "vetoed"
+    if reason == "position open":
+        return (
+            f"already holding {card.symbol} "
+            f"-- next: close it via portfolio_command 'close {card.symbol}' or take another card"
+        )
+    return f"paper trade for {card.symbol} skipped ({reason}) -- next: check paper_pnl and retry"
 
 
 def _fill_books(journal: Journal) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
@@ -775,8 +900,19 @@ def _fill_books(journal: Journal) -> tuple[dict[str, float], dict[str, float], d
             book_net, book_cost = replay_net, replay_cost
         else:
             book_net, book_cost = live_net, live_cost
-        book_net[symbol] = book_net.get(symbol, 0.0) + signed
-        book_cost[symbol] = book_cost.get(symbol, 0.0) + signed * float(price)
+        old_net = book_net.get(symbol, 0.0)
+        old_cost = book_cost.get(symbol, 0.0)
+        new_net = old_net + signed
+        if old_net == 0.0 or (old_net > 0) == (signed > 0):
+            new_cost = old_cost + signed * float(price)
+        elif new_net == 0.0:
+            new_cost = 0.0
+        elif abs(signed) < abs(old_net):
+            new_cost = old_cost * (new_net / old_net)
+        else:
+            new_cost = new_net * float(price)
+        book_net[symbol] = new_net
+        book_cost[symbol] = new_cost
     return live_net, live_cost, replay_net, replay_cost
 
 
@@ -812,6 +948,34 @@ def paper_pnl_text(journal: Journal, store: SnapshotStore) -> str:
     return "\n".join(lines)
 
 
+CHAIN_KEY_NAMES = ("TRADIER_ACCESS_TOKEN", "MARKETDATA_API_KEY")
+
+
+def load_response(
+    text: str, underlying: str, store: SnapshotStore, journal: Journal, now: datetime
+) -> str:
+    lines = []
+    seen = []
+    for symbol in symbols_for(text, store, underlying):
+        seen.append(symbol)
+        ctx = live_context(symbol)
+        if not any((ctx.credentials or {}).get(name) for name in CHAIN_KEY_NAMES):
+            lines.append(
+                f"load {symbol} needs a chain key: set TRADIER_ACCESS_TOKEN or MARKETDATA_API_KEY"
+            )
+            continue
+        used = ingest_first_working(CHAIN_FEEDS, ingest_chain, symbol, store, journal, now, live_context)
+        if used is None:
+            lines.append(f"load {symbol} failed on every chain feed -- check feed_failed journal entries")
+            continue
+        ingest_first_working(BAR_FEEDS, ingest_bars, symbol, store, journal, now, live_context)
+        found = store.read_latest(symbol)
+        snapshot_id = found[0] if found is not None else "unknown"
+        lines.append(f"loaded {symbol} via {used}: snapshot {snapshot_id}")
+    journal.append(now, "load", {"symbols": seen, "lines": len(lines)})
+    return "\n".join(lines)
+
+
 def route_chat(
     text: str,
     underlying: str,
@@ -828,6 +992,21 @@ def route_chat(
 
         return slash_response(text, underlying, store, journal, config, now)
     lowered = text.strip().lower()
+    from bot.onboarding import is_start, start_onboarding
+
+    if is_start(text):
+        return start_onboarding(journal, now)
+    if re.search(r"\bexplain\b", lowered):
+        from bot.explain import explain_position
+        from bot.ideas import candidate_symbols
+
+        match = re.search(r"explain\s+my\s+([A-Za-z]{1,6})\b", text, re.IGNORECASE)
+        if match:
+            symbol = match.group(1).upper()
+        else:
+            cands = candidate_symbols(text)
+            symbol = cands[0] if cands else underlying
+        return explain_position(symbol, store, journal, now)
     if lowered.startswith("profile:"):
         try:
             profile = build_profile(parse_answers(text))
@@ -853,6 +1032,21 @@ def route_chat(
         from bot.commands import portfolio_response
 
         return portfolio_response(text, underlying, store, journal, now, live_models=live_models)
+    if re.match(r"\s*load\b", lowered):
+        return load_response(text, underlying, store, journal, now)
+    if re.search(r"\bcancel\b.*\balert\b|\balert\b.*\bcancel\b", lowered):
+        from bot.customalerts import cancel_rule_response
+
+        match = re.search(r"rule\s*#?\s*(\d+)", lowered)
+        return cancel_rule_response(match.group(1) if match else "", store, journal, now)
+    if re.search(r"\blist\b.*\balerts?\b|\balert\s+rules?\b|\bmy\s+alerts?\b", lowered):
+        from bot.customalerts import list_rules_text
+
+        return list_rules_text(store)
+    if re.search(r"\balert\s+me\s+if\b", lowered):
+        from bot.customalerts import set_rule_response
+
+        return set_rule_response(text, store, journal, now)
     if re.search(r"\bwheels?\b", lowered):
         return wheel_response(text, underlying, store, journal, now)
     if re.search(r"\bshare\b", lowered) and "card" in lowered:
@@ -881,8 +1075,6 @@ def route_chat(
 
         return backfill_iv_history(store, journal, now)
     if re.search(r"\bdiffs?\b", lowered):
-        from bot.diff import snapshot_diff_text
-
         return snapshot_diff_text(underlying, store)
     if re.search(r"\bshock\b", lowered):
         from bot.news import shock_news_response
@@ -905,6 +1097,10 @@ def route_chat(
             return card_debate(underlying, store, journal, now, index=index, live_models=live_models)
         except ValueError as exc:
             return str(exc)
+    if re.search(r"\bmorning\s+brief\b|\bopen\s+brief\b", lowered):
+        from bot.morning import generate_open_brief
+
+        return generate_open_brief(store, journal, now, underlying, live_models=live_models)
     if re.search(r"\bvideo\b", lowered):
         from bot.video import video_response
 
@@ -925,19 +1121,31 @@ def route_chat(
         from bot.tiers import format_tier_status, tier_status
 
         return format_tier_status(tier_status(journal, now))
-    if re.search(r"\bholdings?\b", lowered):
-        from bot.holdings import holdings_text, save_holdings_text
+    if re.search(r"\bholdings?\b|\bmy book\b", lowered):
+        from bot.holdings import (
+            HOLDINGS_FORMAT,
+            HOLDINGS_WRITE_RE,
+            holdings_text,
+            save_holdings_shapes,
+            save_spoken_holdings,
+        )
 
-        if "[" in text:
+        marks = [text.index(mark) for mark in ("[", "{") if mark in text]
+        if marks:
             try:
-                raw = json.loads(text[text.index("["):])
+                return save_holdings_shapes(text[min(marks):], store, journal, now)
             except ValueError as exc:
-                return f"could not parse holdings JSON: {exc}"
+                return str(exc)
+        if HOLDINGS_WRITE_RE.search(text):
             try:
-                return save_holdings_text(raw, store, journal, now)
+                return save_spoken_holdings(text, store, journal, now)
             except ValueError as exc:
-                return f"could not save holdings: {exc}"
+                return f"{exc}\n{HOLDINGS_FORMAT}"
         return holdings_text(store)
+    from bot.onboarding import answer_onboarding, onboarding_in_progress
+
+    if onboarding_in_progress(journal) and "brief" not in lowered and "gex" not in lowered:
+        return answer_onboarding(text, underlying, store, journal, now)
     reply, _ = handle_chat_query(text, underlying, store, journal, now, live_models, grounding, cards)
     return reply
 

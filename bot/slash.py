@@ -124,7 +124,7 @@ def info_text() -> str:
             "shock: reprice walls and card P&L at a shocked spot",
             "replay: replay snapshots as a signal-to-fill backtest",
             "paper: paper trading plus marked P&L (/pnl)",
-            "alerts: flip, regime, and wall alerts, pushed to Discord/Telegram when webhooks are set",
+            "alerts: flip, regime, and wall alerts, pushed to Discord/Telegram when DISCORD_WEBHOOK_URL or TELEGRAM_BOT_TOKEN plus TELEGRAM_CHAT_ID is set (see push_providers in /health)",
             "holdings: saved book with risk vs flip, spot, and walls",
             "debate: bull vs bear debate on any card (chat: debate)",
             "coach: weekly trading-coach review of the journal (/coach)",
@@ -135,8 +135,8 @@ def info_text() -> str:
             "tiers: cost-aware local/Spark/Wonder routing with day budget (/tier)",
             "profile: risk questionnaire with suggested risk params (/profile)",
             "pages: /chart, /board, /cards, /card, /demo, /dashboard over HTTP",
-            "voice: voice notes transcribed into chat commands (needs a transcription key)",
-            "sessions: scheduled live briefs with alerts and paper trades (when scheduled)",
+            "voice: voice notes transcribed into chat commands (needs META_MODEL_API_KEY; without it POST /voice says so)",
+            "sessions: scheduled live briefs with alerts and paper trades (POST /session runs one now; run_app.py --session-schedule puts it on a timer)",
         ]
     )
 

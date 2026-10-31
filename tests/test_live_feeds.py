@@ -529,7 +529,9 @@ def test_live_brief_falls_back_and_matches_profile():
     snapshot_id, snapshot = store.read_latest("SPY")
     bar = store.read_latest_bar("SPY")
     profile = compute_gex(snapshot, snapshot_id, spot=bar.close if bar else None)
-    assert f"total exposure: ${profile.total_exposure:,.0f}" in reply
+    from bot.diff import compact_dollars
+
+    assert f"total exposure: {compact_dollars(profile.total_exposure)}" in reply
     kinds = [e.kind for e in journal.entries()]
     assert "feed_failed" in kinds
     signal_entry = next(e for e in journal.entries() if e.kind == "signal")
@@ -645,3 +647,28 @@ def test_live_brief_without_paper_trade_journals_no_fill():
 
     live_brief("SPY", store, journal, NOW, context_factory=factory)
     assert not [e for e in journal.entries() if e.kind == "fill"]
+
+
+def test_urllib_get_retries_transient_then_succeeds(monkeypatch):
+    import io, json as _json, urllib.error
+    from bot import feeds
+    attempts = {"n": 0}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self):
+            return _json.dumps({"ok": True}).encode()
+
+    def flaky(request, timeout=None):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise urllib.error.HTTPError(request.full_url, 503, "busy", {}, None)
+        return _Resp()
+
+    monkeypatch.setattr(feeds.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(feeds.time, "sleep", lambda *_: None)
+    assert feeds._urllib_get("https://example.test/x", None, None, 1.0) == {"ok": True}
+    assert attempts["n"] == 3

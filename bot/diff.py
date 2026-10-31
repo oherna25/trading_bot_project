@@ -123,7 +123,7 @@ def snapshot_diff_text(underlying: str, store: SnapshotStore) -> str:
     changes = snapshot_changes(underlying, store)
     if changes is None:
         have = sum(1 for _, s in store.snapshots_in_order() if s.underlying == underlying)
-        return f"diff {underlying}: needs at least 2 stored snapshots (has {have})"
+        return f"diff {underlying}: needs at least 2 stored snapshots (has {have}) -- say load {underlying} to fetch more"
     head = (
         f"{underlying} {changes.previous_ts:%H:%M} -> {changes.latest_ts:%H:%M}:"
     )

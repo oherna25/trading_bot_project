@@ -153,3 +153,11 @@ def test_scheduled_session_reports_failed_chains_and_still_persists(tmp_path):
     kinds = [entry.kind for entry in journal.entries()]
     assert "session_failed" in kinds
     assert kinds[-1] == "video_brief"
+
+
+def test_save_bundle_returns_current_mtimes_and_leaves_no_tmp(tmp_path):
+    from bot.persist import bundle_mtimes
+    store, journal = _seeded()
+    written = save_bundle(str(tmp_path), store, journal)
+    assert written == bundle_mtimes(str(tmp_path))
+    assert list(tmp_path.glob("*.tmp")) == []

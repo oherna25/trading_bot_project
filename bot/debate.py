@@ -8,6 +8,7 @@ from typing import Any, Mapping
 from bot.diff import compact_dollars
 from bot.journal import Journal
 from bot.models import MODEL_REGISTRY, HttpPost, model_api_key, receipt_payload, run_analyst, select_backend
+from bot.store import need_snapshot_text
 from bot.tradecards import PROFILE_REQUIRED, TradeCard
 
 BULL_SYSTEM = "Argue for this options trade in one short paragraph. Reply with that paragraph only."
@@ -141,7 +142,7 @@ def card_debate(
     if snapshot_id is None:
         latest = store.read_latest(underlying)
         if latest is None:
-            raise ValueError(f"no snapshot stored for {underlying}")
+            raise ValueError(need_snapshot_text(underlying, store))
         snapshot_id = latest[0]
     found_id, cards = demo_cards(underlying, store, journal, now, snapshot_id, env, http_post)
     if found_id is None or not cards:

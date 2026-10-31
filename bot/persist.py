@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from datetime import datetime
 from typing import Any
 
 from bot.journal import Journal
-from bot.shapes import Bar, ChainSnapshot, Holding, JournalEntry, OperatorProfile, OptionContract
+from bot.shapes import (
+    Bar,
+    ChainSnapshot,
+    DashboardSettings,
+    Holding,
+    JournalEntry,
+    OperatorProfile,
+    OptionContract,
+)
 from bot.store import SnapshotStore
 
 SNAPSHOTS_FILE = "snapshots.json"
@@ -15,6 +24,9 @@ JOURNAL_FILE = "journal.json"
 PROFILE_FILE = "profile.json"
 IV_FILE = "iv.json"
 HOLDINGS_FILE = "holdings.json"
+SETTINGS_FILE = "settings.json"
+EARNINGS_FILE = "earnings.json"
+ALERT_RULES_FILE = "alert_rules.json"
 
 
 def _freeze(value: Any) -> Any:
@@ -142,6 +154,20 @@ def _freeze_profile(profile: OperatorProfile) -> dict[str, Any]:
     }
 
 
+def _freeze_settings(settings: DashboardSettings) -> dict[str, Any]:
+    return {
+        "theme": settings.theme,
+        "default_underlying": settings.default_underlying,
+        "refresh_seconds": settings.refresh_seconds,
+    }
+
+
+def _thaw_settings(raw: Any) -> DashboardSettings:
+    from bot.shapes import dashboard_settings_from
+
+    return dashboard_settings_from(raw if isinstance(raw, dict) else {})
+
+
 def _freeze_holding(holding: Holding) -> dict[str, Any]:
     return {
         "symbol": holding.symbol,
@@ -176,9 +202,11 @@ def _thaw_profile(raw: dict[str, Any]) -> OperatorProfile:
 
 
 def _write_json(path: str, payload: Any) -> None:
-    tmp_path = path + ".tmp"
+    tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as handle:
         json.dump(payload, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp_path, path)
 
 
@@ -201,7 +229,7 @@ def save_bundle(
     keep_bars: int = KEEP_BARS_PER_UNDERLYING,
     keep_journal: int = KEEP_JOURNAL_ENTRIES,
     keep_iv: int = KEEP_IV_PER_SYMBOL,
-) -> None:
+) -> dict[str, float]:
     os.makedirs(store_dir, exist_ok=True)
     counts: dict[str, int] = {}
     kept: list[tuple[str, ChainSnapshot]] = []
@@ -244,6 +272,13 @@ def save_bundle(
         os.path.join(store_dir, HOLDINGS_FILE),
         [_freeze_holding(holding) for holding in store.read_holdings()],
     )
+    _write_json(os.path.join(store_dir, SETTINGS_FILE), _freeze_settings(store.read_settings()))
+    _write_json(
+        os.path.join(store_dir, EARNINGS_FILE),
+        {symbol: day.isoformat() for symbol, day in store.all_earnings().items()},
+    )
+    _write_json(os.path.join(store_dir, ALERT_RULES_FILE), store.list_alert_rules())
+    return bundle_mtimes(store_dir)
 
 
 def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
@@ -281,10 +316,33 @@ def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
         raw_holdings = _read_json(holdings_path)
         if isinstance(raw_holdings, list):
             store.save_holdings([_thaw_holding(item) for item in raw_holdings if isinstance(item, dict)])
+    settings_path = os.path.join(store_dir, SETTINGS_FILE)
+    if os.path.exists(settings_path):
+        try:
+            store.save_settings(_thaw_settings(_read_json(settings_path)))
+        except ValueError:
+            pass
+    earnings_path = os.path.join(store_dir, EARNINGS_FILE)
+    if os.path.exists(earnings_path):
+        raw_earnings = _read_json(earnings_path)
+        if isinstance(raw_earnings, dict):
+            for symbol, day in raw_earnings.items():
+                try:
+                    store.save_earnings(str(symbol), str(day))
+                except ValueError:
+                    continue
+    rules_path = os.path.join(store_dir, ALERT_RULES_FILE)
+    if os.path.exists(rules_path):
+        raw_rules = _read_json(rules_path)
+        if isinstance(raw_rules, list):
+            store.restore_alert_rules([item for item in raw_rules if isinstance(item, dict)])
     return store, journal
 
 
-BUNDLE_FILES = (SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE, HOLDINGS_FILE)
+BUNDLE_FILES = (
+    SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE, HOLDINGS_FILE,
+    SETTINGS_FILE, EARNINGS_FILE, ALERT_RULES_FILE,
+)
 
 
 def bundle_mtimes(store_dir: str) -> dict[str, float]:

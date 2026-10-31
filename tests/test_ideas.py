@@ -204,9 +204,11 @@ def test_rank_ideas_thesis_and_trigger_name_fields():
         snapshot = store.read_snapshot(idea.snapshot_id)
         profile = compute_gex(snapshot, idea.snapshot_id)
         wall = profile.per_strike_exposure[idea.strike]
+        from bot.diff import compact_dollars
+
         assert str(idea.strike) in idea.thesis
         assert idea.expiry in idea.thesis
-        assert f"{wall:.1f}" in idea.thesis
+        assert compact_dollars(wall) in idea.thesis
         assert "flip" in idea.trigger
         assert idea.thesis != idea.trigger
 
@@ -576,3 +578,28 @@ def test_rank_ideas_single_leg_carries_premium_risk_numbers():
     assert idea.max_loss == pytest.approx(260.0)
     assert idea.breakeven == pytest.approx(102.6)
     assert "max loss $260" in idea.thesis
+
+
+def test_rank_ideas_hedge_is_always_payoff_side():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=NOW,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=(
+            OptionContract(strike=95.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.04, price=3.50, bid=3.40, ask=3.50),
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=2000.0, gamma=0.09, price=2.50, bid=2.40, ask=2.60),
+            OptionContract(strike=105.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.04, price=1.50, bid=1.40, ask=1.50),
+        ),
+    )
+    snapshot_id = f"TEST:{NOW.isoformat()}"
+    bar = Bar(interval="1d", timestamp_utc=NOW, open=100.0, high=103.0,
+              low=99.0, close=102.0, volume=1200.0)
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), bar)])
+    anchor = next(idea for idea in ideas if idea.strike == 100.0)
+    assert anchor.hedge_strike == 105.0
+    assert anchor.spread == "100/105 call vertical"
+    assert anchor.max_loss == pytest.approx(120.0)

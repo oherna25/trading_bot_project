@@ -149,3 +149,20 @@ def test_push_alerts_narrate_sends_reason():
     assert "why:" in sent[0]["content"]
     recorded = [e for e in journal.entries() if e.kind == "alert_sent"]
     assert recorded and "why:" not in recorded[0].payload["text"]
+
+
+def test_filter_noise_scopes_stale_dedup_per_symbol():
+    journal = Journal()
+    text = "ALERT: snapshot is stale (age 7h00m)"
+    journal.append(NOW - timedelta(hours=1), "alert", {"underlying": "SPY", "text": text})
+    journal.append(NOW, "alert", {"underlying": "SPY", "text": text})
+    assert filter_noise([text], "TEST", journal, NOW) == [text]
+
+
+def test_filter_noise_dedups_stale_when_age_text_drifts():
+    journal = Journal()
+    older = "ALERT: snapshot is stale (age 7h00m)"
+    newer = "ALERT: snapshot is stale (age 7h01m)"
+    journal.append(NOW - timedelta(hours=1), "alert", {"underlying": "TEST", "text": older})
+    journal.append(NOW, "alert", {"underlying": "TEST", "text": newer})
+    assert filter_noise([newer], "TEST", journal, NOW) == []

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from bot.diff import compact_dollars
 from bot.exposure import compute_gex
 from bot.research import format_brief, route_chat, scheduled_brief, wall_migration_text
 from bot.journal import Journal
@@ -50,13 +51,13 @@ def _seeded_store() -> SnapshotStore:
 def test_chat_brief_carries_profile_numbers():
     store = _seeded_store()
     reply = route_chat("give me the gex brief", "TEST", store, Journal(), CONFIG, NOW)
-    assert "total exposure: $-104,040" in reply
-    assert "walls: 100 $-104,040" in reply
+    assert "total exposure: -$104K" in reply
+    assert "walls: 100 -$104K" in reply
     assert "strike 100.0:" not in reply
     assert "spot 102.00" in reply
     assert "spot 102.00 (quote 0m)" in reply
     assert "coverage 100%" in reply
-    assert "calls $520,200 / puts $-624,240" in reply
+    assert "calls $520K / puts -$624K" in reply
     assert "change vs previous: n/a (first snapshot)" in reply
     assert "direction: short confidence: 0.50 (regime fallback)" in reply
 
@@ -81,7 +82,7 @@ def test_chat_brief_shows_change_vs_previous_snapshot():
         )
     )
     second = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
-    assert "change vs previous: $624,240" in second
+    assert "change vs previous: $624K" in second
 
 
 def test_vex_and_dex_requests_return_their_own_briefs():
@@ -105,11 +106,11 @@ def test_vex_and_dex_requests_return_their_own_briefs():
     journal = Journal()
     vex = route_chat("give me the vex brief", "TEST", store, journal, CONFIG, NOW)
     assert "VEX brief" in vex
-    assert "total exposure: 1000.0" in vex
+    assert "total exposure: $1K" in vex
     assert "GEX brief" not in vex
     dex = route_chat("give me the dex brief", "TEST", store, journal, CONFIG, NOW)
     assert "DEX brief" in dex
-    assert "total exposure: 1000.0" in dex
+    assert "total exposure: $1K" in dex
     assert "GEX brief" not in dex
 
 
@@ -166,7 +167,7 @@ def _migration_store() -> SnapshotStore:
 def test_wall_migration_narrates_wall_growth():
     text = wall_migration_text("TEST", _migration_store(), NOW)
     assert "walls since the open:" in text
-    assert "100: $520,200 -> $1,560,600 (+1,040,400)" in text
+    assert "100: $520K -> $2M (+$1M)" in text
     assert "day exposure:" in text
 
 
@@ -185,7 +186,7 @@ def test_scheduled_brief_matches_stored_profile():
     reply = scheduled_brief("TEST", store, journal, NOW)
     snapshot_id, snapshot = store.read_latest("TEST")
     profile = compute_gex(snapshot, snapshot_id, spot=102.0)
-    assert f"total exposure: ${profile.total_exposure:,.0f}" in reply
+    assert f"total exposure: {compact_dollars(profile.total_exposure)}" in reply
     assert "(age 0m, source tradier_sandbox)" in reply
     assert journal.entries()[-1].kind == "brief_sent"
 
@@ -255,7 +256,7 @@ def test_change_line_labels_negative_previous_direction():
         )
     )
     less = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
-    assert "change vs previous: $624,240 (sign flip)" in less
+    assert "change vs previous: $624K (sign flip)" in less
     store = _seeded_store()
     journal = Journal()
     route_chat("gex brief", "TEST", store, journal, CONFIG, NOW)
@@ -274,7 +275,7 @@ def test_change_line_labels_negative_previous_direction():
         )
     )
     more = route_chat("gex brief", "TEST", store, journal, CONFIG, NOW + timedelta(hours=1))
-    assert "change vs previous: $-208,080 (-200.0%, more negative)" in more
+    assert "change vs previous: -$208K (-200.0%, more negative)" in more
 
 
 def _direct_brief(current_total, previous_total):
@@ -289,13 +290,13 @@ def _direct_brief(current_total, previous_total):
 
 
 def test_change_line_marks_sign_flip_without_percent():
-    assert "change vs previous: $154,040 (sign flip)" in _direct_brief(50000.0, -104040.0)
-    assert "change vs previous: $-154,040 (sign flip)" in _direct_brief(-104040.0, 50000.0)
+    assert "change vs previous: $154K (sign flip)" in _direct_brief(50000.0, -104040.0)
+    assert "change vs previous: -$154K (sign flip)" in _direct_brief(-104040.0, 50000.0)
 
 
 def test_change_line_keeps_percent_for_same_sign_negatives():
-    assert "change vs previous: $-208,080 (-200.0%, more negative)" in _direct_brief(-312120.0, -104040.0)
-    assert "change vs previous: $52,020 (+50.0%, less negative)" in _direct_brief(-52020.0, -104040.0)
+    assert "change vs previous: -$208K (-200.0%, more negative)" in _direct_brief(-312120.0, -104040.0)
+    assert "change vs previous: $52K (+50.0%, less negative)" in _direct_brief(-52020.0, -104040.0)
 
 
 def test_trade_cards_output_carries_reason_text(monkeypatch):
@@ -330,3 +331,45 @@ def test_wheel_answers_beat_ideas_ordering():
     assert reply.startswith("wheel ideas (1):")
     assert "SELL_PUT" in reply
     assert "trade ideas (" not in reply
+
+
+def _stale_spot_store():
+    store = SnapshotStore()
+    store.save(ChainSnapshot(
+        underlying="TEST", timestamp_utc=NOW - timedelta(minutes=3),
+        source_name="tradier_sandbox", latency_ms=9.0,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.05),
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put",
+                           open_interest=2000.0, gamma=0.03),
+        ),
+    ))
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW - timedelta(minutes=59),
+                               open=100.0, high=103.0, low=99.0, close=102.0, volume=1200.0))
+    return store
+
+
+def test_brief_flags_stale_quote():
+    reply = route_chat("brief", "TEST", _stale_spot_store(), Journal(), CONFIG, NOW)
+    assert "(quote 59m)" in reply
+    assert "STALE -- refresh the quote before trading" in reply
+
+
+def test_brief_fresh_quote_has_no_stale_flag():
+    reply = route_chat("brief", "TEST", _seeded_store(), Journal(), CONFIG, NOW)
+    assert "STALE" not in reply
+
+
+def test_brief_carries_so_what_line():
+    reply = route_chat("brief", "TEST", _seeded_store(), Journal(), CONFIG, NOW)
+    assert "so what: short-gamma: dealers amplify moves" in reply
+    assert "nearest magnet: 100" in reply
+
+
+def test_vex_dex_briefs_carry_so_what_lines():
+    store = _seeded_store()
+    vex = route_chat("vex brief", "TEST", store, Journal(), CONFIG, NOW)
+    dex = route_chat("dex brief", "TEST", store, Journal(), CONFIG, NOW)
+    assert "so what: a 1pt IV rise is worth" in vex
+    assert "so what: net " in dex and "share-equivalents" in dex
