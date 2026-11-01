@@ -1,10 +1,28 @@
 # TradingWingManBot
 
-A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX/DEX/CHARM/VANNA exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and routes to a Tradier venue once the operator enables it with a signed action.
+A research-first options trading system. It ingests free-tier market data, computes its own GEX/VEX/DEX/CHARM/VANNA exposure from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading works out of the box. Live ordering stays off until you enable it with a signed action.
+
+What you get: a one-screen demo with regime read, trade cards, replay, and shock test; a dashboard and positioning board across every stored underlying; gamma-by-strike charts; defined-risk trade ideas and premium screens; honest next-bar replay scored against buy-and-hold; Discord and Telegram alerts. See the [app tour](#app-tour).
+
+Run the suite with no keys and no network:
+
+```bash
+python -m venv .venv
+.venv/bin/pip install pytest ruff mypy
+.venv/bin/python -m pytest tests/ -q
+```
+
+Then serve the dashboard (it serves whatever is in `data/trading-bot`, so seed that directory first with the snippet under [interactive snippets](#interactive-snippets) or add keys to `.env`):
+
+```bash
+.venv/bin/python run_app.py
+```
+
+Open `localhost:8000/demo`. Without keys the suite and every offline flow run on canned fixtures. Copy `.env.example` to `.env` when you want live data.
 
 The plan lives in [init.md](init.md). The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/) as Mermaid sources. AI agents start with [AGENTS.md](AGENTS.md).
 
-Meta model integration is planned as Phases M0-M5 in [init.md](init.md): a Muse Spark analyst behind the research loop, voice input, brief cards, a Muse Wonder advisory review, and the M5 standout set (local Glimmer/Spark Open analyst, cost-aware tier router, chart and document readers, shock news, voice holdings and kill, journal coach, alert narration, portfolio commands, shareable cards). All phases are implemented.
+Meta model integration (Phases M0-M5 in [init.md](init.md)) is implemented: a Muse Spark analyst behind the research loop, voice input, brief cards, a Muse Wonder advisory review, and the M5 standout set (local Glimmer/Spark Open analyst, cost-aware tier router, chart and document readers, shock news, voice holdings and kill, journal coach, alert narration, portfolio commands, shareable cards).
 
 ## How it works
 
@@ -132,7 +150,7 @@ The bot reads `.env` from the working directory automatically; real environment 
 
 ## App tour
 
-Live pages served from the stored bundle (`data/trading-bot`, 18 underlyings, 2491 snapshots). Screenshots below were captured off `run_app.py` output served locally with no ingest, so every number is real stored state.
+Live pages served from a stored bundle with `run_app.py`. The shots below come from one such bundle, so every number is real stored state.
 
 ![Demo page: regime read, top trade card, wheel screen, replay vs buy-and-hold, shock buttons](docs/screenshots/demo.png)
 *`/demo` — one-screen summary. Regime read with walls and flip, the top trade card with a one-click paper-trade button, wheel screen, replay P&L against the SPY buy-and-hold benchmark, and shock-test shortcuts.*
