@@ -386,3 +386,124 @@ def test_vex_dex_briefs_carry_so_what_lines():
     assert "so what: net " in dex and "share-equivalents" in dex
     assert "so what: charm bleeds" in charm and "delta per day" in charm
     assert "so what: a 1pt IV rise shifts delta" in vanna
+
+
+def _bars_only_store() -> SnapshotStore:
+    store = SnapshotStore()
+    base = NOW - timedelta(days=4)
+    closes = [100.0, 102.0, 101.0, 103.0, 105.0]
+    for index, close in enumerate(closes):
+        store.save_bar("BARS", Bar(interval="1d", timestamp_utc=base + timedelta(days=index),
+                                   open=closes[index - 1] if index else 99.0,
+                                   high=close + 1.0, low=close - 1.0,
+                                   close=close, volume=1000.0 + index * 100.0))
+    return store
+
+
+def test_bars_only_chat_returns_price_brief():
+    store = _bars_only_store()
+    journal = Journal()
+    reply = route_chat("brief", "BARS", store, journal, CONFIG, NOW)
+    assert "BARS price brief -- 5 daily bars" in reply
+    assert "period 100.00 -> 105.00 (+5.00%)" in reply
+    assert "GEX brief" not in reply
+    assert "no options snapshot stored" in reply
+    assert any(entry.kind == "bars_brief" for entry in journal.entries())
+
+
+def test_bars_only_signal_is_flat_without_snapshot():
+    from bot.research import handle_chat_query
+
+    store = _bars_only_store()
+    _, signal = handle_chat_query("brief", "BARS", store, Journal(), NOW)
+    assert signal.direction == "flat"
+    assert signal.snapshot_id == ""
+    assert signal.symbol == "BARS"
+
+
+def test_no_snapshot_no_bars_still_errors():
+    import pytest
+
+    with pytest.raises(ValueError, match="no snapshot stored for MISSING"):
+        route_chat("brief", "MISSING", SnapshotStore(), Journal(), CONFIG, NOW)
+
+
+def _intraday_http(url, headers=None, params=None, timeout=10.0):
+    from bot.feeds import YAHOO_BASE_URL
+
+    assert url.startswith(f"{YAHOO_BASE_URL}/v8/finance/chart/JPM")
+    assert params["interval"] == "15m" and params["range"] == "5d"
+    base = datetime(2026, 10, 26, 13, 30, tzinfo=timezone.utc)
+    stamps = [int((base + timedelta(minutes=15 * index)).timestamp()) for index in range(4)]
+    return {
+        "chart": {
+            "result": [{
+                "timestamp": stamps,
+                "indicators": {"quote": [{
+                    "open": [100.0, 100.5, 101.0, 101.5],
+                    "high": [100.6, 101.1, 101.6, 102.0],
+                    "low": [99.8, 100.3, 100.8, 101.2],
+                    "close": [100.5, 101.0, 101.5, 102.0],
+                    "volume": [100.0, 110.0, 120.0, 130.0],
+                }]},
+            }],
+            "error": None,
+        }
+    }
+
+
+def _stub_intraday_factory(symbol):
+    from bot.feeds import FeedContext
+
+    return FeedContext(underlying=symbol, http_get=_intraday_http)
+
+
+def test_intraday_blocked_outside_top50():
+    from bot.research import intraday_response
+
+    store = SnapshotStore()
+    journal = Journal()
+    reply = intraday_response("intraday SLGN", "SLGN", store, journal, NOW, _stub_intraday_factory)
+    assert reply == "intraday covers the top 50 only; SLGN is outside it"
+    assert any(entry.kind == "intraday_blocked" for entry in journal.entries())
+
+
+def test_intraday_fetches_and_briefs_top50():
+    from bot.research import intraday_response
+
+    store = SnapshotStore()
+    journal = Journal()
+    reply = intraday_response("intraday JPM", "SPY", store, journal, NOW, _stub_intraday_factory)
+    assert "JPM intraday brief -- 15m x 4" in reply
+    assert "yfinance_intraday" in reply
+    assert store.read_bars("JPM") == []
+    assert len(store.read_bars("JPM", interval="15m")) == 4
+    assert any(entry.kind == "intraday_brief" for entry in journal.entries())
+
+
+def test_intraday_reuses_fresh_store_without_fetch():
+    from bot.research import intraday_response
+
+    store = SnapshotStore()
+    store.save_bar("JPM", Bar(interval="15m", timestamp_utc=NOW - timedelta(hours=1),
+                               open=101.5, high=102.0, low=101.2, close=102.0, volume=130.0))
+
+    def _boom(symbol):
+        raise AssertionError("must not fetch")
+
+    reply = intraday_response("intraday JPM", "SPY", store, Journal(), NOW, _boom)
+    assert "(stored)" in reply
+
+
+def test_intraday_fetch_failure_reports():
+    from bot.feeds import FeedContext
+    from bot.research import intraday_response
+
+    def _raising(url, headers=None, params=None, timeout=10.0):
+        raise RuntimeError("boom")
+
+    def _fail_factory(symbol):
+        return FeedContext(underlying=symbol, http_get=_raising)
+
+    reply = intraday_response("intraday JPM", "SPY", SnapshotStore(), Journal(), NOW, _fail_factory)
+    assert reply == "intraday fetch failed for JPM: RuntimeError"

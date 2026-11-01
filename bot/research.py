@@ -14,6 +14,7 @@ from bot.exposure import compute_charm, compute_dex, compute_gex, compute_vanna,
 from bot.feeds import (
     BAR_FEEDS,
     CHAIN_FEEDS,
+    INTRADAY_TOP50,
     FeedContext,
     FeedUnavailableError,
     ingest_bars,
@@ -43,8 +44,8 @@ from bot.tradecards import cards_response
 from bot.wheel import wheel_response
 
 from bot.research_analyst import advisory_review, analyst_backend, analyst_tool, grounded_note
-from bot.research_formatters import (_format_age, derive_display, format_brief, format_exposure_brief, previous_profile, wall_migration_text)
-from bot.research_ingest import _record_option_iv, ingest_first_working
+from bot.research_formatters import (_format_age, derive_display, format_bars_brief, format_brief, format_exposure_brief, format_intraday_brief, previous_profile, wall_migration_text)
+from bot.research_ingest import _record_option_iv, ensure_intraday, ingest_first_working
 from bot.research_paper import PAPER_ACCOUNT_ID, open_trade_size, paper_pnl_text, paper_trade_step, take_card_trade
 
 def handle_chat_query(
@@ -61,7 +62,29 @@ def handle_chat_query(
 ) -> tuple[str, Signal]:
     found = store.read_latest(underlying)
     if found is None:
-        raise ValueError(need_snapshot_text(underlying, store))
+        bars_only = store.read_bars(underlying)
+        if not bars_only:
+            raise ValueError(need_snapshot_text(underlying, store))
+        latest_bar = max(bars_only, key=lambda bar: bar.timestamp_utc)
+        stamp = max(now, latest_bar.timestamp_utc)
+        reply = format_bars_brief(underlying, bars_only, now)
+        signal = Signal(
+            direction="flat",
+            thesis=f"bars-only price brief for {underlying}; no options snapshot",
+            confidence=0.0,
+            snapshot_id="",
+            symbol=underlying,
+        )
+        journal.append(
+            stamp, "bars_brief",
+            {
+                "symbol": underlying,
+                "days": len(bars_only),
+                "first": min(bar.timestamp_utc for bar in bars_only).date().isoformat(),
+                "last": latest_bar.timestamp_utc.date().isoformat(),
+            },
+        )
+        return reply, signal
     snapshot_id, snapshot = found
     bar = store.read_latest_bar(underlying)
     spot = bar.close if bar is not None else None
@@ -229,6 +252,28 @@ def vanna_brief_response(underlying: str, store: SnapshotStore, journal: Journal
     return format_exposure_brief("VANNA", profile, snapshot, bar, now)
 
 
+def intraday_response(
+    text: str,
+    underlying: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    context_factory: Callable[[str], FeedContext] = live_context,
+) -> str:
+    candidates = symbols_for(text, store, underlying)
+    symbol = (candidates[0] if candidates else underlying).upper()
+    if symbol not in INTRADAY_TOP50:
+        journal.append(now, "intraday_blocked", {"symbol": symbol})
+        return f"intraday covers the top 50 only; {symbol} is outside it"
+    try:
+        bars, source = ensure_intraday(symbol, store, journal, now, context_factory)
+    except Exception as exc:
+        journal.append(now, "feed_failed", {"feed_name": "yfinance_intraday", "error": type(exc).__name__})
+        return f"intraday fetch failed for {symbol}: {type(exc).__name__}"
+    journal.append(now, "intraday_brief", {"symbol": symbol, "bars": len(bars), "source": source})
+    return format_intraday_brief(symbol, bars, now, source)
+
+
 def journal_tail_text(journal: Journal, count: int = 20) -> str:
     entries = journal.entries()[-max(1, count):]
     if not entries:
@@ -383,6 +428,8 @@ def route_chat(
         return charm_brief_response(underlying, store, journal, now)
     if re.search(r"\bvanna\b", lowered) or "vanna exposure" in lowered:
         return vanna_brief_response(underlying, store, journal, now)
+    if re.search(r"\bintraday\b", lowered):
+        return intraday_response(text, underlying, store, journal, now)
     if re.search(r"\breplay\b", lowered):
         from bot.replay import replay_response
 
@@ -547,6 +594,7 @@ __all__ = [
     "handle_chat_query",
     "ideas_response",
     "ingest_first_working",
+    "intraday_response",
     "journal_tail_text",
     "live_brief",
     "load_response",

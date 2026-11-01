@@ -246,3 +246,68 @@ def format_exposure_brief(
         _exposure_so_what(kind, profile),
     ]
     return "\n".join(lines)
+
+
+def format_bars_brief(symbol: str, bars: list[Bar], now: datetime) -> str:
+    """Price-action brief over stored daily bars; no options snapshot needed."""
+    ordered = sorted(bars, key=lambda bar: bar.timestamp_utc)
+    first, last = ordered[0], ordered[-1]
+    closes = [bar.close for bar in ordered]
+    period_pct = (last.close - first.close) / first.close * 100.0 if first.close else 0.0
+    day_pct = [
+        (bar.close - bar.open) / bar.open * 100.0 if bar.open else 0.0 for bar in ordered
+    ]
+    up_days = sum(1 for pct in day_pct if pct > 0)
+    best = max(day_pct)
+    worst = min(day_pct)
+    avg_volume = sum(bar.volume for bar in ordered) / len(ordered)
+    age = _format_age(now - last.timestamp_utc) if now >= last.timestamp_utc else "0m"
+    direction = "up" if period_pct >= 0 else "down"
+    lines = [
+        f"{symbol} price brief -- {len(ordered)} daily bars "
+        f"{first.timestamp_utc.date()} -> {last.timestamp_utc.date()} (quote age {age})",
+        f"last {last.close:.2f} ({day_pct[-1]:+.2f}% on the day) | "
+        f"period {first.close:.2f} -> {last.close:.2f} ({period_pct:+.2f}%)",
+        f"range {min(closes):.2f} - {max(closes):.2f} | "
+        f"best day {best:+.2f}% / worst day {worst:+.2f}% | up days {up_days}/{len(ordered)}",
+        f"volume avg {avg_volume:,.0f} vs last {last.volume:,.0f}",
+        f"closes: {_sparkline(closes)}",
+        f"so what: {direction} {abs(period_pct):.1f}% over {len(ordered)} sessions "
+        f"with {up_days} up days.",
+        f"no options snapshot stored -- ideas and GEX need one: load {symbol} "
+        f"(needs TRADIER_ACCESS_TOKEN or MARKETDATA_API_KEY)",
+    ]
+    return "\n".join(lines)
+
+
+def format_intraday_brief(symbol: str, bars: list[Bar], now: datetime, source: str) -> str:
+    """Session-by-session brief over one week of 15m bars."""
+    ordered = sorted(bars, key=lambda bar: bar.timestamp_utc)
+    sessions: dict[str, list[Bar]] = {}
+    for bar in ordered:
+        sessions.setdefault(bar.timestamp_utc.date().isoformat(), []).append(bar)
+    days = sorted(sessions)
+    first_open = sessions[days[0]][0].open
+    last = ordered[-1]
+    week_pct = (last.close - first_open) / first_open * 100.0 if first_open else 0.0
+    lines = [
+        f"{symbol} intraday brief -- {ordered[0].interval} x {len(ordered)} "
+        f"over {len(days)} sessions {days[0]} -> {days[-1]} ({source})",
+        f"last {last.close:.2f} at {last.timestamp_utc:%m-%d %H:%M} UTC | "
+        f"week {first_open:.2f} -> {last.close:.2f} ({week_pct:+.2f}%)",
+    ]
+    prev_close: float | None = None
+    for day in days[-5:]:
+        day_bars = sessions[day]
+        day_open = day_bars[0].open
+        day_close = day_bars[-1].close
+        base = prev_close if prev_close is not None else day_open
+        day_pct = (day_close - base) / base * 100.0 if base else 0.0
+        lines.append(
+            f"{day[5:]}: {day_open:.2f} -> {day_close:.2f} ({day_pct:+.2f}%) | "
+            f"range {min(b.low for b in day_bars):.2f} - {max(b.high for b in day_bars):.2f} | "
+            f"vol {sum(b.volume for b in day_bars):,.0f}"
+        )
+        prev_close = day_close
+    lines.append(f"closes: {_sparkline([bar.close for bar in ordered])}")
+    return "\n".join(lines)

@@ -129,20 +129,22 @@ class SnapshotStore:
         )
         return True
 
-    def read_latest_bar(self, underlying: str) -> Optional[Bar]:
-        bars = self._bars.get(underlying, [])
+    def read_latest_bar(self, underlying: str, interval: str = "1d") -> Optional[Bar]:
+        bars = [bar for bar in self._bars.get(underlying, []) if bar.interval == interval]
         if not bars:
             return None
         return bars[-1]
 
-    def read_bars(self, underlying: str) -> list[Bar]:
-        return list(self._bars.get(underlying, []))
+    def read_bars(self, underlying: str, interval: str = "1d") -> list[Bar]:
+        return [bar for bar in self._bars.get(underlying, []) if bar.interval == interval]
 
     def snapshots_in_order(self) -> list[tuple[str, ChainSnapshot]]:
         return [(snapshot_id, self._snapshots[snapshot_id]) for snapshot_id in self._order]
 
-    def all_bars(self) -> dict[str, list[Bar]]:
-        return {underlying: self.read_bars(underlying) for underlying in self._bars}
+    def all_bars(self, interval: str | None = None) -> dict[str, list[Bar]]:
+        if interval is None:
+            return {underlying: list(bars) for underlying, bars in self._bars.items()}
+        return {underlying: self.read_bars(underlying, interval=interval) for underlying in self._bars}
 
     def save_profile(self, profile: OperatorProfile) -> None:
         self._profile = profile

@@ -411,11 +411,11 @@ def _marketdata_eod(ctx: FeedContext) -> dict[str, Any]:
     return {"underlying": ctx.underlying, "contracts": contracts}
 
 
-def _yfinance(ctx: FeedContext) -> dict[str, Any]:
+def _yahoo_bars(ctx: FeedContext, interval: str, span: str) -> dict[str, Any]:
     payload = ctx.http_get(
         f"{YAHOO_BASE_URL}/v8/finance/chart/{ctx.underlying}",
         headers={"User-Agent": "trading-bot/0.1"},
-        params={"interval": "1d", "range": f"{BAR_DAYS}d"},
+        params={"interval": interval, "range": span},
         timeout=HTTP_TIMEOUT_SECONDS,
     )
     results = _as_list((payload.get("chart") or {}).get("result"))
@@ -446,6 +446,73 @@ def _yfinance(ctx: FeedContext) -> dict[str, Any]:
         )
     bars.sort(key=lambda b: b["timestamp"])
     return {"underlying": ctx.underlying, "bars": bars}
+
+
+def _yfinance(ctx: FeedContext) -> dict[str, Any]:
+    return _yahoo_bars(ctx, "1d", f"{BAR_DAYS}d")
+
+
+INTRADAY_INTERVAL = "15m"
+INTRADAY_SPAN = "5d"
+
+# Top 50 NYSE listings by market cap, Nasdaq screener 2026-11-01.
+# Intraday history is fetched on demand for these symbols only.
+INTRADAY_TOP50 = (
+    "TSM", "LLY", "BRK-A", "BRK-B", "JPM", "XOM", "V", "JNJ", "MA", "ABBV",
+    "CVX", "ORCL", "KO", "PG", "UNH", "MRK", "BAC", "HD", "PM", "GE",
+    "NVS", "DELL", "MS", "SHEL", "CAT", "HSBC", "SAP", "RY", "AZN", "GS",
+    "RTX", "TMO", "MUFG", "TM", "WFC", "IBM", "BABA", "GEV", "ANET", "CCZ",
+    "AXP", "C", "BHP", "TD", "TTE", "APH", "KOF", "DIS", "CRM", "BLK",
+)
+
+
+def sanitize_symbol(raw: str) -> str:
+    """Yahoo form for a screener-style symbol: BRK/B -> BRK-B."""
+    return str(raw or "").strip().upper().replace("/", "-").replace(".", "-")
+
+
+def ingest_intraday(
+    symbol: str,
+    store: SnapshotStore,
+    journal: Journal,
+    now: datetime,
+    context_factory: Callable[[str], FeedContext] = live_context,
+    interval: str = INTRADAY_INTERVAL,
+    span: str = INTRADAY_SPAN,
+) -> list[Bar]:
+    """Fetch one week of intraday bars via Yahoo and store them tagged by interval."""
+    context = context_factory(sanitize_symbol(symbol))
+    started = time.perf_counter()
+    raw = _yahoo_bars(context, interval, span)
+    latency_ms = (time.perf_counter() - started) * 1000.0
+    bars = [
+        Bar(
+            interval=interval,
+            timestamp_utc=b["timestamp"],
+            open=b["open"],
+            high=b["high"],
+            low=b["low"],
+            close=b["close"],
+            volume=b["volume"],
+        )
+        for b in raw["bars"]
+    ]
+    if not bars:
+        raise FeedUnavailableError(f"feed yfinance returned no intraday bars for {symbol}")
+    for bar in bars:
+        store.save_bar(raw["underlying"], bar)
+    journal.append(
+        now,
+        "bars_ingested",
+        {
+            "source_name": "yfinance_intraday",
+            "underlying": raw["underlying"],
+            "count": len(bars),
+            "latency_ms": latency_ms,
+            "interval": interval,
+        },
+    )
+    return bars
 
 
 def _alpha_vantage(ctx: FeedContext) -> dict[str, Any]:
