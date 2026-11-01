@@ -28,6 +28,8 @@ class OptionContract:
     gamma: Optional[float] = None
     vega: Optional[float] = None
     delta: Optional[float] = None
+    charm: Optional[float] = None
+    vanna: Optional[float] = None
     price: Optional[float] = None
     bid: Optional[float] = None
     ask: Optional[float] = None
@@ -83,11 +85,26 @@ class DexProfile:
 
 
 @dataclass(frozen=True)
+class CharmProfile:
+    snapshot_id: str
+    per_strike_exposure: dict[float, float]
+    total_exposure: float
+
+
+@dataclass(frozen=True)
+class VannaProfile:
+    snapshot_id: str
+    per_strike_exposure: dict[float, float]
+    total_exposure: float
+
+
+@dataclass(frozen=True)
 class Signal:
     direction: str
     thesis: str
     confidence: float
     snapshot_id: str
+    symbol: str = ""
     status: str = "unknown"
     trigger: str = ""
     entry_band: str = ""
@@ -125,6 +142,18 @@ class ModelReceipt:
     tokens_out: int
     cost_usd: float
     latency_ms: float
+
+
+@dataclass(frozen=True)
+class UserModelConfig:
+    """Operator-supplied LLM for the portable chat roles.
+
+    The key is read from the environment only, never persisted or journaled.
+    """
+
+    api_key: str
+    base_url: str
+    model_id: str
 
 
 @dataclass(frozen=True)
@@ -170,6 +199,18 @@ class RiskState:
     day_pnl: float
     halt_active: bool
     kill_active: bool
+
+
+@dataclass(frozen=True)
+class PaperAccount:
+    account_id: str
+    state: RiskState
+    total_pnl: float = 0.0
+    day_pnl: dict[str, float] = field(default_factory=dict)
+    equity_curve: tuple[tuple[str, float], ...] = ()
+    peak_equity: float = 0.0
+    peak_day_pnl: Optional[float] = None
+    last_day: str = ""
 
 
 @dataclass(frozen=True)

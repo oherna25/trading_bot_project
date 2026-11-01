@@ -94,9 +94,11 @@ def test_vex_and_dex_requests_return_their_own_briefs():
             latency_ms=9.0,
             contracts_list=(
                 OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
-                               open_interest=100.0, gamma=0.05, vega=0.20, delta=0.55),
+                               open_interest=100.0, gamma=0.05, vega=0.20, delta=0.55,
+                               charm=0.04, vanna=0.06),
                 OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put",
-                               open_interest=100.0, gamma=0.03, vega=0.10, delta=-0.45),
+                               open_interest=100.0, gamma=0.03, vega=0.10, delta=-0.45,
+                               charm=0.03, vanna=0.05),
             ),
         )
     )
@@ -111,6 +113,14 @@ def test_vex_and_dex_requests_return_their_own_briefs():
     assert "DEX brief" in dex
     assert "total exposure: $1K" in dex
     assert "GEX brief" not in dex
+    charm = route_chat("give me the charm brief", "TEST", store, journal, CONFIG, NOW)
+    assert "CHARM brief" in charm
+    assert "total exposure: $100" in charm
+    assert "GEX brief" not in charm
+    vanna = route_chat("give me the vanna brief", "TEST", store, journal, CONFIG, NOW)
+    assert "VANNA brief" in vanna
+    assert "total exposure: $100" in vanna
+    assert "GEX brief" not in vanna
 
 
 def test_paper_pnl_marks_journaled_fills():
@@ -127,8 +137,8 @@ def test_paper_pnl_marks_journaled_fills():
     intent = build_intent(signal, "sig-1", state, journal, NOW)
     submit_paper(intent, 100.0, state, None, limits, journal, NOW, ask=100.0)
     text = paper_pnl_text(journal, store)
-    assert "TEST: size 1000 avg 100.00 mark 102.00 pnl +2000.00" in text
-    assert "total paper pnl: +2000.00" in text
+    assert "TEST: size 600 avg 100.00 mark 102.00 pnl +1200.00" in text
+    assert "total paper pnl: +1200.00" in text
 
 
 def test_trade_cards_answers_beat_ideas_ordering(monkeypatch):
@@ -370,5 +380,9 @@ def test_vex_dex_briefs_carry_so_what_lines():
     store = _seeded_store()
     vex = route_chat("vex brief", "TEST", store, Journal(), CONFIG, NOW)
     dex = route_chat("dex brief", "TEST", store, Journal(), CONFIG, NOW)
+    charm = route_chat("charm brief", "TEST", store, Journal(), CONFIG, NOW)
+    vanna = route_chat("vanna brief", "TEST", store, Journal(), CONFIG, NOW)
     assert "so what: a 1pt IV rise is worth" in vex
     assert "so what: net " in dex and "share-equivalents" in dex
+    assert "so what: charm bleeds" in charm and "delta per day" in charm
+    assert "so what: a 1pt IV rise shifts delta" in vanna

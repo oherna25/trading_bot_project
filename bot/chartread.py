@@ -7,9 +7,10 @@ from typing import Any, Mapping, Sequence
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.models import (
-    MODEL_REGISTRY,
     HttpPost,
-    model_api_key,
+    chat_api_key,
+    chat_base_url,
+    chat_spec,
     receipt_payload,
     run_analyst,
     select_backend,
@@ -94,7 +95,7 @@ def read_chart_image(
         journal.append(now, "chart_skipped", {"reason": "image too large"})
         return "chart image rejected: image too large"
     backend, reason = select_backend("analyst", journal, now, env)
-    if backend != "model":
+    if backend not in ("model", "user"):
         journal.append(now, "chart_skipped", {"reason": reason})
         return f"chart reading unavailable: {reason}"
     found = store.read_latest(underlying)
@@ -123,7 +124,8 @@ def read_chart_image(
     ]
     try:
         text, receipts = run_analyst(
-            MODEL_REGISTRY["analyst"], model_api_key(env), messages, [], {}, prompt, http_post
+            chat_spec("analyst", env), chat_api_key("analyst", env), messages, [], {}, prompt, http_post,
+            base_url=chat_base_url("analyst", env),
         )
     except Exception as exc:
         journal.append(now, "chart_skipped", {"reason": type(exc).__name__})

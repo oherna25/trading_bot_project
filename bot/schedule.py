@@ -83,6 +83,9 @@ def run_session_core(
             failures.append(f"scheduled session failed for {symbol}: {exc}")
     if replies:
         journal.append(moment, "session_saved", {"underlyings": symbols, "store_dir": store_dir})
+    from bot.tradecards import drain_reason_queue
+
+    drain_reason_queue(max_jobs=32)
     if failures and not replies:
         return "\n".join(failures)
     from bot.morning import maybe_send_open_brief

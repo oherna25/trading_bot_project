@@ -144,6 +144,47 @@ def test_shock_crosses_flip_and_multiple_walls():
     assert "105 " in broken and "115 " in broken
 
 
+def _shocked_journal() -> Journal:
+    journal = Journal()
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "price": 2.50, "size": 2.0,
+                                "venue": "paper",
+                                "legs": [{"symbol": "TEST", "side": "buy", "size": 2.0,
+                                          "strike": 100.0, "expiry": "2026-11-20",
+                                          "call_or_put": "call"}]})
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "price": 102.0, "size": 10.0,
+                                "venue": "paper"})
+    return journal
+
+
+def test_shock_reprices_positions_with_black_scholes():
+    text = shock_text("TEST", _single_wall_store(), _shocked_journal(), NOW, -2.0)
+    assert "flip and walls assume static gamma (approximation)" in text
+    assert "positions under shock (Black-Scholes, qty from fills):" in text
+    assert "TEST call 100.0 2026-11-20 x2: $4.36 -> $3.24 (-$224)" in text
+    assert "TEST stock x10: 102 -> 99.96 (-$20)" in text
+    assert "positions total: -$244" in text
+
+
+def test_shock_iv_override_flows_into_reprice():
+    text = shock_text("TEST", _single_wall_store(), _shocked_journal(), NOW, -2.0, iv_shock_pct=50.0)
+    assert "TEST call 100.0 2026-11-20 x2: $4.36 -> $4.71 (+$70)" in text
+    assert "positions total: +$49" in text
+
+
+def test_shock_skips_positions_without_iv_or_other_symbols():
+    journal = Journal()
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "price": 1.0, "size": 1.0,
+                                "venue": "paper",
+                                "legs": [{"symbol": "TEST", "side": "buy", "size": 1.0,
+                                          "strike": 999.0, "expiry": "2026-11-20",
+                                          "call_or_put": "call"}]})
+    journal.append(NOW, "fill", {"symbol": "OTHER", "side": "buy", "price": 50.0, "size": 5.0,
+                                "venue": "paper"})
+    text = shock_text("TEST", _single_wall_store(), journal, NOW, -2.0)
+    assert "positions skipped (no IV or expiry): 1" in text
+    assert "positions in other symbols skipped: 1" in text
+
+
 def test_shock_missing_snapshot_or_bar():
     assert "no snapshot stored" in shock_text("NOPE", SnapshotStore(), Journal(), NOW, -2.0)
     store = SnapshotStore()

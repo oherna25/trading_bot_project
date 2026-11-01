@@ -1,6 +1,6 @@
 # Trading Bot
 
-A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX/DEX exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and routes to a Tradier venue once the operator enables it with a signed action.
+A research-first trading system that grows into gated autonomy one verified phase at a time. It ingests options chains and stock bars from free-tier market APIs, computes its own GEX/VEX/DEX/CHARM/VANNA exposure profiles from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading is implemented. Live ordering is disabled by default and routes to a Tradier venue once the operator enables it with a signed action.
 
 The plan lives in [init.md](init.md). The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/) as Mermaid sources. AI agents start with [AGENTS.md](AGENTS.md).
 
@@ -20,46 +20,46 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 
 1. **Feeds** (`bot/feeds.py`) pull options chains and daily bars from six sources through a registry table keyed by source name. Each adapter normalizes vendor JSON into `ChainSnapshot` or `Bar` records stamped with source name and latency.
 2. **Store** (`bot/store.py`) is an in-memory snapshot and bar store with bar dedupe, indexed latest-reads, per-underlying retention, and previous-snapshot lookup. `read_latest` serves the research loop.
-3. **Exposure** (`bot/exposure.py`) computes GEX, VEX, and DEX from stored chains: signed Greek × open interest × multiplier per contract, summed per strike, plus the interpolated flip point where cumulative exposure crosses zero. With spot it reports $GEX per 1% move with a front-expiry split. No vendor GEX feed is required.
-4. **Research** (`bot/research.py`) is the chat loop. It reads the latest snapshot, computes the profile, runs the analyst tool, derives display fields (status, trigger, entry band, checklist, coverage), and returns a compact text brief with snapshot age, top walls, and change versus the previous snapshot. Card requests return per-trade cards with a one-line reason each. VEX and DEX requests get their own briefs. The analyst tool routes through the tier router when live_models=True (hosted Spark first, local Glimmer/Spark Open rescue on failure, deterministic rule last); otherwise the deterministic rule runs as the offline fallback (Phases M1, M5). Grounding appends a web-searched note to theses when grounding=True, and voice notes transcribe through bot/voice.py and route as chat queries (Phase M2). Brief cards append a card line when cards=True, and advisory_review gives a standalone Wonder pre-promotion read (Phase M3). Profile messages print a four-question risk questionnaire or save a one-shot OperatorProfile with suggested risk params. Idea requests return up to 10 ranked defined-risk verticals filtered by timeframe words and named stocks; naming a stock with no stored snapshot errors instead of falling back. Scheduled briefs append flip-cross, regime-flip, and stale-snapshot alerts.
-5. **Risk** (`bot/risk.py`) sizes intents from account size × risk per trade (1% default), or by max loss per contract for options, and returns no intent for flat signals. It validates every intent against schema, halt/kill flags, and trade/day targets, and submits fills to the paper venue at the touch with slippage and fees. Day PnL accumulates unrealized moves plus realized closes. A daily-loss breach halts the day.
+3. **Exposure** (`bot/exposure.py`) computes GEX, VEX, DEX, CHARM, and VANNA from stored chains in one pass: signed Greek × open interest × multiplier per contract, summed per strike, plus the interpolated flip point where cumulative exposure crosses zero. With spot it reports $GEX per 1% move with a front-expiry split. No vendor GEX feed is required.
+4. **Research** (`bot/research.py`) is the chat loop. It reads the latest snapshot, computes the profile, runs the analyst tool, derives display fields (status, trigger, entry band, checklist, coverage), and returns a compact text brief with snapshot age, top walls, and change versus the previous snapshot. Card requests return per-trade cards with a one-line reason each. VEX, DEX, CHARM, and VANNA requests get their own briefs. The analyst tool routes through the tier router when live_models=True (hosted Spark first, local Glimmer/Spark Open rescue on failure, deterministic rule last); otherwise the deterministic rule runs as the offline fallback (Phases M1, M5). Grounding appends a web-searched note to theses when grounding=True, and voice notes transcribe through bot/voice.py and route as chat queries (Phase M2). Brief cards append a card line when cards=True, and advisory_review gives a standalone Wonder pre-promotion read (Phase M3). Profile messages print a four-question risk questionnaire or save a one-shot OperatorProfile with suggested risk params. Idea requests return up to 10 ranked defined-risk verticals filtered by timeframe words and named stocks; naming a stock with no stored snapshot errors instead of falling back. Scheduled briefs append flip-cross, regime-flip, and stale-snapshot alerts.
+5. **Risk** (`bot/risk.py`) sizes intents from account size × risk per trade (1% default) scaled by signal confidence, or by max loss per contract for options, and returns no intent for flat signals. `review_intent` runs inside both submit paths, so halt, kill, schema, size, day-target, and options-profile checks apply to every order with no separate review call; rejections raise `IntentRejectedError` on paper and block live. Closes skip the day-target veto so exits always proceed. Day PnL accumulates unrealized moves plus realized closes. A daily-loss breach halts the day.
 6. **Autonomy** (`bot/autonomy.py`) gates promotion: clean paper days plus bounded drawdown plus passed halt drills yields `ready_for_checklist`. Live ordering ships disabled and needs an explicit signed action. The kill switch flattens auto-ordering and needs an operator reset.
-7. **Trade cards** (`bot/tradecards.py`) builds one card per recommended trade from the same screener as ideas: spread stats plus wall exposure plus regime plus spot versus flip, with a one-line reason written by the Meta analyst model (`bot/metareason.py`) or the deterministic offline fallback. Chat answers card queries with text cards; the HTTP server renders them at `/cards` and `/cards.json`.
-8. **Replay** (`bot/replay.py`) replays stored snapshots in time order with no lookahead, either as journaled totals or as a full signal-to-paper-fill backtest that generates its own `PaperEvidence`. It holds same-side signals and closes on direction flips instead of trading every snapshot. The `run_replay` tool and the `replay` chat keyword run it over the stored bundle into a one-screen demo summary, and replay fills journal under a `replay` venue that `paper_pnl` reports separately from live fills.
+7. **Trade cards** (`bot/tradecards.py`) builds one card per recommended trade from the same screener as ideas: spread stats plus wall exposure plus regime plus spot versus flip, with a one-line reason written by the Meta analyst model (`bot/metareason.py`) or the deterministic offline fallback. Live reasons generate off the request path into a stats-keyed cache, so first paint serves the fallback and later fetches serve the model reason. Chat answers card queries with text cards; the HTTP server renders them at `/cards` and `/cards.json` with response caching and ETags.
+8. **Replay** (`bot/replay.py`) replays stored snapshots in time order with no lookahead, either as journaled totals or as a full signal-to-paper-fill backtest that generates its own `PaperEvidence`. Signals stage pending orders that fill at the next bar open, open positions mark every bar, day PnL and halt reset daily, and anything still open force-closes at the last bar. Each run carries a deterministic run id so reruns never double-journal fills, and steps report daily PnL plus cumulative total plus equity for `PaperEvidence`. The `run_replay` tool and the `replay` chat keyword run it over the stored bundle into a one-screen demo summary, replay fills journal under a `replay` venue that `paper_pnl` reports separately from live fills, and `/replay.csv` downloads steps, fills, or the SPY benchmark as CSV.
 9. **Surfaces** (`bot/charts.py`, `bot/alerts.py`) render the gamma-by-strike chart at `/chart` and the regime board at `/board`, and push flip, regime, and wall-proximity alerts to Discord or Telegram from every session run, with optional one-line narration and noise filtering.
 
 ## Modules
 
 | Module | Owns |
 |---|---|
-| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `DexProfile`, `Signal`, `OrderIntent`, `OrderLeg`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea`, `PremiumCandidate`, `PortfolioView`, `Holding` |
-| `bot/feeds.py` | `FeedContext`, six adapters, `FEED_REGISTRY`, kind/fallback tables, `ingest_chain`, `ingest_bars`, `live_context`, `default_context` |
+| `bot/shapes.py` | Frozen dataclasses: `Bar`, `OptionContract`, `ChainSnapshot`, `GexProfile`, `VexProfile`, `DexProfile`, `CharmProfile`, `VannaProfile`, `Signal`, `OrderIntent`, `OrderLeg`, `Fill`, `Position`, `RiskState`, `JournalEntry`, `OperatorConfig`, `RiskLimits`, `PaperEvidence`, `ModelReceipt`, `OperatorProfile`, `TradeIdea`, `PremiumCandidate`, `PortfolioView`, `Holding`, `PaperAccount` |
+| `bot/feeds.py` | `FeedContext`, six adapters, `FEED_REGISTRY`, kind/fallback tables, `ingest_chain`, `ingest_bars`, `live_context`, `default_context`, journal-sourced `feed_health` |
 | `bot/store.py` | `SnapshotStore`: snapshots plus bars plus saved profile plus holdings, latest/previous reads, underlying listing, dedupe, `prune`, `restore` |
 | `bot/journal.py` | `Journal`: append-only timestamped event log, `prune` for long runs |
 | `bot/persist.py` | `save_bundle`, `load_bundle`: JSON snapshots plus bars plus journal plus profile plus IV plus holdings, retention caps, `refresh_bundle` for live reload |
 | `bot/schedule.py` | `run_scheduled_session`: multi-underlying ingest plus brief plus persist in one job; `refresh_store`: ingest-only timer refresh |
-| `bot/exposure.py` | `compute_gex` ($GEX per 1% move with spot, interpolated flip), `compute_vex`, `compute_dex` |
-| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, trade cards, VEX/DEX briefs, change alerts, `journal_tail_text`, `paper_pnl_text`, profile questionnaire, trade ideas, `advisory_review` (facade over the four `research_*` libs below) |
+| `bot/exposure.py` | `compute_gex` ($GEX per 1% move with spot, interpolated flip), `compute_vex`, `compute_dex`, `compute_charm`, `compute_vanna`, all from one `compute_exposures` pass |
+| `bot/research.py` | `route_chat`, `handle_chat_query`, `scheduled_brief`, `live_brief`, trade cards, VEX/DEX/CHARM/VANNA briefs, change alerts, `journal_tail_text`, `paper_pnl_text`, profile questionnaire, trade ideas, `advisory_review` (facade over the four `research_*` libs below) |
 | `bot/research_analyst.py` | Spark, local, grounded, and advisory analyst backends |
 | `bot/research_formatters.py` | Brief and exposure formatting over engine profiles |
-| `bot/research_paper.py` | Paper trade execution and PnL reporting |
+| `bot/research_paper.py` | Paper trade execution and PnL reporting over the persistent `PaperAccount` |
 | `bot/research_ingest.py` | Feed ingest helpers and option IV recording |
-| `bot/risk.py` | `build_intent`, `even_legs`, `review_intent` with profile gating, `submit_paper`, `paper_fill_price`, `realized_pnl`, halt/kill transitions |
+| `bot/risk.py` | `build_intent` with confidence sizing, `even_legs`, `review_intent` with profile gating enforced inside both submits, `submit_paper`, `paper_fill_price`, `realized_pnl`, halt/kill transitions, `PaperAccount` maintenance |
 | `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch`, `reset_autonomy`, `submit_live` |
 | `bot/venue.py` | Tradier live venue: `occ_symbol`, equity, single-option, and combo orders, `LiveAck` |
-| `bot/tradecards.py` | `TradeCard`, card builder over `rank_ideas`, text plus JSON plus HTML renderers |
-| `bot/replay.py` | `replay_week` (totals or signal-to-fill backtest), `paper_evidence_from_journal`, pure `replay_report` plus journaling `replay_response` |
+| `bot/tradecards.py` | `TradeCard`, card builder over `rank_ideas`, text plus JSON plus HTML renderers, read-through card cache, async reason queue plus worker |
+| `bot/replay.py` | `replay_week` (totals or next-bar-fill backtest with force-close and run ids), `paper_evidence_from_journal`, pure `replay_report` plus journaling `replay_response`, CSV `replay_export` |
 | `bot/charts.py` | Gamma-by-strike SVG chart page plus multi-ticker regime board, both auto-refreshing; the chart scales each side to its own peak with half-peak gridlines |
 | `bot/alerts.py` | Wall-proximity plus wall-growth plus flip/regime alerts with Discord/Telegram push and journal dedup, one-line narration, local noise judge |
 | `bot/diff.py` | Latest-two-snapshot diff: regime, flip, wall growth, totals, top movers |
-| `bot/shock.py` | Spot-shock repricing: broken walls, flip cross, intrinsic card P&L table |
+| `bot/shock.py` | Spot-shock repricing: broken walls, flip cross, Black-Scholes position repricing at shocked spot and IV, intrinsic card P&L table |
 | `bot/holdings.py` | Operator book parsing plus position-aware risk vs flip, spot, and walls, spoken-holdings parser |
 | `bot/debate.py` | Bull-bear card debate: analyst vs reviewer with grounded rules fallback |
 | `bot/demo.py` | Snapshot-pinned card lookup shared by permalinks and debate |
 | `bot/dashboard.py` | One-screen digest: `dashboard_text` plus `dashboard_html` over stored underlyings |
 | `bot/slash.py` | Slash registry: `SLASH_COMMANDS` mapping chat commands onto MCP tools, help plus info text |
-| `bot/models.py` | `MODEL_REGISTRY`, Spark tool loop, `ModelReceipt`, day-budget gate |
-| `bot/localmodels.py` | Local Glimmer/Spark Open backend over llama.cpp GGUF weights, zero-cost receipts |
+| `bot/models.py` | `MODEL_REGISTRY`, Spark tool loop, `ModelReceipt`, day-budget gate with ledger reservations |
+| `bot/localmodels.py` | Local Glimmer/Spark Open backend: one persistent `llama-server` per weights file, prompts in POST body, zero-cost receipts |
 | `bot/tiers.py` | Cost-aware tier router: draft/deep/premium task classes over local/Spark/Wonder plus fallback |
 | `bot/voice.py` | Ogg-to-WAV conversion plus 16kHz WAV transcription into chat commands, `voice_transcript` journaling, spoken holdings, two-step voice kill |
 | `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling, shareable signal art with cache, milestone art |
@@ -69,8 +69,8 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/coach.py` | Wonder journal coach with deterministic rules fallback |
 | `bot/commands.py` | Natural-language paper portfolio commands: closes, rolls, two-step flatten, Spark tool assist |
 | `bot/profile.py` | Risk questionnaire table, answer parsing, `OperatorProfile`, suggested params |
-| `bot/ideas.py` | Timeframe and symbol parsing, shared `resolve_direction`, ranked top-10 `TradeIdea` screener (confidence order, 7/direction cap, 1-day expiry floor) with defined-risk verticals; naming a ticker with no snapshot errors instead of falling back |
-| `bot/wheel.py` | Cash-secured-put plus covered-call premium screener: staged `screen_premium` over stored snapshots, Friday-preferring expiry picker, earnings skip, IV rank gate, top-10 `PremiumCandidate` ranking, `wheel_response` chat reply |
+| `bot/ideas.py` | Timeframe and symbol parsing, shared `resolve_direction`, shared `diversify` helper, ranked top-10 `TradeIdea` screener (round-robin fill, 5/symbol, 5/expiry, 2/strike-cluster, 7/direction caps, 1-day expiry floor) with defined-risk verticals; naming a ticker with no snapshot errors instead of falling back |
+| `bot/wheel.py` | Cash-secured-put plus covered-call premium screener: staged `screen_premium` over stored snapshots, Friday-preferring expiry picker, earnings skip, IV rank gate, diversified top-10 `PremiumCandidate` ranking, `wheel_response` chat reply |
 | `bot/ivrank.py` | IV rank and IV percentile math plus store-backed per-symbol history helpers; vendor IV auto-records on ingest, Alpaca options snapshots backfill chains without Greeks with Yahoo as fallback, `backfill_iv_history` seeds history from stored snapshots |
 | `bot/config.py` | Single dotenv plus environment reader, bearer token, profile-to-limits `operator_config` |
 | `bot/metareason.py` | Meta reason-model client: `generate_reason`, backend selection |
@@ -79,8 +79,9 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/muse_tools.py` | MCP tool handlers plus `TOOL_REGISTRY` |
 | `bot/muse_chat.py` | Chat payload parsing, LLM routing, `dispatch_tool` |
 | `bot/muse_session.py` | Session trigger path, schedule parsing, `SessionController` |
-| `bot/muse_http.py` | HTTP primitives, `openapi_spec`, `route_http` |
+| `bot/muse_http.py` | HTTP primitives, `openapi_spec`, `route_http`, response cache with ETags |
 | `bot/video.py` | HyperFrames video brief: frozen scene model, timeline-free composition HTML, project writer, npx render shell, chat plus tool plus session wiring |
+| `bot/ledger.py` | Reservation ledger: atomic quota claims plus lock-serialized budget holds with TTL expiry and idempotent settle |
 
 ## Feeds
 
@@ -93,7 +94,7 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `yfinance` | bars | none | Unkeyed backup |
 | `alpha_vantage` | bars | `ALPHA_VANTAGE_API_KEY` | Last-resort daily bars with ~100-day depth; at most one call per symbol per day (journal-guarded) |
 
-Fallback order is fixed tables: chains try Tradier then Market Data; bars try Alpaca, Finnhub, Yahoo, then Alpha Vantage. Quota-capped feeds skip when the journal shows a fetch for that symbol today, so Alpha Vantage costs at most one call per symbol per day no matter how often sessions tick. Seed one symbol by hand with `ingest_bars("alpha_vantage", store, journal)`. An empty bar result counts as feed failure and falls through to the next source. `live_brief` journals each failure with the error class name only, raises `FeedUnavailableError` when every chain feed fails, and treats bars as best effort (without a bar or a flip, direction falls back to the regime sign and the brief says so).
+Fallback order is fixed tables: chains try Tradier then Market Data; bars try Alpaca, Finnhub, Yahoo, then Alpha Vantage. Quota-capped feeds skip when the journal shows a fetch for that symbol today, so Alpha Vantage costs at most one call per symbol per day no matter how often sessions tick. `bot/ledger.py` additionally reserves quota before each feed call through atomic claim files, so concurrent sessions never double-spend a daily cap. Ingest latency and per-source lineage journal under each fetch, and `/feeds` plus the `feeds` key on `/health` turn that lineage into a health view: last success, latency, and quota use per source. Seed one symbol by hand with `ingest_bars("alpha_vantage", store, journal)`. An empty bar result counts as feed failure and falls through to the next source. `live_brief` journals each failure with the error class name only, raises `FeedUnavailableError` when every chain feed fails, and treats bars as best effort (without a bar or a flip, direction falls back to the regime sign and the brief says so).
 
 Without arguments, `ingest_chain`/`ingest_bars` use canned vendor-shaped fixtures, so the whole suite and every offline flow run with no keys and no network.
 
@@ -104,7 +105,7 @@ Copy these into a `.env` file in the repo root (never commit it):
 ```
 GLIMMER_GGUF_PATH=<path>   # optional; local Glimmer weights for the offline tier
 SPARK_OPEN_GGUF_PATH=<path>   # optional; local Spark Open weights (used when Glimmer is unset)
-LLAMA_BIN=llama-cli   # optional; local runner binary on PATH
+LLAMA_SERVER_BIN=llama-server   # optional; local server binary on PATH
 TRADIER_ACCESS_TOKEN=<token>
 TRADIER_ACCOUNT_ID=<account id for live orders>
 TRADIER_BASE_URL=https://api.tradier.com/v1   # optional; default is the sandbox host
@@ -119,9 +120,15 @@ TELEGRAM_BOT_TOKEN=<token>   # optional; alert pushes need this plus TELEGRAM_CH
 TELEGRAM_CHAT_ID=<id>   # optional; alert push target
 META_MODEL_API_KEY=<key>   # optional; model auth for analyst phases and card reasons (without it, deterministic paths run)
 MODEL_DAY_BUDGET_USD=<usd>   # optional; day budget for the model phases
+USER_MODEL_API_KEY=<key>   # optional; your own key for any OpenAI-compatible chat API (analyst + reviewer roles, no budget needed)
+USER_MODEL_BASE_URL=<url>   # optional; default https://api.openai.com/v1
+USER_MODEL_ID=<id>   # optional; default gpt-4o-mini
+LEDGER_DIR=<dir>   # optional; reservation ledger root (default: <store_dir>/ledger)
+LLAMA_CTX=2048   # optional; per-server model context
+LLAMA_THREADS=4   # optional; per-server thread cap
 ```
 
-The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0). Trade card reasons reuse `META_MODEL_API_KEY`; without it, the offline fallback writes each reason. The local tier reads `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` plus `LLAMA_BIN`; without weights every tier behaves exactly as before.
+The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0). The day budget is enforced through lock-serialized ledger holds that every process reads (`LEDGER_DIR` sets the ledger root) instead of a journal scan. Trade card reasons reuse `META_MODEL_API_KEY`; without it, the offline fallback writes each reason. Bring your own model with `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default `https://api.openai.com/v1`) and `USER_MODEL_ID` (default `gpt-4o-mini`): any OpenAI-compatible chat API then serves the analyst and reviewer roles (briefs, chat router, debate, coach, narrations, portfolio commands, chart reads, card reasons), with receipts journaled at zero cost since your key pays your bill and no day budget is required. The same key can be supplied at runtime instead of `.env`: paste it into the `set_user_model` MCP tool or the dashboard `/settings` model-key form (never into chat text, which the chat model would see). Runtime keys live in server memory only, clear on restart, take precedence over the env key while set, and are never persisted, journaled, or echoed back -- status lines and the settings page show the model id and source only. Grounding, voice transcription, and image generation stay on the built-in key because their endpoints are provider-specific. The tier readout names the user model, and `/healthz` reports `user_key_set` (presence only, never the key). The local tier reads `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` plus `LLAMA_SERVER_BIN` and starts one persistent `llama-server` per weights file on 127.0.0.1; prompts travel in the POST body so they never appear in `ps`. `LLAMA_CTX` and `LLAMA_THREADS` cap context and threads per server. Without weights every tier behaves exactly as before.
 
 ## How to run
 
@@ -136,7 +143,7 @@ python -m venv .venv
 
 ### Configuration
 
-Copy [`.env.example`](.env.example) to a `.env` file in the repo root (never commit it) and fill in the keys from the [Configuration](#configuration) section: `TRADIER_ACCESS_TOKEN`, `TRADIER_ACCOUNT_ID`, `TRADIER_BASE_URL` (optional), `MUSE_AUTH_TOKEN` (optional), `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `FINNHUB_API_KEY`, `MARKETDATA_API_KEY`, `ALPHA_VANTAGE_API_KEY` (optional), plus `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` for the model phases, with card reasons reusing `META_MODEL_API_KEY`, plus `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` for the offline local tier. The bot reads `.env` from the working directory automatically; real environment variables win over file values. Without keys, the suite and every offline flow still run on canned fixtures with no network.
+Copy [`.env.example`](.env.example) to a `.env` file in the repo root (never commit it) and fill in the keys from the [Configuration](#configuration) section: `TRADIER_ACCESS_TOKEN`, `TRADIER_ACCOUNT_ID`, `TRADIER_BASE_URL` (optional), `MUSE_AUTH_TOKEN` (optional), `APCA_API_KEY_ID`, `APCA_API_SECRET_KEY`, `FINNHUB_API_KEY`, `MARKETDATA_API_KEY`, `ALPHA_VANTAGE_API_KEY` (optional), plus `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` for the model phases (or `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` / `USER_MODEL_ID` to bring your own model for the analyst and reviewer roles), with card reasons reusing `META_MODEL_API_KEY`, plus `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` for the offline local tier, plus `LEDGER_DIR`, `LLAMA_CTX`, and `LLAMA_THREADS` to tune the ledger and local servers. The bot reads `.env` from the working directory automatically; real environment variables win over file values. Without keys, the suite and every offline flow still run on canned fixtures with no network.
 
 ### Test suite
 
@@ -241,13 +248,17 @@ tail data/session.log
 | `/chartread?underlying=SPY[&question=...][&live_models=1]` | POST | raw png/jpeg bytes (5MB cap); Spark reads the chart vs engine walls as `{"ok", "reply"}` |
 | `/docread?underlying=SPY[&question=...][&live_models=1]` | POST | raw png/jpeg bytes (5MB cap); SAM segments regions, Spark reads the document as `{"ok", "reply"}` |
 | `/share?underlying=SPY[&snapshot=...][&index=0][&live_models=1]` | GET | none; shareable trade card page with art when live |
-| `/health` | GET | none; last ingest time, feed used, snapshot age, quote ages, underlyings (always open) |
+| `/health` | GET | none; last ingest time, feed used, snapshot age, quote ages, underlyings, `feeds` health key (always open) |
+| `/feeds` | GET | none; per-source feed health page from journal lineage (success, latency, last success, quota) (always open) |
+| `/replay.csv?underlying=SPY&section=steps\|fills\|benchmark` | GET | none; replay export download (steps default); 400 when no stored snapshot |
 | `/healthz` | GET | none; minimal `{"ok": true}` probe (always open) |
 | `/openapi.json` | GET | none |
 
 MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`, `backfill_iv`, `snapshot_diff`, `shock_test` (`{"shock_pct": -2}`), `set_holdings` (`{"holdings": [...]}`), `debate_card` (`{"index": 0}`, optional `snapshot` and `live_models`), `get_profile`, `get_dashboard`, `get_alerts`, `get_holdings`, `get_video_brief`, `get_coach_review`, `portfolio_command` (`{"command": "close my losers"}`), `shock_news` (`{"shock_pct": -2}`), `read_chart_image` (`{"image_b64": "..."}`), `read_document` (`{"image_b64": "..."}`), `share_card` (`{"index": 0}`), `get_narrated_alerts`, `get_tier_status`. Each session run also pushes new flip, regime, wall-proximity, and wall-growth alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session. Server sessions paper trade one position per symbol by default, same as the CLI; pass `paper_trade: false` to `/session` or `run_session` to skip.
 
-When `store_dir` is passed to `serve` (as `run_app.py` does), the server reloads the JSON bundle whenever the scheduled session rewrites it, and with `refresh_seconds > 0` it re-ingests on its own timer (`bot/schedule.py: refresh_store`, ingest-only, no signals minted), prunes in-memory growth, and persists every pass, so snapshots stay fresh without restarts. Each tick refreshes the startup symbols plus every underlying currently in the store, so a ticker added later via `run_session.py --underlying QQQ` stays fresh with no restart. Session runs (`/session`, `run_session`, and the session timer) likewise cover the requested symbols plus every underlying in the store, requested first.
+When `store_dir` is passed to `serve` (as `run_app.py` does), the server reloads the JSON bundle whenever the scheduled session rewrites it, and with `refresh_seconds > 0` it re-ingests on its own timer (`bot/schedule.py: refresh_store`, ingest-only, no signals minted), prunes in-memory growth, and persists every pass, so snapshots stay fresh without restarts. Each tick refreshes the startup symbols plus every underlying currently in the store, so a ticker added later via `run_session.py --underlying QQQ` stays fresh with no restart. Session runs (`/session`, `run_session`, and the session timer) likewise cover the requested symbols plus every underlying in the store, requested first. `serve` also starts the card-reason worker, which drains queued model reasons in the background.
+
+`/cards`, `/cards.json`, `/board`, and `/demo` are cached by snapshot id and served with ETags, so repeat fetches cost no screen work and a matching `If-None-Match` returns 304. The first fetch after new data recomputes and revalidates.
 
 Start it (seeded with canned data so `/chat` answers immediately; blocks serving):
 
@@ -318,7 +329,7 @@ Paper trade off a signal (continuing with `store`, `journal`, and `now` from abo
 
 ```python
 from bot.research import handle_chat_query
-from bot.risk import build_intent, review_intent, submit_paper
+from bot.risk import IntentRejectedError, build_intent, submit_paper
 from bot.shapes import RiskLimits, RiskState
 
 _, signal = handle_chat_query("brief", "SPY", store, journal, now)
@@ -326,14 +337,18 @@ state = RiskState(account_size=100000.0, risk_per_trade=0.01, day_pnl=0.0,
                   halt_active=False, kill_active=False)
 limits = RiskLimits(max_trade_size=5000.0, day_profit_target=500.0, max_day_loss=1000.0)
 intent = build_intent(signal, "signal-1", state, journal, now)
-if intent is not None and review_intent(intent, state, limits, journal, now) == "approved":
-    fill, position, state = submit_paper(intent, 769.7, state, None, limits, journal, now,
-                                         bid=769.6, ask=769.8, slippage_bps=5.0, fees=1.30)
+if intent is not None:
+    try:
+        fill, position, state = submit_paper(intent, 769.7, state, None, limits,
+                                             journal, now, bid=769.6, ask=769.8,
+                                             slippage_bps=5.0, fees=1.30)
+    except IntentRejectedError as exc:
+        print("rejected:", exc)
 ```
 
-(`build_intent` returns `None` for flat signals, and `submit_paper` fills at the touch when quotes are given, falling back to the mark price.)
+(`build_intent` returns `None` for flat signals and scales size by signal confidence. `submit_paper` runs `review_intent` itself and raises `IntentRejectedError` when any check fails, so there is no separate review call. It fills at the touch when quotes are given, falling back to the mark price.)
 
-Backtest replay over stored snapshots (totals only, or a full signal-to-fill backtest with bars):
+Backtest replay over stored snapshots (totals only, or a full signal-to-fill backtest with bars that fills pending orders at the next bar open, marks every bar, resets the day book daily, and force-closes at the last bar):
 
 ```python
 from bot.replay import paper_evidence_from_journal, replay_week
@@ -355,7 +370,7 @@ print(harness.outbox[-1]["body"])
 
 ### Persistence
 
-`save_bundle(store_dir, store, journal)` writes six JSON files into the store directory: `snapshots.json`, `bars.json`, `journal.json`, `profile.json`, `iv.json` (per-symbol average-IV history keyed by day or backfilled sample time, newest 600 entries kept), and `holdings.json` (the saved operator book). Each write goes to a `.tmp` file first and is renamed into place, so a crash never leaves a half-written bundle. Retention caps keep the newest 500 snapshots and bars per underlying and the newest 20000 journal entries (tunable via `keep_snapshots`, `keep_bars`, `keep_journal`). `load_bundle(store_dir)` returns a `(store, journal)` pair and tolerates missing files, so a fresh directory just yields empty state. Every scheduled run persists to `data/trading-bot`. Inspect the journal any time via `journal.entries()`:
+`save_bundle(store_dir, store, journal)` writes ten JSON files into the store directory: `snapshots.json`, `bars.json`, `journal.json`, `profile.json`, `iv.json` (per-symbol average-IV history keyed by day or backfilled sample time, newest 600 entries kept), `holdings.json` (the saved operator book), `settings.json`, `earnings.json`, `alert_rules.json`, and `paper_accounts.json` (the persistent `PaperAccount`: equity, day PnL, drawdown peak, open positions). Paper PnL reads the saved account across processes, so a restart never resets the day book. Each write goes to a `.tmp` file first and is renamed into place, so a crash never leaves a half-written bundle. Retention caps keep the newest 500 snapshots and bars per underlying and the newest 20000 journal entries (tunable via `keep_snapshots`, `keep_bars`, `keep_journal`). `load_bundle(store_dir)` returns a `(store, journal)` pair and tolerates missing files, so a fresh directory just yields empty state. Every scheduled run persists to `data/trading-bot`. Inspect the journal any time via `journal.entries()`:
 
 ```python
 from bot.persist import load_bundle, save_bundle
@@ -368,7 +383,7 @@ for entry in journal.entries():
 
 ### Chat options
 
-`route_chat` and `handle_chat_query` take `live_models`, `grounding`, and `cards` flags (all default `False`); the same flags work on the HTTP `/chat` payload. With `live_models=True` the analyst routes to the Spark backend through `MODEL_REGISTRY` when `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` are set, otherwise the deterministic rule runs and the fallback is journaled as `model_fallback`. `grounding=True` appends a web-searched note to the thesis and `cards=True` appends a regime card line:
+`route_chat` and `handle_chat_query` take `live_models`, `grounding`, and `cards` flags (all default `False`); the same flags work on the HTTP `/chat` payload. With `live_models=True` the analyst routes to the Spark backend through `MODEL_REGISTRY` when `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD` are set, or to your own model when a user key is set via env or the session (no budget needed), otherwise the deterministic rule runs and the fallback is journaled as `model_fallback`. `grounding=True` appends a web-searched note to the thesis and `cards=True` appends a regime card line:
 
 ```python
 print(route_chat("give me the gex brief", "SPY", store, journal, config, now,
@@ -407,7 +422,7 @@ print(route_chat("profile: risk_tolerance=moderate, portfolio_size=50000, "
 
 ### Trade ideas
 
-Any chat containing `"idea"` returns up to 10 ranked ideas. Each idea needs a direction, passes minimum-OI and maximum-spread filters, expires at least one day out (no 0DTE), and is structured as a defined-risk vertical with max loss and breakeven when quotes exist. Ideas rank by printed confidence with at most 7 per direction. Filter by timeframe words (`weekly`, `monthly`, `quarterly`, or `"N days"`) or by naming a stored underlying. Naming a ticker with no stored snapshot errors instead of falling back to the default:
+Any chat containing `"idea"` returns up to 10 ranked ideas. Each idea needs a direction, passes minimum-OI and maximum-spread filters, expires at least one day out (no 0DTE), and is structured as a defined-risk vertical with max loss and breakeven when quotes exist. Ideas rank by printed confidence with at most 7 per direction, then diversify round-robin across symbols, expiries, and strike clusters (5/5/2) so one expiry chain cannot fill the list. Filter by timeframe words (`weekly`, `monthly`, `quarterly`, or `"N days"`) or by naming a stored underlying. Naming a ticker with no stored snapshot errors instead of falling back to the default:
 
 ```python
 print(route_chat("weekly trade ideas", "SPY", store, journal, config, now))
@@ -415,19 +430,19 @@ print(route_chat("weekly trade ideas", "SPY", store, journal, config, now))
 print(route_chat("trade ideas for QQQ", "SPY", store, journal, config, now))
 ```
 
-Queries mentioning `"card"` or `"cards"` return trade cards instead: one card per recommended trade with spread stats plus wall exposure plus regime plus spot versus flip, and a one-line reason stating why it is a good trade. Trade cards need a saved operator profile first; without one, chat replies and every card page (`/cards`, `/cards.json`, `/card`, the demo and dashboard top card, shock card P&L, and debate) ask for profile setup instead. The same cards render as a page at `/cards?underlying=SPY` and as JSON at `/cards.json?underlying=SPY`. Each card also has a permalink at `/card?underlying=SPY&snapshot=...&index=N` that rebuilds that card pinned to its snapshot and contemporary bar, so a shared link always shows the same trade.
+Queries mentioning `"card"` or `"cards"` return trade cards instead: one card per recommended trade with spread stats plus wall exposure plus regime plus spot versus flip, and a one-line reason stating why it is a good trade. Queries mentioning `"charm"` or `"vanna"` return the corresponding decay and spot-vol-coupling briefs from the same single-pass profiles. Trade cards need a saved operator profile first; without one, chat replies and every card page (`/cards`, `/cards.json`, `/card`, the demo and dashboard top card, shock card P&L, and debate) ask for profile setup instead. The same cards render as a page at `/cards?underlying=SPY` and as JSON at `/cards.json?underlying=SPY`. Each card also has a permalink at `/card?underlying=SPY&snapshot=...&index=N` that rebuilds that card pinned to its snapshot and contemporary bar, so a shared link always shows the same trade.
 
 Each idea flags event risk: `earnings 2026-11-05` when the expiry spans the symbol's next earnings date (live Finnhub calendar, cached per process, fail-soft), plus `iv rank 87.0` when at least 20 IV points are stored. Spanned earnings cut confidence by 0.15 ahead of ranking. Trade cards carry both fields into text, HTML, JSON, and the reason stats. The `get_iv_rank` tool reports ranks per underlying.
 
 ### Wheel premium selling
 
-Any chat containing `"wheel"` or `"wheels"` returns up to 10 ranked premium candidates. Each candidate is a `SELL_PUT` (cash-secured) or `SELL_CALL` (covered, flagged as needing 100 shares) that passes staged filters: 7–30 DTE, 0.15–0.30 absolute delta with the sign matching the side, open interest of at least 100, a 30% bid-relative spread cap for contracts at $1.00 and above (a $0.15 absolute cap for cheaper ones), and at least 1% premium over capital at risk (strike value for puts, spot value for calls, so calls need a stored bar). Each symbol screens its nearest three expiries with Fridays preferred, and an optional earnings map (`{symbol: date}` passed to `wheel_response`/`screen_premium`) skips any expiry an earnings date spans within a two-day buffer. Symbols with at least 20 days of IV history need an IV rank of 30 or more; thinner history passes. Every screen records the symbol's average candidate IV into the store (persisted in `iv.json`) and journals `iv_recorded` plus `wheel_screened`. Results rank by premium return with deterministic tiebreaks. Wheel output is research, so the saved profile never gates it:
+Any chat containing `"wheel"` or `"wheels"` returns up to 10 ranked premium candidates. Each candidate is a `SELL_PUT` (cash-secured) or `SELL_CALL` (covered, flagged as needing 100 shares) that passes staged filters: 7–30 DTE, 0.15–0.30 absolute delta with the sign matching the side, open interest of at least 100, a 30% bid-relative spread cap for contracts at $1.00 and above (a $0.15 absolute cap for cheaper ones), and at least 1% premium over capital at risk (strike value for puts, spot value for calls, so calls need a stored bar). Each symbol screens its nearest three expiries with Fridays preferred, and an optional earnings map (`{symbol: date}` passed to `wheel_response`/`screen_premium`) skips any expiry an earnings date spans within a two-day buffer. Symbols with at least 20 days of IV history need an IV rank of 30 or more; thinner history passes. Every screen records the symbol's average candidate IV into the store (persisted in `iv.json`) and journals `iv_recorded` plus `wheel_screened`. Results rank by premium return with deterministic tiebreaks, then diversify with the same round-robin helper as ideas (5/5/2 across symbol, expiry, and strike cluster). Wheel output is research, so the saved profile never gates it:
 
 ```python
 print(route_chat("wheel ideas", "SPY", store, journal, config, now))
 ```
 
-Wheel-style risk caps live in `review_intent` behind an optional `PortfolioView` (open positions, open symbols, peak day PnL). `RiskLimits` adds `max_positions`, `drawdown_pause_pct`, and `max_per_sector`, all defaulting to off; with no view the review behaves exactly as before. The drawdown pause trips when the drop from peak day PnL reaches the configured share of a positive peak, and the sector cap counts known-sector tickers among open symbols (unknown tickers never trip it).
+Wheel-style risk caps live in `review_intent` behind an optional `PortfolioView` (open positions, open symbols, peak day PnL, fed from the persistent `PaperAccount` during sessions). `RiskLimits` adds `max_positions`, `drawdown_pause_pct`, and `max_per_sector`, all defaulting to off; with no view the review behaves exactly as before. The drawdown pause trips when the drop from peak day PnL reaches the configured share of a positive peak, and the sector cap counts known-sector tickers among open symbols (unknown tickers never trip it).
 
 Deliberately not integrated: a volume filter needs a contract field that does not exist, early-close management needs contract-level paper positions, a GBM backtester loses to replay on real snapshots, and a Public.com venue is out of scope.
 
@@ -449,7 +464,7 @@ print(route_chat("diff SPY", "SPY", store, journal, config, now))
 
 ### Shock test
 
-Chatting `"shock SPY -2%"` (or the `shock_test` tool with `{"shock_pct": -2}`) reprices the latest snapshot at the shocked spot: walls the move breaks through, whether spot crosses the flip, the nearest surviving walls, and an intrinsic P&L line vs debit paid for every open card. Positions are unchanged by a spot move, so the regime line says so:
+Chatting `"shock SPY -2%"` (or the `shock_test` tool with `{"shock_pct": -2}`) reprices the latest snapshot at the shocked spot: walls the move breaks through, whether spot crosses the flip, the nearest surviving walls, Black-Scholes repriced P&L for every journaled open position at shocked spot and IV (labeled approximate, since strikes and expiries are inferred from the fill record), and an intrinsic P&L line vs debit paid for every open card. Positions are unchanged by a spot move, so the regime line says so:
 
 ```python
 print(route_chat("shock SPY -2%", "SPY", store, journal, config, now))
@@ -478,7 +493,7 @@ print(route_chat("debate", "SPY", store, journal, config, now))
 
 Every model task runs through the tier router in `bot/tiers.py`. Draft tasks (reasoning, narration) try the local backend first, deep tasks (briefs, debates) try hosted Spark first, and premium tasks (reviews, coaching) try Wonder first, each falling through to the next tier and finally to a deterministic fallback. Chatting `"tier status"` (or `/tier`, or the `get_tier_status` tool) prints spend versus day budget, local backend state, and the tier order per task class. Every selection journals `tier_selected`.
 
-The local tier runs open weights on this machine: point `GLIMMER_GGUF_PATH` (preferred) or `SPARK_OPEN_GGUF_PATH` at a GGUF file and keep `llama-cli` (`LLAMA_BIN`) on `PATH`. Local calls journal zero-cost `model_receipt` rows, rescue failed Spark briefs, and power the alert judge. Without weights every tier behaves exactly as before.
+The local tier runs open weights on this machine: point `GLIMMER_GGUF_PATH` (preferred) or `SPARK_OPEN_GGUF_PATH` at a GGUF file and keep `llama-server` (`LLAMA_SERVER_BIN`) on `PATH`. The bot starts one server per weights file on 127.0.0.1, sends one request at a time with prompts in the POST body (never argv), and reuses the process across calls. Local calls journal zero-cost `model_receipt` rows, rescue failed Spark briefs, and power the alert judge. Without weights every tier behaves exactly as before.
 
 ### Journal coach
 
@@ -554,7 +569,7 @@ print(route_chat("/shock -2%", "SPY", store, journal, config, now))
 
 ### Reason model
 
-Each trade card carries a one-line reason. With `META_MODEL_API_KEY` set, the app calls the Meta analyst model for each card; otherwise (or on any failure) the deterministic offline fallback writes the reason from the card numbers. Model reasons cache per card stats in memory (cap 2000, journaled with `cached: true` on hits), so repeat `/cards` fetches skip the model calls entirely. The Baseten client (`bot/baseten.py`) plus the Truss app in [deploy/reason-model](deploy/reason-model) stay dormant for later, deployed with:
+Each trade card carries a one-line reason. With `META_MODEL_API_KEY` set, the app queues each card for a background reason worker (started by `serve`, drained by scheduled sessions); otherwise (or on any failure) the deterministic offline fallback writes the reason from the card numbers. Model reasons cache per card stats in memory (cap 2000, journaled with `cached: true` on hits), so the first paint serves the fallback and repeat `/cards` fetches serve the model reason with no model calls. The Baseten client (`bot/baseten.py`) plus the Truss app in [deploy/reason-model](deploy/reason-model) stay dormant for later, deployed with:
 
 ```bash
 BASETEN_API_KEY=... deploy/baseten.sh
@@ -579,7 +594,7 @@ print(advisory_review(evidence, journal, now, live_models=True))
 
 `advisory_review` needs `live_models=True` plus the model keys, and returns an empty string (journaled as `review_skipped`) when the backend is unavailable.
 
-Live ordering ships disabled. `enable_live` flips it on only when every condition holds: a non-empty operator signature, no halt or kill flag, `PaperEvidence` that passes `check_promotion` (clean-days target met, drawdown inside the bound, halt drills passed), and a full checklist of `paper_evidence_reviewed`, `risk_limits_set`, and `kill_switch_tested`. Misses journal `live_blocked` with the reason and leave the adapter off. The flag is memory-only, so each process start needs a fresh enable. `submit_live` routes the intent through `TradierVenue.from_env()` (credentials from `.env`, host from `TRADIER_BASE_URL`). A positive `reference_price` is required for sizing:
+Live ordering ships disabled. `enable_live` flips it on only when every condition holds: a non-empty operator signature, no halt or kill flag, `PaperEvidence` that passes `check_promotion` (clean-days target met, drawdown inside the bound, halt drills passed), and a full checklist of `paper_evidence_reviewed`, `risk_limits_set`, and `kill_switch_tested`. Misses journal `live_blocked` with the reason and leave the adapter off. The flag is memory-only, so each process start needs a fresh enable. `submit_live` fails closed on a missing intent, symbol, or venue, reviews the intent before placing, and routes it through `TradierVenue.from_env()` (credentials from `.env`, host from `TRADIER_BASE_URL`). A positive `reference_price` is required for sizing:
 
 ```python
 from bot.autonomy import enable_live, submit_live
@@ -610,6 +625,6 @@ Options legs need the saved profile at review (`options_ok` must be yes); withou
 
 ## Status and roadmap
 
-Implemented: six feeds with fallback, GEX/VEX/DEX engine with dollar GEX and interpolated flip, research chat loop plus scheduled briefs with change alerts, trade cards over HTTP plus chat with Meta reasons and offline fallback, paper trading with quote fills and halt logic, autonomy gate with kill switch, signal-to-fill replay backtest with generated paper evidence, Muse program M0-M5 (Spark analyst, voice, grounding, cards, Wonder review, local tiers, coach, narration, portfolio commands, chart and document readers, shareable cards), operator risk questionnaire, defined-risk trade-ideas screener, Muse chat transport with bearer auth, health endpoints, tool registry, and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, bundle reload in the live server, multi-underlying briefs, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, broker combo support for multi-leg live orders, CI pytest workflow, wheel premium screener with IV rank plus risk caps, auto paper trade per session with one-position guard, gamma chart plus regime board pages, wall-migration brief section, LLM tool router, Discord/Telegram alert pushes, earnings overlay on ideas, one-click replay demo, card permalinks, IV backfill, snapshot diffs, spot-shock repricing, position-aware holdings, bull-bear debate, voice input endpoint, wall-growth push alerts, slash commands, dashboard page, Alpha Vantage bar history, six-defect fix batch, wall-unit parity, live quote marks, filtered IV backfill, HyperFrames video brief, 660-test suite with a socket-level server smoke test.
+Implemented: six feeds with fallback plus quota ledger and health page, GEX/VEX/DEX/CHARM/VANNA engine with dollar GEX and interpolated flip, research chat loop plus scheduled briefs with change alerts, trade cards over HTTP plus chat with async Meta reasons and offline fallback plus response caching, paper trading with quote fills, halt logic, confidence sizing, in-submit gate review, and a persistent account, autonomy gate with kill switch, honest next-bar replay with force-close, run ids, and CSV export plus generated paper evidence, Muse program M0-M5 (Spark analyst, voice, grounding, cards, Wonder review, local tiers, coach, narration, portfolio commands, chart and document readers, shareable cards), operator risk questionnaire, defined-risk trade-ideas screener, Muse chat transport with bearer auth, health endpoints, tool registry, and drill harness, local scheduled runner (cron/launchd) with persistent JSON store, bundle reload in the live server, multi-underlying briefs, ogg-to-WAV voice conversion, options-intent gating on the saved profile, multi-leg trade structures, Tradier live venue, broker combo support for multi-leg live orders, CI pytest workflow, wheel premium screener with IV rank plus risk caps, auto paper trade per session with one-position guard, gamma chart plus regime board pages, wall-migration brief section, LLM tool router, Discord/Telegram alert pushes, earnings overlay on ideas, one-click replay demo, card permalinks, IV backfill, snapshot diffs, spot-shock repricing, position-aware holdings, bull-bear debate, voice input endpoint, wall-growth push alerts, slash commands, dashboard page, Alpha Vantage bar history, six-defect fix batch, wall-unit parity, live quote marks, filtered IV backfill, HyperFrames video brief, diversified screeners, persistent local model server, 858-test suite with a socket-level server smoke test.
 
 Not yet implemented: `live_enabled` defaults to `False`.

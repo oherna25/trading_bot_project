@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Mapping, Optional
 
 from bot.journal import Journal
-from bot.models import MODEL_REGISTRY, HttpPost, model_api_key, receipt_payload, run_analyst
+from bot.models import HttpPost, chat_api_key, chat_base_url, chat_spec, receipt_payload, run_analyst, select_backend
 from bot.research import (
     route_chat,
 )
@@ -51,9 +51,9 @@ def llm_route(
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
 ) -> tuple[str, dict[str, Any], str]:
-    key = model_api_key(env)
-    if not key:
-        raise ValueError("missing META_MODEL_API_KEY")
+    backend, reason = select_backend("analyst", journal, now, env)
+    if backend not in ("model", "user"):
+        raise ValueError(reason or "missing META_MODEL_API_KEY")
     catalog = "\n".join(f"- {name}: {tool.description}" for name, tool in TOOL_REGISTRY.items())
     prompt = f"Request: {text}\nDefault underlying: {underlying}\nTools:\n{catalog}"
     messages = [
@@ -61,7 +61,8 @@ def llm_route(
         {"role": "user", "content": prompt},
     ]
     reply_text, receipts = run_analyst(
-        MODEL_REGISTRY["analyst"], key, messages, [], {}, prompt, http_post
+        chat_spec("analyst", env), chat_api_key("analyst", env), messages, [], {}, prompt, http_post,
+        base_url=chat_base_url("analyst", env),
     )
     for receipt in receipts:
         journal.append(now, "model_receipt", receipt_payload(receipt, ""))

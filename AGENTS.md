@@ -42,10 +42,10 @@ market APIs -> feeds -> store -> exposure -> research -> risk -> paper venue
 | Types | `bot/shapes.py` | Frozen dataclasses. Start here for any data shape |
 | Feeds | `bot/feeds.py` | `FEED_REGISTRY`, `ingest_chain`, `ingest_bars`, `live_context` |
 | Store | `bot/store.py` | `SnapshotStore`, `read_latest`, `prune`, `restore` |
-| Exposure | `bot/exposure.py` | `compute_gex`, `compute_vex`, `compute_dex` |
+| Exposure | `bot/exposure.py` | `compute_gex`, `compute_vex`, `compute_dex`, `compute_charm`, `compute_vanna` (one `compute_exposures` pass) |
 | Research | `bot/research.py` (facade) | `route_chat`, `handle_chat_query`, `live_brief`, `scheduled_brief` |
 | Research libs | `bot/research_analyst.py`, `research_formatters.py`, `research_paper.py`, `research_ingest.py` | Analyst backends, brief formatting, paper trading, ingest |
-| Risk | `bot/risk.py` | `build_intent`, `review_intent`, `submit_paper` |
+| Risk | `bot/risk.py` | `build_intent`, `review_intent` (runs inside both submits), `submit_paper`, `IntentRejectedError`, `PaperAccount` |
 | Autonomy | `bot/autonomy.py` | `check_promotion`, `enable_live`, `kill_switch` |
 | HTTP/MCP | `bot/muse.py` (facade) | `TOOL_REGISTRY`, `route_http`, `serve`, `Harness` |
 | Muse libs | `bot/muse_tools.py`, `muse_chat.py`, `muse_session.py`, `muse_http.py` | Tool handlers, chat routing, sessions, HTTP routes |
@@ -58,7 +58,7 @@ Single-purpose surfaces: `charts`, `alerts`, `customalerts`, `dashboard`,
 `debate`, `coach`, `commands`, `voice`, `cards`, `news`, `holdings`, `shock`,
 `diff`, `video`, `profile`, `slash`, `venue`, `config`, `journal`,
 `metareason`, `morning`, `earnings`, `explain`, `onboarding`, `trackrecord`,
-`theme`. `baseten` is dormant.
+`theme`, `ledger`. `baseten` is dormant.
 
 Program entry points: `run_app.py` (brief once, then serve HTTP),
 `run_session.py` (one scheduled session). Library server: `bot.muse.serve`.
@@ -82,7 +82,7 @@ Program entry points: `run_app.py` (brief once, then serve HTTP),
 
 - Mirror module names: `tests/test_<module>.py`.
 - Focused run: `.venv/bin/python -m pytest tests/test_risk.py -q`.
-- Full suite is about 800 tests in about 20 seconds.
+- Full suite is about 860 tests in about 20 seconds.
 
 ## Docs map
 

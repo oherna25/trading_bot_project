@@ -148,7 +148,8 @@ def test_default_underlying_applies_to_pages():
 
 
 def test_registry_pins_new_tools():
-    for name in ("set_settings", "get_settings", "load_snapshot", "set_profile"):
+    for name in ("set_settings", "get_settings", "load_snapshot", "set_profile",
+                 "set_user_model", "clear_user_model"):
         assert name in TOOL_REGISTRY
 
 
@@ -173,6 +174,162 @@ def test_load_snapshot_tool_answers_offline():
     )
     assert reply.ok is True
     assert "TEST" in reply.reply
+
+
+def test_set_user_model_tool_masks_and_journals_presence_only():
+    from bot.models import read_runtime_user_model, set_runtime_user_model
+
+    set_runtime_user_model(None)
+    try:
+        store = _seeded_store()
+        journal = Journal()
+        reply = dispatch_tool(
+            "set_user_model",
+            {"api_key": "sess-secret-1", "base_url": "https://llm.example/v1", "model_id": "m1"},
+            store, journal, CONFIG, NOW, underlying="TEST",
+        )
+        assert reply.ok is True
+        assert "sess-secret-1" not in reply.reply
+        assert "m1" in reply.reply
+        saved = read_runtime_user_model()
+        assert saved is not None and saved.api_key == "sess-secret-1"
+        assert [e.kind for e in journal.entries()].count("user_model_saved") == 1
+        assert "sess-secret-1" not in json.dumps([e.payload for e in journal.entries()])
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_set_user_model_tool_rejects_bad_url_without_storing():
+    from bot.models import read_runtime_user_model, set_runtime_user_model
+
+    set_runtime_user_model(None)
+    try:
+        journal = Journal()
+        reply = dispatch_tool(
+            "set_user_model", {"api_key": "sess-secret-1", "base_url": "notaurl"},
+            _seeded_store(), journal, CONFIG, NOW, underlying="TEST",
+        )
+        assert reply.ok is False
+        assert "http" in reply.error
+        assert read_runtime_user_model() is None
+        assert "sess-secret-1" not in json.dumps([e.payload for e in journal.entries()])
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_clear_user_model_tool_falls_back_to_none():
+    from bot.models import read_runtime_user_model, set_runtime_user_model
+    from bot.shapes import UserModelConfig
+
+    set_runtime_user_model(UserModelConfig(api_key="sess-secret-1",
+                                          base_url="https://llm.example/v1", model_id="m1"))
+    try:
+        journal = Journal()
+        reply = dispatch_tool("clear_user_model", {}, _seeded_store(), journal, CONFIG, NOW,
+                              underlying="TEST")
+        assert reply.ok is True
+        assert "sess-secret-1" not in reply.reply
+        assert read_runtime_user_model() is None
+        assert "user_model_cleared" in [e.kind for e in journal.entries()]
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_dashboard_settings_post_sets_session_key_without_persisting(tmp_path):
+    from bot.models import read_runtime_user_model, set_runtime_user_model
+
+    set_runtime_user_model(None)
+    try:
+        store = _seeded_store()
+        journal = Journal()
+        response = route_http(
+            "POST", "/settings",
+            FormData({"theme": "dark", "user_model_key": "dash-secret-1",
+                      "user_model_base_url": "https://llm.example/v1",
+                      "user_model_id": "dash-model", "next": "/settings"}),
+            store, journal, CONFIG, NOW,
+        )
+        assert response.status in (302, 303)
+        saved = read_runtime_user_model()
+        assert saved is not None and saved.model_id == "dash-model"
+        save_bundle(str(tmp_path), store, journal)
+        raw = (tmp_path / "settings.json").read_text()
+        assert "dash-secret-1" not in raw
+        assert "dash-secret-1" not in json.dumps([e.payload for e in journal.entries()])
+        assert "dash-model" in json.dumps([e.payload for e in journal.entries()][-1:])
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_dashboard_settings_post_blank_key_leaves_key_and_clear_removes_it():
+    from bot.models import read_runtime_user_model, set_runtime_user_model
+    from bot.shapes import UserModelConfig
+
+    set_runtime_user_model(UserModelConfig(api_key="dash-secret-1",
+                                          base_url="https://llm.example/v1", model_id="m1"))
+    try:
+        store = _seeded_store()
+        route_http("POST", "/settings", FormData({"theme": "dark"}),
+                   store, Journal(), CONFIG, NOW)
+        assert read_runtime_user_model() is not None
+        route_http("POST", "/settings", FormData({"clear_user_model": "1"}),
+                   store, Journal(), CONFIG, NOW)
+        assert read_runtime_user_model() is None
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_dashboard_settings_form_never_prefills_key():
+    from bot.models import set_runtime_user_model
+    from bot.shapes import UserModelConfig
+
+    set_runtime_user_model(UserModelConfig(api_key="dash-secret-1",
+                                          base_url="https://llm.example/v1", model_id="m1"))
+    try:
+        response = route_http("GET", "/settings", {}, _seeded_store(), Journal(), CONFIG, NOW)
+        assert response.status == 200
+        body = response.body.decode("utf-8")
+        assert "dash-secret-1" not in body
+        assert 'name="user_model_key" value=""' in body
+        assert "m1" in body
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_settings_json_reports_masked_user_state():
+    response = route_http("POST", "/settings", {"theme": "dark"},
+                          _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 200
+    body = json.loads(response.body.decode("utf-8"))
+    assert body["settings"]["user_key_set"] is False
+    assert body["settings"]["user_model"] is None
+    assert "api_key" not in json.dumps(body)
+
+
+def test_action_get_rejects_user_model_tools():
+    for tool in ("set_user_model", "clear_user_model"):
+        response = route_http("GET", f"/action?tool={tool}&underlying=TEST", {},
+                              _seeded_store(), Journal(), CONFIG, NOW)
+        assert response.status == 400
+
+
+def test_mcp_tools_call_sets_session_key():
+    from bot.models import read_runtime_user_model, set_runtime_user_model
+
+    set_runtime_user_model(None)
+    try:
+        payload = {"method": "tools/call",
+                   "params": {"name": "set_user_model",
+                              "arguments": {"api_key": "mcp-secret-1", "model_id": "mcp-model"},
+                              "underlying": "TEST"}}
+        response = route_http("POST", "/mcp", payload, _seeded_store(), Journal(), CONFIG, NOW)
+        assert response.status == 200
+        body = json.loads(response.body.decode("utf-8"))
+        assert body["ok"] is True
+        assert "mcp-secret-1" not in body["reply"]
+        assert read_runtime_user_model() is not None
+    finally:
+        set_runtime_user_model(None)
 
 
 def test_action_route_reaches_handler():

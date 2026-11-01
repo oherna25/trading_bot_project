@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import NewType, Optional
 from urllib.parse import unquote
 
-from bot.shapes import Bar, ChainSnapshot, DashboardSettings, Holding, OperatorProfile
+from bot.shapes import Bar, ChainSnapshot, DashboardSettings, Holding, OperatorProfile, PaperAccount
 
 SnapshotId = NewType("SnapshotId", str)
 
@@ -56,6 +56,7 @@ class SnapshotStore:
         self._settings: DashboardSettings = DashboardSettings()
         self._earnings: dict[str, str] = {}
         self._alert_rules: dict[str, dict] = {}
+        self._paper_accounts: dict[str, PaperAccount] = {}
 
     def _stamp(self, snapshot_id: str) -> datetime:
         return self._snapshots[snapshot_id].timestamp_utc
@@ -247,6 +248,15 @@ class SnapshotStore:
                 self._bar_keys[underlying] = {(bar.interval, bar.timestamp_utc) for bar in bars}
         return len(dropped)
 
+    def save_paper_account(self, account: PaperAccount) -> None:
+        self._paper_accounts[account.account_id] = account
+
+    def read_paper_account(self, account_id: str) -> Optional[PaperAccount]:
+        return self._paper_accounts.get(account_id)
+
+    def all_paper_accounts(self) -> dict[str, PaperAccount]:
+        return dict(self._paper_accounts)
+
     def restore(self, other: SnapshotStore) -> None:
         self._snapshots = dict(other._snapshots)
         self._bars = {underlying: list(bars) for underlying, bars in other._bars.items()}
@@ -257,6 +267,7 @@ class SnapshotStore:
         self._settings = other._settings
         self._earnings = dict(other._earnings)
         self._alert_rules = {rule_id: dict(rule) for rule_id, rule in other._alert_rules.items()}
+        self._paper_accounts = dict(other._paper_accounts)
         self._rebuild_indexes()
 
     def merge_from(self, other: SnapshotStore) -> None:

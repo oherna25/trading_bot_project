@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Optional
@@ -13,13 +15,24 @@ from bot.charts import gamma_chart_html, regime_board_html
 from bot.config import env_value as _env_value
 from bot.demo import demo_html
 from bot.exposure import compute_gex
+from bot.feeds import feed_health, feed_health_html
 from bot.journal import Journal
+from bot.models import user_model_form_defaults, user_model_status
 from bot.research import (
     paper_pnl_text,
 )
 from bot.shapes import OperatorConfig
 from bot.store import SnapshotStore, empty_store_text, need_snapshot_text
-from bot.tradecards import OPTIONS_DISABLED, PROFILE_REQUIRED, cards_to_json, query_trade_cards, trade_cards_html
+from bot.tradecards import (
+    OPTIONS_DISABLED,
+    PROFILE_REQUIRED,
+    bar_signature,
+    cards_to_json,
+    chain_fingerprint,
+    peek_trade_cards_key,
+    query_trade_cards,
+    trade_cards_html,
+)
 from bot.video import build_video_brief, composition_html
 
 from bot.muse_chat import dispatch_tool, handle_chat, parse_chat_payload
@@ -65,6 +78,48 @@ def _fail(status: int, message: str) -> HttpResponse:
     return HttpResponse.json(status, {"ok": False, "reply": message, "error": message})
 
 
+RESPONSE_CACHE_MAX = 64
+
+_response_cache: OrderedDict[str, tuple[bytes, str, str]] = OrderedDict()
+
+
+def clear_response_cache() -> None:
+    _response_cache.clear()
+
+
+def _response_etag(body: bytes) -> str:
+    return '"' + hashlib.sha256(body).hexdigest() + '"'
+
+
+def _not_modified(etag: str, content_type: str) -> HttpResponse:
+    return HttpResponse(304, content_type, b"", (("ETag", etag),))
+
+
+def _cached_response(key: str, if_none_match: str) -> HttpResponse | None:
+    hit = _response_cache.get(key)
+    if hit is None:
+        return None
+    body, etag, content_type = hit
+    _response_cache.move_to_end(key)
+    if if_none_match in (etag, "*"):
+        return _not_modified(etag, content_type)
+    return HttpResponse(200, content_type, body, (("ETag", etag),))
+
+
+def _store_response(key: str, body: bytes, content_type: str, if_none_match: str) -> HttpResponse:
+    etag = _response_etag(body)
+    if len(_response_cache) >= RESPONSE_CACHE_MAX:
+        _response_cache.popitem(last=False)
+    _response_cache[key] = (body, etag, content_type)
+    if if_none_match in (etag, "*"):
+        return _not_modified(etag, content_type)
+    return HttpResponse(200, content_type, body, (("ETag", etag),))
+
+
+def _minute_bucket(now: datetime) -> str:
+    return now.replace(second=0, microsecond=0).isoformat()
+
+
 def openapi_spec() -> dict:
     from bot.theme import BRAND
 
@@ -103,6 +158,18 @@ def openapi_spec() -> dict:
                 "get": {
                     "summary": "Detailed health with last ingest",
                     "responses": {"200": {"description": "Ingest status"}},
+                }
+            },
+            "/feeds": {
+                "get": {
+                    "summary": "Feed health page",
+                    "responses": {"200": {"description": "Feed health page"}},
+                }
+            },
+            "/replay.csv": {
+                "get": {
+                    "summary": "Replay export as CSV",
+                    "responses": {"200": {"description": "Replay steps, fills, or benchmark CSV"}},
                 }
             },
             "/cards": {
@@ -279,6 +346,9 @@ def health_detail(
         "underlyings": store.list_underlyings(),
         "push_providers": providers,
         "model_key_set": bool(_env_value("META_MODEL_API_KEY", "", env)),
+        "user_key_set": bool(_env_value("USER_MODEL_API_KEY", "", env)),
+        "user_model": user_model_status(env).get("user_model"),
+        "feeds": feed_health(journal, now),
     }
 
 
@@ -325,6 +395,7 @@ ACTION_POST_ONLY = frozenset({
     "backfill_iv", "load_snapshot", "read_chart_image", "read_document",
     "take_paper_trade", "onboarding_step",
     "set_alert_rule", "cancel_alert_rule",
+    "set_user_model", "clear_user_model",
 })
 
 ACTION_ARG_KEYS = (
@@ -375,6 +446,9 @@ def _settings_html(store: SnapshotStore) -> str:
         f"<option value=\"{choice}\"{' selected' if choice == settings.theme else ''}>{choice}</option>"
         for choice in ("dark", "light")
     )
+    defaults = user_model_form_defaults()
+    user_model = html.escape(defaults["model_id"], quote=True)
+    user_base = html.escape(defaults["base_url"], quote=True)
     body = (
         "<form class=\"block\" method=\"post\" action=\"/settings\">"
         f"<label class=\"field\">theme<select name=\"theme\">{options}</select></label>"
@@ -384,7 +458,20 @@ def _settings_html(store: SnapshotStore) -> str:
         f"<input name=\"refresh_seconds\" value=\"{settings.refresh_seconds}\" size=\"6\">"
         "</label><input type=\"hidden\" name=\"next\" value=\"/settings\">"
         "<button class=\"solid\" type=\"submit\">save settings</button></form>"
+        "<form class=\"block\" method=\"post\" action=\"/settings\">"
+        "<label class=\"field\">model key (session only, never stored)"
+        "<input type=\"password\" name=\"user_model_key\" value=\"\" size=\"24\" autocomplete=\"off\">"
+        "</label><label class=\"field\">model endpoint"
+        f"<input name=\"user_model_base_url\" value=\"{user_base}\" size=\"32\">"
+        "</label><label class=\"field\">model id"
+        f"<input name=\"user_model_id\" value=\"{user_model}\" size=\"20\">"
+        "</label><label class=\"field\">clear the session key"
+        "<input type=\"checkbox\" name=\"clear_user_model\" value=\"1\">"
+        "</label><input type=\"hidden\" name=\"next\" value=\"/settings\">"
+        "<button class=\"solid\" type=\"submit\">save model key</button></form>"
         f"<p class=\"sub\">{html.escape(settings_summary(settings))} -- every page reads this object</p>"
+        "<p class=\"sub\">The model key lives in server memory only and clears on restart; "
+        "use .env for a persistent key. Paste it here, never into chat.</p>"
     )
     return page(
         "settings", "settings, shared by all pages", settings_summary(settings), body,
@@ -403,6 +490,7 @@ def route_http(
     auth_token: Optional[str] = None,
     authorization: str = "",
     session_controller: Optional[SessionController] = None,
+    if_none_match: str = "",
 ) -> HttpResponse:
     if method == "HEAD":
         method = "GET"
@@ -411,6 +499,28 @@ def route_http(
         return HttpResponse.json(200, {"ok": True})
     if method == "GET" and clean == HEALTH_DETAIL_PATH:
         return HttpResponse.json(200, health_detail(store, journal, now))
+    if method == "GET" and clean == "/feeds":
+        return HttpResponse.html(200, feed_health_html(feed_health(journal, now)))
+    if method == "GET" and clean == "/replay.csv":
+        from bot.replay import REPLAY_EXPORT_SECTIONS, replay_export
+
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        underlying = _page_underlying(path, store)
+        section = (params.get("section", ["steps"])[0] or "steps").strip() or "steps"
+        if section not in REPLAY_EXPORT_SECTIONS:
+            return HttpResponse.json(
+                400, {"error": f"unknown replay section {section} -- want one of {', '.join(REPLAY_EXPORT_SECTIONS)}"}
+            )
+        try:
+            body = replay_export(underlying, store, section)
+        except ValueError as exc:
+            return HttpResponse.json(400, {"error": str(exc)})
+        filename = f"replay-{underlying}-{section}.csv"
+        return HttpResponse(
+            200, "text/csv", body.encode("utf-8"),
+            (("Content-Disposition", f'attachment; filename="{filename}"'),),
+        )
     if method == "GET" and clean == "/openapi.json":
         return HttpResponse.json(200, openapi_spec())
     if not _authorized(clean, auth_token, authorization):
@@ -538,6 +648,14 @@ def route_http(
         params = parse_qs(query_string)
         underlying = _page_underlying(path, store)
         query = (params.get("query", ["trade ideas"])[0] or "trade ideas").strip() or "trade ideas"
+        cards_key = peek_trade_cards_key(query, underlying, store, now)
+        response_key = (
+            f"cards:{clean}:{cards_key}:{store.read_settings()!r}" if cards_key is not None else None
+        )
+        if response_key is not None:
+            hit = _cached_response(response_key, if_none_match)
+            if hit is not None:
+                return hit
         try:
             cards = query_trade_cards(query, underlying, store, journal, now)
         except ValueError as exc:
@@ -550,12 +668,16 @@ def route_http(
                 return HttpResponse.json(403, {"error": reason})
             return HttpResponse.html(403, _cards_error_html(reason))
         if want_json:
-            return HttpResponse.json(
-                200, {"underlying": underlying, "count": len(cards), "cards": cards_to_json(cards)["cards"]}
-            )
-        return HttpResponse.html(
-            200, trade_cards_html(cards, underlying, store.read_settings(), profile=store.read_profile())
-        )
+            raw = json.dumps(
+                {"underlying": underlying, "count": len(cards), "cards": cards_to_json(cards)["cards"]}
+            ).encode("utf-8")
+            if response_key is None:
+                return HttpResponse(200, "application/json", raw)
+            return _store_response(response_key, raw, "application/json", if_none_match)
+        text = trade_cards_html(cards, underlying, store.read_settings(), profile=store.read_profile())
+        if response_key is None:
+            return HttpResponse.html(200, text)
+        return _store_response(response_key, text.encode("utf-8"), "text/html; charset=utf-8", if_none_match)
     if method == "GET" and clean == "/chart":
         underlying = _page_underlying(path, store)
         found = store.read_latest(underlying)
@@ -568,7 +690,26 @@ def route_http(
             200, gamma_chart_html(underlying, snapshot, profile, bar, now, store.read_settings())
         )
     if method == "GET" and clean == "/board":
-        return HttpResponse.html(200, regime_board_html(store, now))
+        board_parts = []
+        for name in sorted(store.list_underlyings()):
+            found = store.read_latest(name)
+            if found is None:
+                board_parts.append(f"{name}:none")
+                continue
+            snapshot_id, snapshot = found
+            board_parts.append(
+                f"{name}:{snapshot_id}:{chain_fingerprint(snapshot)}"
+                f":{bar_signature(store.read_latest_bar(name))}"
+            )
+        board_digest = hashlib.sha256("\n".join(board_parts).encode("utf-8")).hexdigest()
+        board_key = f"board:{board_digest}:{store.read_settings()!r}:{_minute_bucket(now)}"
+        hit = _cached_response(board_key, if_none_match)
+        if hit is not None:
+            return hit
+        return _store_response(
+            board_key, regime_board_html(store, now).encode("utf-8"),
+            "text/html; charset=utf-8", if_none_match,
+        )
     if method == "GET" and clean == "/board/live":
         from bot.charts import live_board_fragment
 
@@ -622,9 +763,22 @@ def route_http(
         return HttpResponse.html(200, shock_html(underlying, store, journal, now, pct))
     if method == "GET" and clean in ("/demo", "/"):
         underlying = _page_underlying(path, store)
-        if store.read_latest(underlying) is None:
+        found = store.read_latest(underlying)
+        if found is None:
             return HttpResponse.html(400, _cards_error_html(need_snapshot_text(underlying, store)))
-        return HttpResponse.html(200, demo_html(underlying, store, journal, now))
+        snapshot_id, snapshot = found
+        demo_key = (
+            f"demo:{clean}:{underlying}:{snapshot_id}:{chain_fingerprint(snapshot)}:"
+            f"{bar_signature(store.read_latest_bar(underlying))}:"
+            f"{store.read_profile()!r}:{store.read_settings()!r}:{_minute_bucket(now)}"
+        )
+        hit = _cached_response(demo_key, if_none_match)
+        if hit is not None:
+            return hit
+        return _store_response(
+            demo_key, demo_html(underlying, store, journal, now).encode("utf-8"),
+            "text/html; charset=utf-8", if_none_match,
+        )
     if method == "GET" and clean == "/card":
         from bot.demo import demo_cards
         query_string = path.split("?", 1)[1] if "?" in path else ""
@@ -740,12 +894,16 @@ def route_http(
             return _fail(400, str(exc))
         if isinstance(payload, FormData):
             return HttpResponse.redirect(str(payload.get("next", "/settings")))
+        user_status = user_model_status()
         return HttpResponse.json(200, {
             "ok": True,
             "settings": {
                 "theme": saved.theme,
                 "default_underlying": saved.default_underlying,
                 "refresh_seconds": saved.refresh_seconds,
+                "user_key_set": user_status.get("user_key_set"),
+                "user_model": user_status.get("user_model"),
+                "user_source": user_status.get("user_source"),
             },
         })
     if method == "POST" and clean == "/holdings":

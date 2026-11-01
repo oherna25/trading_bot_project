@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import json
+import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
@@ -38,6 +41,169 @@ def _reason_cache_store(key: str, reason: str) -> None:
     if len(_reason_cache) >= REASON_CACHE_MAX:
         _reason_cache.pop(next(iter(_reason_cache)), None)
     _reason_cache[key] = reason
+
+
+REASON_QUEUE_MAX = 256
+
+_reason_queue: deque[tuple] = deque()
+_reason_queued_keys: set[str] = set()
+_reason_queue_lock = threading.Lock()
+_reason_worker: threading.Thread | None = None
+_reason_stop = threading.Event()
+
+
+def clear_reason_queue() -> None:
+    with _reason_queue_lock:
+        _reason_queue.clear()
+        _reason_queued_keys.clear()
+
+
+def pending_reason_count() -> int:
+    with _reason_queue_lock:
+        return len(_reason_queue)
+
+
+def enqueue_reason(
+    stats: dict[str, Any],
+    cache_key: str,
+    env: Mapping[str, str] | None,
+    http_post: Any,
+    journal: Journal,
+    now: datetime,
+    symbol: str,
+    snapshot_id: str,
+) -> str:
+    with _reason_queue_lock:
+        if cache_key in _reason_cache or cache_key in _reason_queued_keys:
+            return "queued"
+        if len(_reason_queue) >= REASON_QUEUE_MAX:
+            return "reason queue full"
+        _reason_queue.append((stats, cache_key, env, http_post, journal, now, symbol, snapshot_id))
+        _reason_queued_keys.add(cache_key)
+        return "queued"
+
+
+def drain_reason_queue(max_jobs: int | None = None) -> int:
+    done = 0
+    while True:
+        with _reason_queue_lock:
+            if not _reason_queue or (max_jobs is not None and done >= max_jobs):
+                break
+            stats, cache_key, env, http_post, journal, now, symbol, snapshot_id = _reason_queue.popleft()
+        try:
+            reason, latency_ms = generate_reason(stats, env, http_post)
+        except Exception as exc:
+            journal.append(
+                now, "reason_failed",
+                {"symbol": symbol, "snapshot_id": snapshot_id, "reason": type(exc).__name__},
+            )
+        else:
+            _reason_cache_store(cache_key, reason)
+            clear_trade_cards_cache()
+            journal.append(
+                now,
+                "trade_card_reason",
+                {"symbol": symbol, "snapshot_id": snapshot_id, "latency_ms": latency_ms,
+                 "cached": False},
+            )
+        finally:
+            with _reason_queue_lock:
+                _reason_queued_keys.discard(cache_key)
+        done += 1
+    return done
+
+
+def _reason_loop(poll_seconds: float, max_jobs: int) -> None:
+    while not _reason_stop.wait(poll_seconds):
+        try:
+            drain_reason_queue(max_jobs=max_jobs)
+        except Exception:
+            pass
+
+
+def start_reason_worker(poll_seconds: float = 5.0, max_jobs: int = 8) -> None:
+    global _reason_worker
+    with _reason_queue_lock:
+        if _reason_worker is not None and _reason_worker.is_alive():
+            return
+        _reason_stop.clear()
+        _reason_worker = threading.Thread(
+            target=_reason_loop, args=(poll_seconds, max_jobs), daemon=True, name="reason-worker"
+        )
+        _reason_worker.start()
+
+
+def stop_reason_worker(timeout: float = 5.0) -> None:
+    global _reason_worker
+    with _reason_queue_lock:
+        worker, _reason_worker = _reason_worker, None
+    if worker is not None:
+        _reason_stop.set()
+        worker.join(timeout=timeout)
+
+
+CARD_CACHE_MAX = 32
+
+_card_cache: dict[str, list[TradeCard]] = {}
+
+
+def clear_trade_cards_cache() -> None:
+    _card_cache.clear()
+
+
+def chain_fingerprint(snapshot: ChainSnapshot) -> str:
+    bits = [
+        (
+            contract.strike, contract.expiry, contract.call_or_put, contract.open_interest,
+            contract.gamma, contract.vega, contract.delta, contract.price, contract.bid,
+            contract.ask, contract.iv,
+        )
+        for contract in snapshot.contracts_list
+    ]
+    return hashlib.sha256(repr(bits).encode("utf-8")).hexdigest()[:16]
+
+
+def bar_signature(bar: Optional[Bar]) -> str:
+    if bar is None:
+        return "no-bar"
+    return repr(
+        (bar.interval, bar.timestamp_utc.isoformat(), bar.open, bar.high, bar.low, bar.close, bar.volume)
+    )
+
+
+def trade_cards_cache_key(
+    text: str,
+    inputs: Sequence[tuple[str, ChainSnapshot, Optional[Bar]]],
+    profile: Any,
+    iv_history: Mapping[str, Sequence[float]] | None,
+    earnings: Mapping[str, Any] | None,
+    now: datetime,
+) -> str:
+    parts = [text, now.date().isoformat(), repr(profile)]
+    for snapshot_id, snapshot, bar in inputs:
+        parts.append(snapshot_id)
+        parts.append(chain_fingerprint(snapshot))
+        parts.append(bar_signature(bar))
+    parts.append(repr(iv_history))
+    parts.append(repr(earnings))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def peek_trade_cards_key(text: str, underlying: str, store: SnapshotStore, now: datetime) -> str | None:
+    inputs: list[tuple[str, ChainSnapshot, Optional[Bar]]] = []
+    used: list[str] = []
+    for symbol in symbols_for(text, store, underlying):
+        found = store.read_latest(symbol)
+        if found is None:
+            continue
+        snapshot_id, snapshot = found
+        inputs.append((snapshot_id, snapshot, store.read_latest_bar(symbol)))
+        used.append(symbol)
+    if not inputs:
+        return None
+    return trade_cards_cache_key(
+        text, inputs, store.read_profile(), histories_for(store, used), store.all_earnings(), now
+    )
 
 
 @dataclass(frozen=True)
@@ -131,12 +297,12 @@ def build_trade_cards(
             "iv_rank": idea.iv_rank,
         }
         reason_source = "fallback"
-        if backend == "meta":
+        if backend in ("meta", "user"):
             cache_key = _reason_cache_key(stats, http_post)
             cached = _reason_cache.get(cache_key)
             if cached is not None:
                 reason = cached
-                reason_source = "meta"
+                reason_source = backend
                 journal.append(
                     now,
                     "trade_card_reason",
@@ -148,40 +314,15 @@ def build_trade_cards(
                     },
                 )
             else:
-                try:
-                    reason, latency_ms = generate_reason(stats, env, http_post)
-                except Exception as exc:
-                    reason = fallback_reason(stats)
-                    journal.append(
-                        now,
-                        "reason_fallback",
-                        {
-                            "symbol": idea.symbol,
-                            "snapshot_id": idea.snapshot_id,
-                            "reason": type(exc).__name__,
-                        },
-                    )
-                else:
-                    if not reason:
-                        reason = fallback_reason(stats)
-                        journal.append(
-                            now,
-                            "reason_fallback",
-                            {"symbol": idea.symbol, "snapshot_id": idea.snapshot_id, "reason": "empty reason"},
-                        )
-                    else:
-                        reason_source = "meta"
-                        _reason_cache_store(cache_key, reason)
-                        journal.append(
-                            now,
-                            "trade_card_reason",
-                            {
-                                "symbol": idea.symbol,
-                                "snapshot_id": idea.snapshot_id,
-                                "latency_ms": latency_ms,
-                                "cached": False,
-                            },
-                        )
+                disposition = enqueue_reason(
+                    stats, cache_key, env, http_post, journal, now, idea.symbol, idea.snapshot_id
+                )
+                reason = fallback_reason(stats)
+                journal.append(
+                    now,
+                    "reason_fallback",
+                    {"symbol": idea.symbol, "snapshot_id": idea.snapshot_id, "reason": disposition},
+                )
         else:
             reason = fallback_reason(stats)
             journal.append(
@@ -245,7 +386,7 @@ def query_trade_cards(
         missing = ", ".join(unknown)
         raise ValueError(need_snapshot_text(missing, store))
     max_days = parse_timeframe(text)
-    entries = []
+    inputs: list[tuple[str, ChainSnapshot, Optional[Bar]]] = []
     used = []
     snapshot_ids = []
     for symbol in symbols_for(text, store, underlying):
@@ -253,22 +394,33 @@ def query_trade_cards(
         if found is None:
             continue
         snapshot_id, snapshot = found
-        bar = store.read_latest_bar(symbol)
-        entries.append(
-            (
-                snapshot_id,
-                snapshot,
-                compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None),
-                bar,
-            )
-        )
+        inputs.append((snapshot_id, snapshot, store.read_latest_bar(symbol)))
         used.append(symbol)
         snapshot_ids.append(snapshot_id)
-    if not entries:
+    if not inputs:
         raise ValueError(need_snapshot_text(underlying, store))
+    iv_history = histories_for(store, used)
+    cache_key: Optional[str] = None
+    if http_post is None and select_reason_backend(journal, now, env)[0] not in ("meta", "user"):
+        cache_key = trade_cards_cache_key(text, inputs, profile, iv_history, store.all_earnings(), now)
+        hit = _card_cache.get(cache_key)
+        if hit is not None:
+            journal.append(
+                now, "ideas_cached", {"query": text, "symbols": used, "count": len(hit)}
+            )
+            return list(hit)
     fetched = cached_earnings(used, now)
     for symbol, day in fetched.items():
         store.save_earnings(symbol, day.isoformat())
+    entries = [
+        (
+            snapshot_id,
+            snapshot,
+            compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None),
+            bar,
+        )
+        for snapshot_id, snapshot, bar in inputs
+    ]
     cards = build_trade_cards(
         entries,
         max_days,
@@ -276,7 +428,7 @@ def query_trade_cards(
         journal,
         env,
         http_post,
-        iv_history=histories_for(store, used),
+        iv_history=iv_history,
         earnings={**store.all_earnings(), **fetched},
     )
     journal.append(
@@ -291,6 +443,10 @@ def query_trade_cards(
             "cards": len(cards),
         },
     )
+    if cache_key is not None:
+        if len(_card_cache) >= CARD_CACHE_MAX:
+            _card_cache.pop(next(iter(_card_cache)), None)
+        _card_cache[cache_key] = list(cards)
     return cards
 
 

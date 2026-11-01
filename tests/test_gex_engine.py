@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from bot.exposure import compute_dex, compute_gex, compute_vex
+from bot.exposure import compute_charm, compute_dex, compute_gex, compute_vanna, compute_vex
 from bot.shapes import ChainSnapshot, OptionContract
 
 STAMP = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -105,6 +105,46 @@ def test_dex_uses_signed_delta_times_open_interest():
     assert profile.total_exposure == pytest.approx(1000.0)
 
 
+def _charm_vanna_snapshot() -> ChainSnapshot:
+    return ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=STAMP,
+        source_name="tradier_sandbox",
+        latency_ms=12.5,
+        contracts_list=(
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=100.0, charm=0.04, vanna=0.06),
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put",
+                           open_interest=100.0, charm=0.03, vanna=0.05),
+            OptionContract(strike=105.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=50.0, charm=None, vanna=None),
+        ),
+    )
+
+
+def test_charm_per_strike_and_total():
+    profile = compute_charm(_charm_vanna_snapshot(), "TEST:snap-1")
+    assert profile.snapshot_id == "TEST:snap-1"
+    assert profile.per_strike_exposure == pytest.approx({100.0: 100.0, 105.0: 0.0})
+    assert profile.total_exposure == pytest.approx(100.0)
+
+
+def test_vanna_per_strike_and_total():
+    profile = compute_vanna(_charm_vanna_snapshot(), "TEST:snap-1")
+    assert profile.snapshot_id == "TEST:snap-1"
+    assert profile.per_strike_exposure == pytest.approx({100.0: 100.0, 105.0: 0.0})
+    assert profile.total_exposure == pytest.approx(100.0)
+
+
+def test_charm_and_vanna_share_the_single_exposure_pass():
+    from bot import exposure
+
+    snapshot = _charm_vanna_snapshot()
+    compute_charm(snapshot, "TEST:snap-f11")
+    kinds = {key[0] for key in exposure._profile_cache if key[1] == "TEST:snap-f11"}
+    assert {"gex", "vex", "dex", "charm", "vanna"} <= kinds
+
+
 def test_gex_normalizes_side_case_and_ignores_unknown_side():
     snapshot = ChainSnapshot(
         underlying="TEST",
@@ -122,3 +162,40 @@ def test_gex_normalizes_side_case_and_ignores_unknown_side():
     assert profile.call_exposure == pytest.approx(100.0)
     assert profile.put_exposure == pytest.approx(-100.0)
     assert 105.0 not in profile.per_strike_exposure
+
+
+def test_gex_cache_hits_on_identical_content():
+    snapshot = _gex_snapshot()
+    first = compute_gex(snapshot, "TEST:cache-hit")
+    second = compute_gex(snapshot, "TEST:cache-hit")
+    assert second is first
+
+
+def test_gex_recomputes_after_in_place_contract_mutation():
+    snapshot = _gex_snapshot()
+    first = compute_gex(snapshot, "TEST:mut-1")
+    assert first.total_exposure == pytest.approx(7000.0)
+    object.__setattr__(snapshot.contracts_list[1], "gamma", 0.20)
+    second = compute_gex(snapshot, "TEST:mut-1")
+    assert second.total_exposure == pytest.approx(17000.0)
+
+
+def test_gex_recomputes_after_mutable_sequence_change():
+    snapshot = ChainSnapshot(
+        underlying="TEST",
+        timestamp_utc=STAMP,
+        source_name="tradier_sandbox",
+        latency_ms=1.0,
+        contracts_list=[
+            OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                           open_interest=1000.0, gamma=0.05),
+        ],
+    )
+    first = compute_gex(snapshot, "TEST:mut-2")
+    assert first.total_exposure == pytest.approx(5000.0)
+    snapshot.contracts_list.append(
+        OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                       open_interest=1000.0, gamma=0.05)
+    )
+    second = compute_gex(snapshot, "TEST:mut-2")
+    assert second.total_exposure == pytest.approx(10000.0)

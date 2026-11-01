@@ -1,8 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from bot.feeds import FEED_REGISTRY, ingest_chain
 from bot.journal import Journal
-from bot.replay import paper_evidence_from_journal, replay_report, replay_response, replay_week
+from bot.replay import paper_evidence_from_journal, replay_export, replay_report, replay_response, replay_week
 from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
@@ -69,8 +71,8 @@ def test_paper_evidence_generates_from_backtest_journal():
     )
     evidence = paper_evidence_from_journal(journal, clean_days_target=2, drawdown_bound=500.0)
     assert evidence.clean_days_target == 2
-    assert evidence.clean_days == 1
-    assert evidence.max_drawdown == 8000.0
+    assert evidence.clean_days == 2
+    assert evidence.max_drawdown == 1000.0
     assert evidence.halt_drills_passed is False
 
 
@@ -129,16 +131,128 @@ def test_replay_report_lists_trade_log_and_day_span():
     assert "only direction flips trade" in text
 
 
-def test_replay_holds_same_side_and_closes_on_flip():
+def test_replay_holds_same_side_then_halts_before_force_close():
     journal = replay_week(
         [_flippable_snapshot(0), _flippable_snapshot(1), _flippable_snapshot(2)],
         Journal(),
         bars=[_bar(0, 100.0), _bar(1, 104.0), _bar(2, 108.0)],
     )
     actions = [e.payload["action"] for e in journal.entries() if e.kind == "backtest_step"]
-    assert actions == ["open", "hold", "close"]
-    assert sum(1 for e in journal.entries() if e.kind == "fill") == 2
+    assert actions == ["pending", "open", "pending"]
+    assert sum(1 for e in journal.entries() if e.kind == "fill") == 1
     assert sum(1 for e in journal.entries() if e.kind == "replay_hold") == 1
+    kinds = [e.kind for e in journal.entries()]
+    assert "halt" in kinds
+    assert "replay_unclosed" in kinds
+
+
+def test_replay_force_closes_open_position_at_last_close():
+    from bot.shapes import RiskLimits
+
+    relaxed = RiskLimits(max_trade_size=5000.0, day_profit_target=500000.0, max_day_loss=1000000.0)
+    journal = replay_week(
+        [_flippable_snapshot(0), _flippable_snapshot(1), _flippable_snapshot(2)],
+        Journal(),
+        bars=[_bar(0, 100.0), _bar(1, 104.0), _bar(2, 108.0)],
+        limits=relaxed,
+    )
+    actions = [e.payload["action"] for e in journal.entries() if e.kind == "backtest_step"]
+    assert actions == ["pending", "open", "pending", "force-close"]
+    fills = [(e.payload["side"], e.payload["size"], e.payload["price"])
+             for e in journal.entries() if e.kind == "fill"]
+    assert fills == [("sell", 500.0, 104.0), ("buy", 500.0, 108.0)]
+
+
+def test_replay_fills_pending_at_next_bar_open():
+    journal = replay_week(
+        [_flippable_snapshot(0), _flippable_snapshot(1), _flippable_snapshot(2)],
+        Journal(),
+        bars=[
+            Bar(interval="1d", timestamp_utc=DAY, open=100.0,
+                high=100.0, low=100.0, close=100.0, volume=1000.0),
+            Bar(interval="1d", timestamp_utc=DAY + timedelta(days=1), open=105.0,
+                high=108.0, low=105.0, close=108.0, volume=1000.0),
+            Bar(interval="1d", timestamp_utc=DAY + timedelta(days=2), open=108.0,
+                high=110.0, low=108.0, close=110.0, volume=1000.0),
+        ],
+    )
+    fills = [e.payload for e in journal.entries() if e.kind == "fill"]
+    assert fills
+    assert fills[0]["price"] == 105.0
+
+
+def test_replay_response_rerun_does_not_double_journal_fills():
+    store = _stored_week()
+    journal = Journal()
+    replay_response("TEST", store, journal, DAY + timedelta(days=2))
+    fills_first = sum(1 for e in journal.entries() if e.kind == "fill")
+    assert fills_first > 0
+    rerun = replay_response("TEST", store, journal, DAY + timedelta(days=2))
+    assert "already journaled" in rerun
+    assert sum(1 for e in journal.entries() if e.kind == "fill") == fills_first
+    assert sum(1 for e in journal.entries() if e.kind == "replay_summary") == 1
+
+
+def test_replay_export_steps_csv():
+    import csv
+    import io
+
+    rows = list(csv.DictReader(io.StringIO(replay_export("TEST", _stored_week()))))
+    assert [row["action"] for row in rows] == ["pending", "open", "pending"]
+    assert rows[0]["run_id"].startswith("replay-TEST-")
+    assert float(rows[-1]["day_pnl"]) == -2000.0
+    assert float(rows[-1]["equity"]) == 98000.0
+
+
+def test_replay_export_fills_csv():
+    import csv
+    import io
+
+    rows = list(csv.DictReader(io.StringIO(replay_export("TEST", _stored_week(), "fills"))))
+    assert len(rows) == 1
+    assert rows[0]["side"] == "sell"
+    assert float(rows[0]["size"]) == 500.0
+    assert float(rows[0]["price"]) == 104.0
+    assert rows[0]["venue"] == "replay"
+    assert rows[0]["run_id"].startswith("replay-TEST-")
+
+
+def test_replay_export_benchmark_csv():
+    import csv
+    import io
+
+    store = _stored_week()
+    for day, close in ((0, 500.0), (1, 510.0), (2, 520.0)):
+        store.save_bar(
+            "SPY",
+            Bar(interval="1d", timestamp_utc=DAY + timedelta(days=day), open=close,
+                high=close, low=close, close=close, volume=1000.0),
+        )
+    rows = list(csv.DictReader(io.StringIO(replay_export("TEST", store, "benchmark"))))
+    assert [row["date"] for row in rows] == ["2026-10-19", "2026-10-20", "2026-10-21"]
+    assert float(rows[0]["spy_close"]) == 500.0
+    assert float(rows[-1]["spy_equity"]) == pytest.approx(104.0 * 520.0)
+    assert float(rows[-1]["strategy_equity"]) == 98000.0
+    bare = list(csv.DictReader(io.StringIO(replay_export("TEST", _stored_week(), "benchmark"))))
+    assert bare[0]["spy_close"] == ""
+    assert float(bare[-1]["strategy_equity"]) == 98000.0
+
+
+def test_replay_export_rejects_unknown_section_and_missing_data():
+    with pytest.raises(ValueError, match="unknown replay section"):
+        replay_export("TEST", _stored_week(), "nope")
+    with pytest.raises(ValueError, match="needs at least 2"):
+        replay_export("TEST", SnapshotStore(), "steps")
+
+
+def test_replay_report_reports_daily_deltas_and_run_id():
+    text, fills, summary = replay_report("TEST", _stored_week())
+    assert fills
+    assert summary["run_id"].startswith("replay-TEST-")
+    assert all(fill["run_id"] == summary["run_id"] for _, fill in fills)
+    assert "equity by day:" in text
+    assert set(summary["daily_deltas"]) == {"2026-10-19", "2026-10-20", "2026-10-21"}
+    assert summary["day_pnl"] == sum(summary["daily_deltas"].values())
 
 
 def test_replay_response_needs_two_snapshots_and_bars():

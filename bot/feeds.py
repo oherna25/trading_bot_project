@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import http.cookiejar
 import json
 import os
@@ -167,6 +168,7 @@ class FeedContext:
     underlying: str
     credentials: Mapping[str, str] = field(default_factory=dict)
     http_get: HttpGet = _canned_get
+    ledger_dir: str = ""
 
     def require(self, name: str) -> str:
         try:
@@ -199,11 +201,17 @@ def _tradier_base() -> str:
 
 
 def default_context(underlying: str = "SPY") -> FeedContext:
-    return FeedContext(underlying=underlying, credentials=_read_env(), http_get=_canned_get)
+    return FeedContext(
+        underlying=underlying, credentials=_read_env(), http_get=_canned_get,
+        ledger_dir=env_value("LEDGER_DIR", ""),
+    )
 
 
 def live_context(underlying: str) -> FeedContext:
-    return FeedContext(underlying=underlying, credentials=_read_env(), http_get=_urllib_get)
+    return FeedContext(
+        underlying=underlying, credentials=_read_env(), http_get=_urllib_get,
+        ledger_dir=env_value("LEDGER_DIR", ""),
+    )
 
 
 def _tradier_expiry(entry: Any) -> str | None:
@@ -248,6 +256,8 @@ def _tradier_sandbox(ctx: FeedContext) -> dict[str, Any]:
                     "gamma": greek_values.get("gamma"),
                     "vega": greek_values.get("vega"),
                     "delta": greek_values.get("delta"),
+                    "charm": greek_values.get("charm"),
+                    "vanna": greek_values.get("vanna"),
                     "price": item.get("last"),
                     "bid": item.get("bid"),
                     "ask": item.get("ask"),
@@ -351,6 +361,8 @@ def _marketdata_eod(ctx: FeedContext) -> dict[str, Any]:
                 "gamma": at("gamma"),
                 "vega": at("vega"),
                 "delta": at("delta"),
+                "charm": at("charm"),
+                "vanna": at("vanna"),
                 "price": at("last"),
                 "bid": at("bid"),
                 "ask": at("ask"),
@@ -578,6 +590,8 @@ def ingest_chain(
                 gamma=c.get("gamma"),
                 vega=c.get("vega"),
                 delta=c.get("delta"),
+                charm=c.get("charm"),
+                vanna=c.get("vanna"),
                 price=c.get("price"),
                 bid=c.get("bid"),
                 ask=c.get("ask"),
@@ -587,7 +601,11 @@ def ingest_chain(
         ),
     )
     snapshot_id = store.save(snapshot)
-    journal.append(snapshot.timestamp_utc, "snapshot_ingested", {"snapshot_id": snapshot_id, "source_name": feed_name})
+    journal.append(
+        snapshot.timestamp_utc,
+        "snapshot_ingested",
+        {"snapshot_id": snapshot_id, "source_name": feed_name, "latency_ms": latency_ms},
+    )
     ivs = [c.iv for c in snapshot.contracts_list if c.iv is not None]
     if ivs:
         store.save_iv(raw["underlying"], snapshot.timestamp_utc.isoformat(), sum(ivs) / len(ivs))
@@ -599,25 +617,48 @@ def ingest_bars(feed_name: str, store: SnapshotStore, journal: Journal, ctx: Fee
         raise ValueError(f"feed {feed_name} carries chains, not bars")
     adapter = FEED_REGISTRY[feed_name]
     context = ctx or default_context()
-    if feed_name in DAILY_QUOTA_FEEDS and _fetched_today(feed_name, context.underlying, journal):
-        raise FeedUnavailableError(f"feed {feed_name} already fetched today for {context.underlying}")
-    started = time.perf_counter()
-    raw = adapter(context)
-    latency_ms = (time.perf_counter() - started) * 1000.0
-    bars = [
-        Bar(
-            interval="1d",
-            timestamp_utc=b["timestamp"],
-            open=b["open"],
-            high=b["high"],
-            low=b["low"],
-            close=b["close"],
-            volume=b["volume"],
-        )
-        for b in raw["bars"]
-    ]
-    if not bars:
-        raise FeedUnavailableError(f"feed {feed_name} returned no bars")
+    quota_day = ""
+    if feed_name in DAILY_QUOTA_FEEDS:
+        if context.ledger_dir:
+            from bot.ledger import release_quota, reserve_quota
+
+            quota_day = _now_utc().date().isoformat()
+            if not reserve_quota(context.ledger_dir, feed_name, context.underlying, quota_day):
+                raise FeedUnavailableError(
+                    f"feed {feed_name} quota already reserved today for {context.underlying}"
+                )
+            journal.append(
+                _now_utc(), "quota_reserved", {"source_name": feed_name, "underlying": context.underlying}
+            )
+        elif _fetched_today(feed_name, context.underlying, journal):
+            raise FeedUnavailableError(f"feed {feed_name} already fetched today for {context.underlying}")
+    try:
+        started = time.perf_counter()
+        raw = adapter(context)
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        bars = [
+            Bar(
+                interval="1d",
+                timestamp_utc=b["timestamp"],
+                open=b["open"],
+                high=b["high"],
+                low=b["low"],
+                close=b["close"],
+                volume=b["volume"],
+            )
+            for b in raw["bars"]
+        ]
+        if not bars:
+            raise FeedUnavailableError(f"feed {feed_name} returned no bars")
+    except Exception:
+        if quota_day:
+            from bot.ledger import release_quota
+
+            release_quota(context.ledger_dir, feed_name, context.underlying, quota_day)
+            journal.append(
+                _now_utc(), "quota_released", {"source_name": feed_name, "underlying": context.underlying}
+            )
+        raise
     for bar in bars:
         store.save_bar(raw["underlying"], bar)
     journal.append(
@@ -630,3 +671,93 @@ def ingest_bars(feed_name: str, store: SnapshotStore, journal: Journal, ctx: Fee
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def feed_health(journal: Journal, now: datetime) -> dict[str, dict[str, Any]]:
+    """Per-feed health sourced from journaled ingest outcomes.
+
+    Fallback depth counts consecutive same-kind failures before each success,
+    which mirrors how ingest_first_working walks the ordered feed lists.
+    """
+    stats: dict[str, dict[str, Any]] = {
+        name: {
+            "kind": FEED_KIND[name],
+            "successes": 0,
+            "failures": 0,
+            "latencies": [],
+            "last_success_utc": None,
+            "last_error": None,
+            "last_depth": None,
+            "quota_reserved_today": 0,
+            "quota_released_today": 0,
+        }
+        for name in FEED_REGISTRY
+    }
+    run_failures = {"chain": 0, "bars": 0}
+    today = now.date().isoformat()
+    for entry in journal.entries():
+        kind = entry.kind
+        if kind == "feed_failed":
+            feed = entry.payload.get("feed_name")
+            if feed in stats:
+                stats[feed]["failures"] += 1
+                stats[feed]["last_error"] = entry.payload.get("error")
+                run_failures[FEED_KIND[feed]] += 1
+        elif kind in ("snapshot_ingested", "bars_ingested"):
+            feed = entry.payload.get("source_name")
+            if feed in stats:
+                current = stats[feed]
+                current["successes"] += 1
+                current["last_success_utc"] = entry.timestamp_utc.isoformat()
+                current["last_depth"] = run_failures[FEED_KIND[feed]]
+                latency = entry.payload.get("latency_ms")
+                if isinstance(latency, (int, float)):
+                    current["latencies"].append(float(latency))
+                run_failures[FEED_KIND[feed]] = 0
+        elif kind == "quota_reserved":
+            feed = entry.payload.get("source_name")
+            if feed in stats and entry.timestamp_utc.date().isoformat() == today:
+                stats[feed]["quota_reserved_today"] += 1
+        elif kind == "quota_released":
+            feed = entry.payload.get("source_name")
+            if feed in stats and entry.timestamp_utc.date().isoformat() == today:
+                stats[feed]["quota_released_today"] += 1
+    for current in stats.values():
+        latencies = current.pop("latencies")
+        current["last_latency_ms"] = latencies[-1] if latencies else None
+        current["avg_latency_ms"] = sum(latencies) / len(latencies) if latencies else None
+        if current["successes"]:
+            current["status"] = "ok"
+        elif current["failures"]:
+            current["status"] = "error"
+        else:
+            current["status"] = "idle"
+    return stats
+
+
+def feed_health_html(feeds: dict[str, dict[str, Any]]) -> str:
+    rows = []
+    for name in sorted(feeds):
+        stat = feeds[name]
+        cells = [
+            name,
+            stat["kind"],
+            stat["status"],
+            str(stat["successes"]),
+            str(stat["failures"]),
+            stat["last_success_utc"] or "-",
+            f"{stat['last_latency_ms']:.0f} ms" if stat["last_latency_ms"] is not None else "-",
+            f"{stat['avg_latency_ms']:.0f} ms" if stat["avg_latency_ms"] is not None else "-",
+            str(stat["last_depth"]) if stat["last_depth"] is not None else "-",
+            f"{stat['quota_reserved_today']}/{stat['quota_released_today']}",
+            stat["last_error"] or "-",
+        ]
+        rows.append("<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in cells) + "</tr>")
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'><title>feed health</title></head><body>"
+        "<h1>feed health</h1>"
+        "<table><thead><tr><th>feed</th><th>kind</th><th>status</th><th>ok</th><th>fail</th>"
+        "<th>last success</th><th>last latency</th><th>avg latency</th>"
+        "<th>fallback depth</th><th>quota today</th><th>last error</th></tr></thead>"
+        "<tbody>" + "".join(rows) + "</tbody></table></body></html>"
+    )

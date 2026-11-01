@@ -149,7 +149,21 @@ def _reason_stub(url, headers, payload, timeout):
 
 
 def test_demo_cards_honors_passed_reason_env():
+    from bot.tradecards import drain_reason_queue
+
+    journal = Journal()
     _, cards = demo_cards(
+        "TEST",
+        _seeded_store(),
+        journal,
+        NOW,
+        env={"META_MODEL_API_KEY": "key-1"},
+        http_post=_reason_stub,
+    )
+    assert cards
+    assert {card.reason_source for card in cards} == {"fallback"}
+    assert drain_reason_queue() == len(cards)
+    _, live = demo_cards(
         "TEST",
         _seeded_store(),
         Journal(),
@@ -157,9 +171,8 @@ def test_demo_cards_honors_passed_reason_env():
         env={"META_MODEL_API_KEY": "key-1"},
         http_post=_reason_stub,
     )
-    assert cards
-    assert {card.reason_source for card in cards} == {"meta"}
-    assert {card.reason for card in cards} == {"Model says go."}
+    assert {card.reason_source for card in live} == {"meta"}
+    assert {card.reason for card in live} == {"Model says go."}
 
 
 def test_demo_cards_pins_old_snapshot_bar():

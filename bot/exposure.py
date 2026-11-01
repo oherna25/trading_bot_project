@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Iterable
 
 from bot.shapes import (
     DEFAULT_CONTRACT_MULTIPLIER,
     ChainSnapshot,
+    CharmProfile,
     DexProfile,
     GexProfile,
+    OptionContract,
+    VannaProfile,
     VexProfile,
 )
 
 ONE_PERCENT_MOVE = 0.01
 
 _CACHE_LIMIT = 256
-_profile_cache: OrderedDict[tuple, tuple[tuple, object]] = OrderedDict()
+_profile_cache: OrderedDict[tuple, tuple[tuple[int, int], object]] = OrderedDict()
 
 
 def _normalize_side(call_or_put: str) -> str | None:
@@ -61,19 +65,25 @@ def _front_expiry(snapshot: ChainSnapshot) -> str | None:
     return expiries[0] if expiries else None
 
 
-def _cache_get(key: tuple, contracts: tuple):
+def _fingerprint(contracts: Iterable[OptionContract]) -> tuple[int, int]:
+    items = tuple(contracts)
+    fresh = tuple(hash(contract) for contract in items)
+    return (len(items), hash(fresh))
+
+
+def _cache_get(key: tuple, fingerprint: tuple[int, int]):
     entry = _profile_cache.get(key)
     if entry is None:
         return None
-    stored_contracts, value = entry
-    if stored_contracts is not contracts:
+    stored_fingerprint, value = entry
+    if stored_fingerprint != fingerprint:
         return None
     _profile_cache.move_to_end(key)
     return value
 
 
-def _cache_put(key: tuple, contracts: tuple, value: object) -> None:
-    _profile_cache[key] = (contracts, value)
+def _cache_put(key: tuple, fingerprint: tuple[int, int], value: object) -> None:
+    _profile_cache[key] = (fingerprint, value)
     _profile_cache.move_to_end(key)
     while len(_profile_cache) > _CACHE_LIMIT:
         _profile_cache.popitem(last=False)
@@ -84,16 +94,20 @@ def compute_exposures(
     snapshot_id: str,
     multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
     spot: float | None = None,
-) -> tuple[GexProfile, VexProfile, DexProfile]:
+) -> tuple[GexProfile, VexProfile, DexProfile, CharmProfile, VannaProfile]:
     gex_key = ("gex", snapshot_id, spot, multiplier)
     vex_key = ("vex", snapshot_id, multiplier)
     dex_key = ("dex", snapshot_id, multiplier)
-    contracts = snapshot.contracts_list
-    gex = _cache_get(gex_key, contracts)
-    vex = _cache_get(vex_key, contracts)
-    dex = _cache_get(dex_key, contracts)
-    if gex is not None and vex is not None and dex is not None:
-        return gex, vex, dex  # type: ignore[return-value]
+    charm_key = ("charm", snapshot_id, multiplier)
+    vanna_key = ("vanna", snapshot_id, multiplier)
+    fingerprint = _fingerprint(snapshot.contracts_list)
+    gex = _cache_get(gex_key, fingerprint)
+    vex = _cache_get(vex_key, fingerprint)
+    dex = _cache_get(dex_key, fingerprint)
+    charm = _cache_get(charm_key, fingerprint)
+    vanna = _cache_get(vanna_key, fingerprint)
+    if gex is not None and vex is not None and dex is not None and charm is not None and vanna is not None:
+        return gex, vex, dex, charm, vanna  # type: ignore[return-value]
     scale = spot * spot * ONE_PERCENT_MOVE if spot else 1.0
     front = _front_expiry(snapshot)
     gex_strikes: dict[float, float] = {}
@@ -101,9 +115,13 @@ def compute_exposures(
     per_put: dict[float, float] = {}
     vex_strikes: dict[float, float] = {}
     dex_strikes: dict[float, float] = {}
+    charm_strikes: dict[float, float] = {}
+    vanna_strikes: dict[float, float] = {}
     gex_total = 0.0
     vex_total = 0.0
     dex_total = 0.0
+    charm_total = 0.0
+    vanna_total = 0.0
     front_exposure = 0.0
     call_exposure = 0.0
     put_exposure = 0.0
@@ -129,6 +147,12 @@ def compute_exposures(
             delta_exposure = contract.delta * contract.open_interest * multiplier
             dex_strikes[contract.strike] = dex_strikes.get(contract.strike, 0.0) + delta_exposure
             dex_total += delta_exposure
+        charm_exposure = _signed_exposure(side, contract.charm, contract.open_interest, multiplier)
+        charm_strikes[contract.strike] = charm_strikes.get(contract.strike, 0.0) + charm_exposure
+        charm_total += charm_exposure
+        vanna_exposure = _signed_exposure(side, contract.vanna, contract.open_interest, multiplier)
+        vanna_strikes[contract.strike] = vanna_strikes.get(contract.strike, 0.0) + vanna_exposure
+        vanna_total += vanna_exposure
     if gex is None:
         gex = GexProfile(
             snapshot_id=snapshot_id,
@@ -143,14 +167,20 @@ def compute_exposures(
             per_strike_call_exposure={strike: value * scale for strike, value in per_call.items()},
             per_strike_put_exposure={strike: value * scale for strike, value in per_put.items()},
         )
-        _cache_put(gex_key, contracts, gex)
+        _cache_put(gex_key, fingerprint, gex)
     if vex is None:
         vex = VexProfile(snapshot_id=snapshot_id, per_strike_exposure=vex_strikes, total_exposure=vex_total)
-        _cache_put(vex_key, contracts, vex)
+        _cache_put(vex_key, fingerprint, vex)
     if dex is None:
         dex = DexProfile(snapshot_id=snapshot_id, per_strike_exposure=dex_strikes, total_exposure=dex_total)
-        _cache_put(dex_key, contracts, dex)
-    return gex, vex, dex  # type: ignore[return-value]
+        _cache_put(dex_key, fingerprint, dex)
+    if charm is None:
+        charm = CharmProfile(snapshot_id=snapshot_id, per_strike_exposure=charm_strikes, total_exposure=charm_total)
+        _cache_put(charm_key, fingerprint, charm)
+    if vanna is None:
+        vanna = VannaProfile(snapshot_id=snapshot_id, per_strike_exposure=vanna_strikes, total_exposure=vanna_total)
+        _cache_put(vanna_key, fingerprint, vanna)
+    return gex, vex, dex, charm, vanna  # type: ignore[return-value]
 
 
 def compute_gex(
@@ -160,7 +190,7 @@ def compute_gex(
     spot: float | None = None,
 ) -> GexProfile:
     key = ("gex", snapshot_id, spot, multiplier)
-    cached = _cache_get(key, snapshot.contracts_list)
+    cached = _cache_get(key, _fingerprint(snapshot.contracts_list))
     if cached is not None:
         return cached  # type: ignore[return-value]
     return compute_exposures(snapshot, snapshot_id, multiplier, spot)[0]
@@ -172,7 +202,7 @@ def compute_vex(
     multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
 ) -> VexProfile:
     key = ("vex", snapshot_id, multiplier)
-    cached = _cache_get(key, snapshot.contracts_list)
+    cached = _cache_get(key, _fingerprint(snapshot.contracts_list))
     if cached is not None:
         return cached  # type: ignore[return-value]
     return compute_exposures(snapshot, snapshot_id, multiplier)[1]
@@ -184,7 +214,31 @@ def compute_dex(
     multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
 ) -> DexProfile:
     key = ("dex", snapshot_id, multiplier)
-    cached = _cache_get(key, snapshot.contracts_list)
+    cached = _cache_get(key, _fingerprint(snapshot.contracts_list))
     if cached is not None:
         return cached  # type: ignore[return-value]
     return compute_exposures(snapshot, snapshot_id, multiplier)[2]
+
+
+def compute_charm(
+    snapshot: ChainSnapshot,
+    snapshot_id: str,
+    multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
+) -> CharmProfile:
+    key = ("charm", snapshot_id, multiplier)
+    cached = _cache_get(key, _fingerprint(snapshot.contracts_list))
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+    return compute_exposures(snapshot, snapshot_id, multiplier)[3]
+
+
+def compute_vanna(
+    snapshot: ChainSnapshot,
+    snapshot_id: str,
+    multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
+) -> VannaProfile:
+    key = ("vanna", snapshot_id, multiplier)
+    cached = _cache_get(key, _fingerprint(snapshot.contracts_list))
+    if cached is not None:
+        return cached  # type: ignore[return-value]
+    return compute_exposures(snapshot, snapshot_id, multiplier)[4]

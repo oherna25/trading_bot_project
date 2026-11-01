@@ -9,6 +9,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from bot.ivrank import histories_for, iv_rank
 from bot.journal import Journal
+from bot.models import set_runtime_user_model, user_model_summary, validate_user_model
 from bot.research import (
     dex_brief_response,
     handle_chat_query,
@@ -557,8 +558,61 @@ def settings_summary(settings: DashboardSettings) -> str:
     return (
         f"settings: theme={settings.theme} "
         f"default_underlying={settings.default_underlying} "
-        f"refresh_seconds={settings.refresh_seconds}"
+        f"refresh_seconds={settings.refresh_seconds} "
+        f"{user_model_summary()}"
     )
+
+
+def _flag_on(raw: object) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def save_user_model(
+    args: Mapping[str, Any], store: SnapshotStore, journal: Journal, now: datetime
+) -> str:
+    """Store a session-only user model key. Process memory only, never persisted.
+
+    Never journals, returns, or raises the key itself: only the model id and
+    source leave this function. Prefer MCP/direct calls or the dashboard form;
+    pasting the key into chat sends it to the chat model.
+    """
+    del store
+    if not isinstance(args, dict):
+        raise ValueError("user model needs api_key plus optional base_url and model_id")
+    config, error = validate_user_model(
+        args.get("api_key"), args.get("base_url", ""), args.get("model_id", "")
+    )
+    if config is None:
+        raise ValueError(error or "user model needs api_key plus optional base_url and model_id")
+    set_runtime_user_model(config)
+    journal.append(
+        now, "user_model_saved",
+        {"model": config.model_id, "source": "session"},
+    )
+    return user_model_summary() + " -- restarts clear it; use .env for a persistent key"
+
+
+def clear_user_model(store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    del store
+    set_runtime_user_model(None)
+    journal.append(now, "user_model_cleared", {"source": "session"})
+    return user_model_summary()
+
+
+def _user_model_write_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config, underlying
+    return save_user_model(args, store, journal, now)
+
+
+def _user_model_clear_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, underlying
+    return clear_user_model(store, journal, now)
 
 
 def save_settings_merge(
@@ -583,6 +637,21 @@ def save_settings_merge(
             "refresh_seconds": settings.refresh_seconds,
         },
     )
+    key = raw.get("user_model_key", "") if isinstance(raw, Mapping) else ""
+    if isinstance(raw, Mapping) and _flag_on(raw.get("clear_user_model")):
+        set_runtime_user_model(None)
+        journal.append(now, "user_model_cleared", {"source": "dashboard"})
+    elif isinstance(key, str) and key.strip():
+        base_url = raw.get("user_model_base_url", "") if isinstance(raw, Mapping) else ""
+        model_id = raw.get("user_model_id", "") if isinstance(raw, Mapping) else ""
+        config, error = validate_user_model(key, base_url, model_id)
+        if config is None:
+            raise ValueError(error or "user model key was rejected")
+        set_runtime_user_model(config)
+        journal.append(
+            now, "user_model_saved",
+            {"model": config.model_id, "source": "dashboard"},
+        )
     return settings
 
 
@@ -706,6 +775,17 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     ),
     "get_tier_status": MuseTool(
         "get_tier_status", "Model tier spend, budget, and local backend status", _tier_status_handler
+    ),
+    "set_user_model": MuseTool(
+        "set_user_model",
+        "Save a session-only model key so analyst/reviewer roles use any OpenAI-compatible API "
+        "(api_key required, base_url/model_id optional; in-memory, cleared on restart, never journaled; "
+        "the operator pastes the key here or on the dashboard form, never into chat)",
+        _user_model_write_handler,
+    ),
+    "clear_user_model": MuseTool(
+        "clear_user_model", "Clear the session model key and fall back to env",
+        _user_model_clear_handler,
     ),
     "set_settings": MuseTool(
         "set_settings", "Save global dashboard settings shared by all pages", _settings_write_handler

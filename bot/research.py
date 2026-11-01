@@ -10,7 +10,7 @@ from typing import Callable, Mapping, Optional, Sequence
 
 from bot.cards import render_brief_card
 from bot.diff import snapshot_diff_text
-from bot.exposure import compute_dex, compute_gex, compute_vex
+from bot.exposure import compute_charm, compute_dex, compute_gex, compute_vanna, compute_vex
 from bot.feeds import (
     BAR_FEEDS,
     CHAIN_FEEDS,
@@ -45,7 +45,7 @@ from bot.wheel import wheel_response
 from bot.research_analyst import advisory_review, analyst_backend, analyst_tool, grounded_note
 from bot.research_formatters import (_format_age, derive_display, format_brief, format_exposure_brief, previous_profile, wall_migration_text)
 from bot.research_ingest import _record_option_iv, ingest_first_working
-from bot.research_paper import open_trade_size, paper_pnl_text, paper_trade_step, take_card_trade
+from bot.research_paper import PAPER_ACCOUNT_ID, open_trade_size, paper_pnl_text, paper_trade_step, take_card_trade
 
 def handle_chat_query(
     text: str,
@@ -207,6 +207,28 @@ def dex_brief_response(underlying: str, store: SnapshotStore, journal: Journal, 
     return format_exposure_brief("DEX", profile, snapshot, bar, now)
 
 
+def charm_brief_response(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    found = store.read_latest(underlying)
+    if found is None:
+        raise ValueError(need_snapshot_text(underlying, store))
+    snapshot_id, snapshot = found
+    bar = store.read_latest_bar(underlying)
+    profile = compute_charm(snapshot, snapshot_id)
+    journal.append(now, "exposure_brief", {"kind": "CHARM", "snapshot_id": snapshot_id})
+    return format_exposure_brief("CHARM", profile, snapshot, bar, now)
+
+
+def vanna_brief_response(underlying: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    found = store.read_latest(underlying)
+    if found is None:
+        raise ValueError(need_snapshot_text(underlying, store))
+    snapshot_id, snapshot = found
+    bar = store.read_latest_bar(underlying)
+    profile = compute_vanna(snapshot, snapshot_id)
+    journal.append(now, "exposure_brief", {"kind": "VANNA", "snapshot_id": snapshot_id})
+    return format_exposure_brief("VANNA", profile, snapshot, bar, now)
+
+
 def journal_tail_text(journal: Journal, count: int = 20) -> str:
     entries = journal.entries()[-max(1, count):]
     if not entries:
@@ -333,6 +355,10 @@ def route_chat(
         return vex_brief_response(underlying, store, journal, now)
     if re.search(r"\bdex\b", lowered) or "delta exposure" in lowered:
         return dex_brief_response(underlying, store, journal, now)
+    if re.search(r"\bcharm\b", lowered) or "charm exposure" in lowered:
+        return charm_brief_response(underlying, store, journal, now)
+    if re.search(r"\bvanna\b", lowered) or "vanna exposure" in lowered:
+        return vanna_brief_response(underlying, store, journal, now)
     if re.search(r"\breplay\b", lowered):
         from bot.replay import replay_response
 
@@ -442,7 +468,7 @@ def live_brief(
     )
     _record_option_iv(underlying, store, journal, now, context_factory)
     if paper_trade:
-        note = paper_trade_step(underlying, signal, store.read_latest_bar(underlying), journal, now)
+        note = paper_trade_step(underlying, signal, store.read_latest_bar(underlying), journal, now, store)
         if note:
             reply += f"\n{note}"
     return reply
@@ -453,6 +479,7 @@ __all__ = [
     "analyst_tool",
     "change_alerts",
     "derive_display",
+    "charm_brief_response",
     "dex_brief_response",
     "format_brief",
     "grounded_note",
@@ -463,11 +490,13 @@ __all__ = [
     "live_brief",
     "load_response",
     "open_trade_size",
+    "PAPER_ACCOUNT_ID",
     "paper_pnl_text",
     "paper_trade_step",
     "route_chat",
     "scheduled_brief",
     "take_card_trade",
+    "vanna_brief_response",
     "vex_brief_response",
     "wall_migration_text",
 ]

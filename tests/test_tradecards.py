@@ -232,22 +232,35 @@ def test_card_wall_matches_ideas_wall_on_same_snapshot():
 
 
 def test_meta_stub_success_journals_model_reason():
+    from bot.tradecards import drain_reason_queue, pending_reason_count
+
     journal = Journal()
     cards = build_trade_cards(
         _entries(_seeded_store()), None, NOW, journal,
         env=dict(ENV), http_post=_chat_stub,
     )
-    assert [card.reason for card in cards] == ["Model says go.", "Model says go."]
-    assert {card.reason_source for card in cards} == {"meta"}
-    kinds = [entry.kind for entry in journal.entries()]
-    assert kinds == ["trade_card_reason", "trade_card_reason"]
-    payload = journal.entries()[0].payload
-    assert payload["symbol"] == "TEST"
-    assert payload["snapshot_id"] == cards[0].snapshot_id
-    assert isinstance(payload["latency_ms"], float)
+    assert {card.reason_source for card in cards} == {"fallback"}
+    assert pending_reason_count() == 2
+    assert drain_reason_queue() == 2
+    assert pending_reason_count() == 0
+    live = build_trade_cards(
+        _entries(_seeded_store()), None, NOW, journal,
+        env=dict(ENV), http_post=_chat_stub,
+    )
+    assert [card.reason for card in live] == ["Model says go.", "Model says go."]
+    assert {card.reason_source for card in live} == {"meta"}
+    drained = [entry for entry in journal.entries() if entry.kind == "trade_card_reason"]
+    assert len(drained) == 4
+    assert drained[0].payload["symbol"] == "TEST"
+    assert drained[0].payload["snapshot_id"] == cards[0].snapshot_id
+    assert isinstance(drained[0].payload["latency_ms"], float)
+    assert drained[0].payload["cached"] is False
+    assert drained[-1].payload["cached"] is True
 
 
 def test_meta_reason_cached_per_card_stats():
+    from bot.tradecards import drain_reason_queue
+
     clear_reason_cache()
     calls = []
 
@@ -260,7 +273,11 @@ def test_meta_reason_cached_per_card_stats():
 
     entries = _entries(_seeded_store())
     first = build_trade_cards(entries, None, NOW, Journal(), env=dict(ENV), http_post=counting)
-    assert len(calls) == len(first) == 2
+    assert len(calls) == 0
+    assert len(first) == 2
+    assert {card.reason_source for card in first} == {"fallback"}
+    assert drain_reason_queue() == 2
+    assert len(calls) == 2
     journal = Journal()
     second = build_trade_cards(entries, None, NOW, journal, env=dict(ENV), http_post=counting)
     assert len(calls) == 2
@@ -269,7 +286,58 @@ def test_meta_reason_cached_per_card_stats():
     assert [e.payload["cached"] for e in journal.entries()] == [True, True]
     clear_reason_cache()
     build_trade_cards(entries, None, NOW, Journal(), env=dict(ENV), http_post=counting)
+    assert drain_reason_queue() == 2
     assert len(calls) == 4
+
+
+def test_reason_queue_dedups_and_drain_respects_max_jobs():
+    from bot.tradecards import drain_reason_queue, pending_reason_count
+
+    clear_reason_cache()
+    journal = Journal()
+    entries = _entries(_seeded_store())
+    build_trade_cards(entries, None, NOW, journal, env=dict(ENV), http_post=_chat_stub)
+    build_trade_cards(entries, None, NOW, journal, env=dict(ENV), http_post=_chat_stub)
+    assert pending_reason_count() == 2
+    assert drain_reason_queue(max_jobs=1) == 1
+    assert pending_reason_count() == 1
+    assert drain_reason_queue() == 1
+    assert pending_reason_count() == 0
+
+
+def test_reason_worker_generates_off_request_path():
+    import time
+
+    from bot.tradecards import start_reason_worker, stop_reason_worker
+
+    clear_reason_cache()
+    calls = []
+
+    def counting(*args):
+        calls.append(1)
+        return {
+            "choices": [{"message": {"content": "Model says go."}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        }
+
+    start_reason_worker(poll_seconds=0.01, max_jobs=8)
+    try:
+        cards = build_trade_cards(
+            _entries(_seeded_store()), None, NOW, Journal(),
+            env=dict(ENV), http_post=counting,
+        )
+        assert {card.reason_source for card in cards} == {"fallback"}
+        deadline = time.monotonic() + 5.0
+        while len(calls) < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert len(calls) == 2
+        live = build_trade_cards(
+            _entries(_seeded_store()), None, NOW, Journal(),
+            env=dict(ENV), http_post=counting,
+        )
+        assert {card.reason_source for card in live} == {"meta"}
+    finally:
+        stop_reason_worker()
 
 
 def test_cards_carry_earnings_into_renders_and_reason():
@@ -298,6 +366,8 @@ def test_cards_carry_earnings_into_renders_and_reason():
 
 
 def test_meta_exception_falls_back_and_journals():
+    from bot.tradecards import drain_reason_queue
+
     def failing(*args):
         raise RuntimeError("boom")
 
@@ -307,8 +377,11 @@ def test_meta_exception_falls_back_and_journals():
     assert cards[0].direction in cards[0].reason
     kinds = [entry.kind for entry in journal.entries()]
     assert kinds == ["reason_fallback", "reason_fallback"]
-    payload = journal.entries()[0].payload
-    assert payload["reason"] == "RuntimeError"
+    assert journal.entries()[0].payload["reason"] == "queued"
+    assert drain_reason_queue() == 2
+    failed = [entry for entry in journal.entries() if entry.kind == "reason_failed"]
+    assert len(failed) == 2
+    assert failed[0].payload["reason"] == "RuntimeError"
 
 
 def test_missing_env_falls_back_without_calling_http():
@@ -346,3 +419,30 @@ def test_cards_response_journals_ideas_with_card_count():
     assert entry.payload["symbols"] == ["TEST"]
     assert entry.payload["count"] == 2
     assert entry.payload["cards"] == 2
+
+
+def test_query_trade_cards_caches_deterministic_repeat():
+    from bot.tradecards import query_trade_cards
+
+    store = _seeded_store()
+    journal = Journal()
+    first = query_trade_cards("trade cards", "TEST", store, journal, NOW, env={})
+    second = query_trade_cards("trade cards", "TEST", store, journal, NOW, env={})
+    assert second == first
+    assert second is not first
+    kinds = [entry.kind for entry in journal.entries()]
+    assert kinds.count("ideas") == 1
+    assert kinds[-1] == "ideas_cached"
+    assert journal.entries()[-1].payload["count"] == len(first)
+
+
+def test_query_trade_cards_skips_cache_for_live_backend():
+    from bot.tradecards import query_trade_cards
+
+    store = _seeded_store()
+    journal = Journal()
+    query_trade_cards("trade cards", "TEST", store, journal, NOW, env=dict(ENV), http_post=_chat_stub)
+    query_trade_cards("trade cards", "TEST", store, journal, NOW, env=dict(ENV), http_post=_chat_stub)
+    kinds = [entry.kind for entry in journal.entries()]
+    assert kinds.count("ideas") == 2
+    assert "ideas_cached" not in kinds

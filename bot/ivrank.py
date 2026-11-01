@@ -29,6 +29,8 @@ def iv_percentile(values: Sequence[float]) -> float | None:
 
 
 def history_values(history: Mapping[str, float]) -> list[float]:
+    # Keys mix day ("2026-10-27", wheel screens) and UTC timestamp granularities
+    # (ingest/backfill). ISO lexical order still matches chronological order.
     return [history[day] for day in sorted(history)]
 
 
@@ -47,6 +49,28 @@ def _bs_price(spot: float, strike: float, years: float, vol: float, call_or_put:
     if call_or_put == "call":
         return spot * _norm_cdf(d1) - strike * discount * _norm_cdf(d2)
     return strike * discount * _norm_cdf(-d2) - spot * _norm_cdf(-d1)
+
+
+def bs_price(
+    spot: float, strike: float, years: float, vol: float | None, call_or_put: str, rate: float = 0.04
+) -> float | None:
+    """European Black-Scholes price; intrinsic at or past expiry; None on bad inputs."""
+    if spot <= 0 or strike <= 0 or vol is None or vol < 0:
+        return None
+    if call_or_put == "call":
+        intrinsic = max(spot - strike, 0.0)
+    elif call_or_put == "put":
+        intrinsic = max(strike - spot, 0.0)
+    else:
+        return None
+    if years <= 0:
+        return intrinsic
+    if vol == 0:
+        discount = math.exp(-rate * years)
+        if call_or_put == "call":
+            return max(spot - strike * discount, 0.0)
+        return max(strike * discount - spot, 0.0)
+    return _bs_price(spot, strike, years, vol, call_or_put, rate)
 
 
 def implied_volatility(
@@ -86,7 +110,7 @@ def _contract_mid(contract) -> float | None:
     return contract.price
 
 
-def _expiry_years(expiry: str, ref) -> float | None:
+def expiry_years(expiry: str, ref) -> float | None:
     try:
         day = datetime.strptime(expiry, "%Y-%m-%d").date()
     except ValueError:
@@ -95,6 +119,9 @@ def _expiry_years(expiry: str, ref) -> float | None:
         except ValueError:
             return None
     return (day - ref).days / 365.0
+
+
+_expiry_years = expiry_years
 
 
 MIN_INVERT_MID = 0.10

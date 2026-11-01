@@ -6,20 +6,32 @@ import os
 import time
 import urllib.request
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
 from bot.config import read_dotenv as _read_dotenv
 from bot.exposure import compute_gex
 from bot.journal import Journal
-from bot.shapes import ChainSnapshot, ModelReceipt
+from bot.ledger import reserve_budget, settle_journal_receipts
+from bot.shapes import ChainSnapshot, ModelReceipt, UserModelConfig
 
 MODEL_API_BASE_URL = "https://api.meta.ai/v1"
 MODEL_TIMEOUT_SECONDS = 60.0
 MODEL_MAX_TOKENS = 1200
 MODEL_MAX_ROUNDS = 2
 MODEL_REASONING_EFFORT = "low"
+
+USER_MODEL_KEY_ENV = "USER_MODEL_API_KEY"
+USER_MODEL_BASE_URL_ENV = "USER_MODEL_BASE_URL"
+USER_MODEL_ID_ENV = "USER_MODEL_ID"
+USER_MODEL_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+USER_MODEL_DEFAULT_MODEL_ID = "gpt-4o-mini"
+
+# Roles any OpenAI-compatible chat API can serve. Grounding (/responses plus
+# web search), voice transcription, and image generation stay on the built-in
+# key because their endpoints are provider-specific.
+USER_PORTABLE_ROLES = ("analyst", "reviewer")
 
 HttpPost = Callable[..., Any]
 
@@ -43,12 +55,22 @@ MODEL_REGISTRY = {
 }
 
 
+RESERVE_ESTIMATE_USD = {
+    "analyst": 0.05,
+    "grounding": 0.05,
+    "reviewer": 0.10,
+    "transcriber": 0.01,
+    "artist": 0.02,
+}
+RESERVE_ESTIMATE_DEFAULT_USD = 0.05
+
+
 def _read_model_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     if env is not None:
         return dict(env)
     file_values = _read_dotenv()
     out: dict[str, str] = {}
-    for name in ("META_MODEL_API_KEY", "MODEL_DAY_BUDGET_USD"):
+    for name in ("META_MODEL_API_KEY", "MODEL_DAY_BUDGET_USD", "LEDGER_DIR"):
         value = os.environ.get(name) or file_values.get(name)
         if value:
             out[name] = value
@@ -57,6 +79,133 @@ def _read_model_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 def model_api_key(env: Mapping[str, str] | None = None) -> str:
     return _read_model_env(env).get("META_MODEL_API_KEY", "")
+
+
+def validate_user_model(
+    api_key: object, base_url: object = "", model_id: object = ""
+) -> tuple[UserModelConfig | None, str]:
+    """Validate operator-supplied values without touching env, journal, or ledger."""
+    key = str(api_key or "").strip()
+    if not key:
+        return None, "user model key must be a non-empty string"
+    base = str(base_url or "").strip().rstrip("/") or USER_MODEL_DEFAULT_BASE_URL
+    if not (base.startswith("https://") or base.startswith("http://")):
+        return None, f"invalid {USER_MODEL_BASE_URL_ENV} (needs http:// or https://)"
+    model = str(model_id or "").strip() or USER_MODEL_DEFAULT_MODEL_ID
+    if not model:
+        return None, f"invalid {USER_MODEL_ID_ENV} (needs a model id)"
+    return UserModelConfig(api_key=key, base_url=base, model_id=model), ""
+
+
+def read_user_model(env: Mapping[str, str] | None = None) -> tuple[UserModelConfig | None, str]:
+    """Resolve the env-supplied model without touching the journal or ledger.
+
+    Returns (config, "") when the key is usable, (None, "") when absent, and
+    (None, reason) when present but invalid. The key itself never leaves this
+    value except as an HTTP Authorization header.
+    """
+    if env is not None:
+        values = dict(env)
+    else:
+        file_values = _read_dotenv()
+        values = {}
+        for name in (USER_MODEL_KEY_ENV, USER_MODEL_BASE_URL_ENV, USER_MODEL_ID_ENV):
+            value = os.environ.get(name) or file_values.get(name)
+            if value:
+                values[name] = value
+    if not (values.get(USER_MODEL_KEY_ENV) or "").strip():
+        return None, ""
+    return validate_user_model(
+        values.get(USER_MODEL_KEY_ENV),
+        values.get(USER_MODEL_BASE_URL_ENV) or "",
+        values.get(USER_MODEL_ID_ENV) or "",
+    )
+
+
+_runtime_user_model: UserModelConfig | None = None
+
+
+def set_runtime_user_model(config: UserModelConfig | None) -> None:
+    """Session key from the dashboard or MCP. Process memory only, never persisted."""
+    global _runtime_user_model
+    _runtime_user_model = config
+
+
+def read_runtime_user_model() -> UserModelConfig | None:
+    return _runtime_user_model
+
+
+def effective_user_model(
+    env: Mapping[str, str] | None = None,
+) -> tuple[UserModelConfig | None, str, str]:
+    """Session key first, env key second. Returns (config, source, error)."""
+    if _runtime_user_model is not None:
+        return _runtime_user_model, "session", ""
+    config, error = read_user_model(env)
+    if config is not None:
+        return config, "env", ""
+    return None, "", error
+
+
+def user_model_status(env: Mapping[str, str] | None = None) -> dict[str, object]:
+    """Key-free status for dashboards: presence and model id only, never the key."""
+    config, source, error = effective_user_model(env)
+    return {
+        "user_key_set": config is not None,
+        "user_model": config.model_id if config is not None else None,
+        "user_source": source,
+        "user_model_error": error,
+    }
+
+
+def user_model_form_defaults(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Non-secret prefills for the dashboard form: endpoint and model id only."""
+    config, _, _ = effective_user_model(env)
+    if config is not None:
+        return {"base_url": config.base_url, "model_id": config.model_id}
+    return {"base_url": USER_MODEL_DEFAULT_BASE_URL, "model_id": ""}
+
+
+def user_model_summary(env: Mapping[str, str] | None = None) -> str:
+    status = user_model_status(env)
+    if status.get("user_key_set"):
+        return f"user model: {status.get('user_model')} ({status.get('user_source')}, in-memory only)"
+    if status.get("user_model_error"):
+        return f"user model: none ({status.get('user_model_error')})"
+    return "user model: none"
+    status = user_model_status(env)
+    if status.get("user_key_set"):
+        return f"user model: {status.get('user_model')} ({status.get('user_source')}, in-memory only)"
+    if status.get("user_model_error"):
+        return f"user model: none ({status.get('user_model_error')})"
+    return "user model: none"
+
+
+def chat_spec(role: str, env: Mapping[str, str] | None = None) -> ModelSpec:
+    """Effective spec for a chat role: the user model when configured, else registry."""
+    spec = MODEL_REGISTRY[role]
+    if role not in USER_PORTABLE_ROLES:
+        return spec
+    config, _, _ = effective_user_model(env)
+    if config is None:
+        return spec
+    return replace(spec, model_id=config.model_id, price_in=0.0, price_out=0.0)
+
+
+def chat_api_key(role: str, env: Mapping[str, str] | None = None) -> str:
+    if role in USER_PORTABLE_ROLES:
+        config, _, _ = effective_user_model(env)
+        if config is not None:
+            return config.api_key
+    return model_api_key(env)
+
+
+def chat_base_url(role: str, env: Mapping[str, str] | None = None) -> str:
+    if role in USER_PORTABLE_ROLES:
+        config, _, _ = effective_user_model(env)
+        if config is not None:
+            return config.base_url
+    return MODEL_API_BASE_URL
 
 
 def _day_budget_usd(env: Mapping[str, str]) -> float | None:
@@ -86,6 +235,15 @@ def select_backend(
     spec = MODEL_REGISTRY.get(role)
     if spec is None:
         return "fallback", f"unknown role {role}"
+    if role in USER_PORTABLE_ROLES:
+        # The operator's key pays their own bill, so it needs no day budget
+        # and takes no ledger hold. An explicit but invalid setup fails loud
+        # instead of silently spending the built-in key.
+        user, _, error = effective_user_model(env)
+        if user is not None:
+            return "user", ""
+        if error:
+            return "fallback", error
     values = _read_model_env(env)
     if not values.get("META_MODEL_API_KEY"):
         return "fallback", "missing META_MODEL_API_KEY"
@@ -94,6 +252,17 @@ def select_backend(
         return "fallback", "missing MODEL_DAY_BUDGET_USD"
     if spend_today(journal, now) >= budget:
         return "fallback", "day budget spent"
+    ledger_dir = values.get("LEDGER_DIR", "")
+    if ledger_dir:
+        day = now.date().isoformat()
+        settle_journal_receipts(ledger_dir, journal, day)
+        hold = reserve_budget(
+            ledger_dir, day, RESERVE_ESTIMATE_USD.get(role, RESERVE_ESTIMATE_DEFAULT_USD),
+            budget, role,
+        )
+        if hold is None:
+            return "fallback", "day budget reserved"
+        journal.append(now, "budget_reserved", {"role": role, "token": hold.token})
     return "model", ""
 
 
@@ -271,6 +440,7 @@ def run_analyst(
     http_post: HttpPost | None = None,
     timeout: float = MODEL_TIMEOUT_SECONDS,
     reasoning_effort: str = MODEL_REASONING_EFFORT,
+    base_url: str = MODEL_API_BASE_URL,
 ) -> tuple[str, list[ModelReceipt]]:
     post = http_post or _urllib_post
     current = list(messages)
@@ -288,7 +458,7 @@ def run_analyst(
             payload["tools"] = tools
         started = time.monotonic()
         body = post(
-            MODEL_API_BASE_URL + spec.endpoint,
+            base_url + spec.endpoint,
             {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             payload,
             timeout,

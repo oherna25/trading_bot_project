@@ -154,6 +154,51 @@ def test_explain_position_needs_position_loudly():
     assert "next:" in reply.reply
 
 
+def test_explain_position_separates_saved_and_paper():
+    from bot.explain import explain_position
+    from bot.holdings import save_holdings_shapes
+
+    store = _seeded_store(_moderate())
+    journal = Journal()
+    save_holdings_shapes([{"symbol": "TEST", "kind": "stock", "side": "long", "qty": 50}],
+                         store, journal, NOW)
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "size": 1000.0, "price": 100.0})
+    reply = explain_position("TEST", store, journal, NOW)
+    assert "\n" not in reply
+    assert "LONG 50 TEST stock" in reply
+    assert "Paper book: 1000 TEST shares long" in reply
+    sentences = reply.split(". ")
+    assert not any("LONG 50 TEST stock" in s and "Paper book" in s for s in sentences)
+
+
+def test_explain_position_rounds_spot_and_flip():
+    from bot.explain import explain_position
+    from bot.holdings import save_holdings_shapes
+
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="TEST", timestamp_utc=NOW, source_name="tradier_sandbox", latency_ms=9.0,
+            contracts_list=(
+                OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put",
+                               open_interest=200.0, gamma=0.05, price=2.50,
+                               bid=2.40, ask=2.60, iv=0.30),
+                OptionContract(strike=101.0, expiry="2026-11-20", call_or_put="call",
+                               open_interest=600.0, gamma=0.05, price=2.50,
+                               bid=2.40, ask=2.60, iv=0.30),
+            ),
+        )
+    )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW, open=99.0, high=101.0,
+                               low=98.0, close=100.0, volume=1000.0))
+    journal = Journal()
+    save_holdings_shapes([{"symbol": "TEST", "kind": "stock", "side": "long", "qty": 50}],
+                         store, journal, NOW)
+    reply = explain_position("TEST", store, journal, NOW)
+    assert "spot 100.00 vs flip 100.33" in reply
+    assert "100.333" not in reply
+
+
 def test_explain_dashboard_action_reaches_tool():
     from bot.holdings import save_holdings_shapes
 

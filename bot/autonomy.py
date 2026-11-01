@@ -5,7 +5,7 @@ from typing import Optional
 
 from bot.journal import Journal
 from bot.risk import fire_halt, fire_kill, operator_reset, realized_pnl, review_intent, update_day_pnl, update_position
-from bot.shapes import Fill, OrderIntent, PaperEvidence, Position, RiskLimits, RiskState
+from bot.shapes import Fill, OperatorProfile, OrderIntent, PaperEvidence, PortfolioView, Position, RiskLimits, RiskState
 from bot.venue import TradierVenue
 
 live_enabled = False
@@ -72,6 +72,8 @@ def submit_live(
     now: Optional[datetime] = None,
     venue: Optional[TradierVenue] = None,
     reference_price: float = 0.0,
+    profile: Optional[OperatorProfile] = None,
+    view: Optional[PortfolioView] = None,
 ) -> tuple[Fill, Optional[Position], Optional[RiskState]]:
     if not live_enabled:
         raise LiveDisabledError("live adapter is disabled")
@@ -79,9 +81,12 @@ def submit_live(
         if journal is not None and now is not None:
             journal.append(now, "live_blocked", {"reason": "halt active" if state.halt_active else "kill active"})
         raise LiveDisabledError("live ordering is halted")
-    if state is not None and limits is not None and journal is not None and now is not None:
-        if review_intent(intent, state, limits, journal, now) != "approved":
-            raise LiveDisabledError("live intent rejected by risk review")
+    if state is None or limits is None or journal is None or now is None:
+        if journal is not None and now is not None:
+            journal.append(now, "live_blocked", {"reason": "risk review needs state, limits, journal, and clock"})
+        raise LiveDisabledError("live intent needs state, limits, journal, and clock for risk review")
+    if review_intent(intent, state, limits, journal, now, profile=profile, view=view) != "approved":
+        raise LiveDisabledError("live intent rejected by risk review")
     active_venue = venue or TradierVenue.from_env()
     ack = active_venue.place_order(intent, reference_price)
     moment = now or datetime.now(timezone.utc)

@@ -5,7 +5,7 @@ import os
 import re
 import urllib.request
 from datetime import date, datetime, timedelta
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar
 from urllib.parse import urlencode
 
 from bot.config import read_dotenv as _read_dotenv
@@ -132,7 +132,89 @@ EARNINGS_CONFIDENCE_HAIRCUT = 0.15
 EARNINGS_CONFIDENCE_FLOOR = 0.05
 MAX_IDEAS = 10
 MAX_PER_DIRECTION = 7
+MAX_PER_SYMBOL = 5
+MAX_PER_EXPIRY = 5
+MAX_PER_STRIKE_CLUSTER = 2
 MIN_DAYS_TO_EXPIRY = 1
+
+T = TypeVar("T")
+
+
+def strike_cluster(strike: float) -> int:
+    return int(round(strike))
+
+
+def diversify(
+    candidates: Sequence[T],
+    limit: int,
+    symbol_of: Callable[[T], str],
+    expiry_of: Callable[[T], str],
+    strike_of: Callable[[T], float],
+    direction_of: Callable[[T], str] | None = None,
+    max_per_symbol: int = MAX_PER_SYMBOL,
+    max_per_expiry: int = MAX_PER_EXPIRY,
+    max_per_cluster: int = MAX_PER_STRIKE_CLUSTER,
+    max_per_direction: int = MAX_PER_DIRECTION,
+) -> list[T]:
+    """Round-robin fill across symbols with per-symbol, per-expiry, and per-cluster caps.
+
+    Candidates arrive quality-sorted. Each round takes the next eligible candidate
+    from every symbol in first-seen order. Caps only tighten, so a blocked head is
+    dropped instead of deferred.
+    """
+    groups: dict[str, list[T]] = {}
+    order: list[str] = []
+    for candidate in candidates:
+        key = symbol_of(candidate)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(candidate)
+    per_symbol: dict[str, int] = {}
+    per_expiry: dict[str, int] = {}
+    per_cluster: dict[tuple[str, int], int] = {}
+    per_direction: dict[str, int] = {}
+
+    def blocked(candidate: T) -> bool:
+        if per_symbol.get(symbol_of(candidate), 0) >= max_per_symbol:
+            return True
+        if per_expiry.get(expiry_of(candidate), 0) >= max_per_expiry:
+            return True
+        cluster = (symbol_of(candidate), strike_cluster(strike_of(candidate)))
+        if per_cluster.get(cluster, 0) >= max_per_cluster:
+            return True
+        if direction_of is not None and per_direction.get(direction_of(candidate), 0) >= max_per_direction:
+            return True
+        return False
+
+    def take(candidate: T) -> None:
+        symbol = symbol_of(candidate)
+        per_symbol[symbol] = per_symbol.get(symbol, 0) + 1
+        expiry = expiry_of(candidate)
+        per_expiry[expiry] = per_expiry.get(expiry, 0) + 1
+        cluster = (symbol, strike_cluster(strike_of(candidate)))
+        per_cluster[cluster] = per_cluster.get(cluster, 0) + 1
+        if direction_of is not None:
+            direction = direction_of(candidate)
+            per_direction[direction] = per_direction.get(direction, 0) + 1
+
+    picked: list[T] = []
+    while len(picked) < limit:
+        progressed = False
+        for key in order:
+            group = groups[key]
+            while group and blocked(group[0]):
+                group.pop(0)
+            if len(picked) >= limit:
+                break
+            if group:
+                candidate = group.pop(0)
+                take(candidate)
+                picked.append(candidate)
+                progressed = True
+        if not progressed:
+            break
+    return picked
 
 
 def parse_timeframe(text: str) -> Optional[int]:
@@ -391,9 +473,16 @@ def rank_ideas(
     )
     histories = iv_history or {}
     rank_by_symbol = {symbol: _iv_rank(history) for symbol, history in histories.items()}
+    picked = diversify(
+        ranked,
+        MAX_IDEAS,
+        symbol_of=lambda row: row[3].underlying,
+        expiry_of=lambda row: row[7].expiry,
+        strike_of=lambda row: row[7].strike,
+        direction_of=lambda row: row[6],
+    )
     ideas: list[TradeIdea] = []
-    per_direction: dict[str, int] = {}
-    for row in ranked:
+    for row in picked:
         (
             confidence,
             _score,
@@ -413,12 +502,6 @@ def rank_ideas(
             breakeven,
             event_risk,
         ) = row
-        if len(ideas) >= MAX_IDEAS:
-            break
-        seen = per_direction.get(direction, 0)
-        if seen >= MAX_PER_DIRECTION:
-            continue
-        per_direction[direction] = seen + 1
         if profile.flip_point is not None:
             where = "above" if direction == "long" else "below"
             trigger = f"enter on spot holding {where} flip {profile.flip_point:.1f}"

@@ -8,6 +8,7 @@ from bot.feeds import (
     FeedConfigError,
     FeedContext,
     FeedUnavailableError,
+    feed_health,
     ingest_bars,
     ingest_chain,
     live_context,
@@ -147,7 +148,7 @@ def test_tradier_adapter_reads_greeks_when_present():
                     "expiration_date": "2026-11-20",
                     "option_type": "call",
                     "open_interest": 1000.0,
-                    "greeks": {"gamma": 0.05, "vega": 0.11},
+                    "greeks": {"gamma": 0.05, "vega": 0.11, "charm": 0.04, "vanna": 0.06},
                 }
             ]
         }
@@ -155,6 +156,8 @@ def test_tradier_adapter_reads_greeks_when_present():
     raw = FEED_REGISTRY["tradier_sandbox"](_ctx("SPY", {"expirations": TRADIER_EXPIRATIONS, "chains": chain}))
     assert raw["contracts"][0]["gamma"] == pytest.approx(0.05)
     assert raw["contracts"][0]["vega"] == pytest.approx(0.11)
+    assert raw["contracts"][0]["charm"] == pytest.approx(0.04)
+    assert raw["contracts"][0]["vanna"] == pytest.approx(0.06)
 
 
 def test_alpaca_adapter_normalizes_bars():
@@ -276,6 +279,36 @@ def test_alpha_vantage_fetches_once_per_symbol_per_day():
     other = FeedContext(underlying="QQQ", credentials=dict(CREDS), http_get=counting_get)
     assert len(ingest_bars("alpha_vantage", store, journal, other)) == 2
     assert len(calls) == 2
+
+
+def test_snapshot_ingested_journals_latency():
+    store, journal = SnapshotStore(), Journal()
+    ingest_chain("tradier_sandbox", store, journal)
+    ingested = next(e for e in journal.entries() if e.kind == "snapshot_ingested")
+    assert ingested.payload["latency_ms"] >= 0.0
+
+
+def test_feed_health_reports_latency_quota_and_depth():
+    journal = Journal()
+    journal.append(NOW, "feed_failed", {"feed_name": "alpaca", "error": "FeedTimeout"})
+    journal.append(NOW, "feed_failed", {"feed_name": "finnhub", "error": "FeedConfigError"})
+    journal.append(NOW, "bars_ingested", {"source_name": "yfinance", "underlying": "SPY",
+                                         "count": 2, "latency_ms": 30.0})
+    journal.append(NOW, "feed_failed", {"feed_name": "alpaca", "error": "FeedTimeout"})
+    journal.append(NOW, "bars_ingested", {"source_name": "yfinance", "underlying": "SPY",
+                                         "count": 2, "latency_ms": 50.0})
+    journal.append(NOW, "quota_reserved", {"source_name": "alpha_vantage", "underlying": "SPY"})
+    journal.append(NOW, "quota_released", {"source_name": "alpha_vantage", "underlying": "SPY"})
+    feeds = feed_health(journal, NOW)
+    assert feeds["yfinance"]["successes"] == 2
+    assert feeds["yfinance"]["last_depth"] == 1
+    assert feeds["yfinance"]["last_latency_ms"] == 50.0
+    assert feeds["yfinance"]["avg_latency_ms"] == 40.0
+    assert feeds["alpaca"]["failures"] == 2
+    assert feeds["alpaca"]["status"] == "error"
+    assert feeds["alpha_vantage"]["quota_reserved_today"] == 1
+    assert feeds["alpha_vantage"]["quota_released_today"] == 1
+    assert feeds["marketdata_eod"]["status"] == "idle"
 
 
 def test_alpha_vantage_is_last_bar_fallback():

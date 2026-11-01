@@ -94,7 +94,7 @@ def _flip_bit(ref: float, ref_name: str, flip: float | None) -> str:
         return "no flip in chain"
     gap = ref - flip
     where = "above" if gap >= 0 else "below"
-    return f"{ref_name} ${abs(gap):.1f} {where} the {flip:g} flip"
+    return f"{ref_name} ${abs(gap):.1f} {where} the {flip:.2f} flip"
 
 
 def _stock_line(holding: Holding, profile: GexProfile, spot: float) -> str:

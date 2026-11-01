@@ -7,7 +7,17 @@ from datetime import datetime
 from typing import Optional
 
 from bot.journal import Journal
-from bot.risk import build_intent, realized_pnl, review_intent, submit_paper, update_position
+from bot.risk import (
+    IntentRejectedError,
+    build_intent,
+    new_paper_account,
+    paper_portfolio_view,
+    realized_pnl,
+    record_paper_state,
+    roll_paper_account,
+    submit_paper,
+    update_position,
+)
 from bot.shapes import (
     Bar,
     Fill,
@@ -24,6 +34,7 @@ PAPER_TRADE_STATE = RiskState(
     account_size=100000.0, risk_per_trade=0.01, day_pnl=0.0, halt_active=False, kill_active=False
 )
 PAPER_TRADE_LIMITS = RiskLimits(max_trade_size=5000.0, day_profit_target=500.0, max_day_loss=1000.0)
+PAPER_ACCOUNT_ID = "paper"
 
 
 def open_trade_size(journal: Journal, symbol: str) -> float:
@@ -77,6 +88,7 @@ def paper_trade_step(
     bar: Optional[Bar],
     journal: Journal,
     now: datetime,
+    store: Optional[SnapshotStore] = None,
 ) -> str:
     if bar is None:
         journal.append(now, "trade_skipped", {"underlying": symbol, "reason": "no bar"})
@@ -84,13 +96,32 @@ def paper_trade_step(
     if open_trade_size(journal, symbol) != 0:
         journal.append(now, "trade_skipped", {"underlying": symbol, "reason": "position open"})
         return ""
-    state = paper_state_from_journal(journal, symbol, bar.close, now)
+    today = now.date().isoformat()
+    account = None
+    if store is not None:
+        account = store.read_paper_account(PAPER_ACCOUNT_ID)
+        if account is None:
+            account = new_paper_account(
+                PAPER_ACCOUNT_ID, paper_state_from_journal(journal, symbol, bar.close, now), today
+            )
+        elif account.last_day and account.last_day != today:
+            account = roll_paper_account(account, today)
+            journal.append(now, "paper_roll", {"account_id": PAPER_ACCOUNT_ID, "day": today})
+        state = account.state
+    else:
+        state = paper_state_from_journal(journal, symbol, bar.close, now)
     intent = build_intent(signal, f"live-{signal.snapshot_id}", state, journal, now)
     if intent is None:
         return ""
-    if review_intent(intent, state, PAPER_TRADE_LIMITS, journal, now) != "approved":
+    view = paper_portfolio_view(account) if account is not None else None
+    try:
+        fill, _, updated = submit_paper(
+            intent, bar.close, state, None, PAPER_TRADE_LIMITS, journal, now, view=view
+        )
+    except IntentRejectedError:
         return ""
-    fill, _, _ = submit_paper(intent, bar.close, state, None, PAPER_TRADE_LIMITS, journal, now)
+    if store is not None and account is not None:
+        store.save_paper_account(record_paper_state(account, updated, today))
     return f"paper trade: {intent.side} {intent.size:.0f} {symbol} @ {fill.price:.2f}"
 
 
@@ -134,8 +165,9 @@ def take_card_trade(
     signal = Signal(
         direction=card.direction, thesis=card.reason,
         confidence=card.confidence, snapshot_id=card.snapshot_id,
+        symbol=card.symbol,
     )
-    note = paper_trade_step(card.symbol, signal, bar, journal, now)
+    note = paper_trade_step(card.symbol, signal, bar, journal, now, store)
     if note:
         for entry in reversed(journal.entries()):
             if entry.kind == "fill" and entry.payload.get("symbol") == card.symbol:

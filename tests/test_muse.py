@@ -147,6 +147,7 @@ def test_registry_tools_answer(monkeypatch):
         "explain_position", "onboarding_step",
         "set_alert_rule", "list_alert_rules", "cancel_alert_rule",
         "get_open_brief", "get_live_board",
+        "set_user_model", "clear_user_model",
     }
     store = _seeded_store()
     journal = Journal()
@@ -255,6 +256,7 @@ def test_route_mcp_tools_list_names_registry():
         "explain_position", "onboarding_step",
         "set_alert_rule", "list_alert_rules", "cancel_alert_rule",
         "get_open_brief", "get_live_board",
+        "set_user_model", "clear_user_model",
     }
 
 
@@ -321,6 +323,42 @@ def test_health_reports_last_ingest_and_feed():
     assert body["snapshot_age_seconds"] == pytest.approx(240.0)
     assert body["quote_age_seconds"] == {"TEST": pytest.approx(0.0)}
     assert body["underlyings"] == ["TEST"]
+
+
+def test_health_reports_per_feed_stats_from_journal():
+    store = _seeded_store()
+    journal = Journal()
+    journal.append(NOW - timedelta(minutes=5), "feed_failed",
+                   {"feed_name": "tradier_sandbox", "error": "FeedTimeout"})
+    journal.append(NOW - timedelta(minutes=4), "snapshot_ingested",
+                   {"snapshot_id": "TEST:snap-1", "source_name": "marketdata_eod",
+                    "latency_ms": 120.0})
+    response = route_http("GET", "/health", {}, store, journal, CONFIG, NOW)
+    body = _json_body(response)
+    feeds = body["feeds"]
+    assert feeds["marketdata_eod"]["successes"] == 1
+    assert feeds["marketdata_eod"]["last_depth"] == 1
+    assert feeds["marketdata_eod"]["last_latency_ms"] == 120.0
+    assert feeds["marketdata_eod"]["status"] == "ok"
+    assert feeds["tradier_sandbox"]["failures"] == 1
+    assert feeds["tradier_sandbox"]["last_error"] == "FeedTimeout"
+    assert feeds["tradier_sandbox"]["status"] == "error"
+    assert feeds["finnhub"]["status"] == "idle"
+
+
+def test_feeds_page_renders_health_table():
+    store = _seeded_store()
+    journal = Journal()
+    journal.append(NOW - timedelta(minutes=4), "bars_ingested",
+                   {"source_name": "alpaca", "underlying": "TEST", "count": 2,
+                    "latency_ms": 45.0})
+    response = route_http("GET", "/feeds", {}, store, journal, CONFIG, NOW)
+    assert response.status == 200
+    page = response.body.decode("utf-8")
+    assert "<h1>feed health</h1>" in page
+    assert "alpaca" in page
+    assert "45 ms" in page
+    assert "fallback depth" in page
 
 
 def test_health_reports_push_providers_and_model_key():
@@ -408,3 +446,104 @@ def test_content_length_parses_and_rejects_bad_values():
         except ValueError:
             continue
         raise AssertionError(f"expected ValueError for {bad!r}")
+
+
+def _etag_of(response) -> str:
+    return dict(response.headers).get("ETag", "")
+
+
+def _new_snapshot(store):
+    store.save(
+        ChainSnapshot(
+            underlying="TEST",
+            timestamp_utc=NOW + timedelta(hours=1),
+            source_name="tradier_sandbox",
+            latency_ms=9.0,
+            contracts_list=(
+                OptionContract(
+                    strike=110.0, expiry="2026-12-18", call_or_put="call", open_interest=500.0,
+                    gamma=0.02, price=1.50, bid=1.40, ask=1.60, iv=0.25,
+                ),
+            ),
+        )
+    )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW + timedelta(hours=1),
+                               open=102.0, high=105.0, low=101.0, close=104.0, volume=900.0))
+
+
+def test_cards_route_caches_repeat_and_serves_etag():
+    store, journal = _seeded_store(), Journal()
+    first = route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert first.status == 200
+    assert _etag_of(first)
+    second = route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert second.body == first.body
+    assert _etag_of(second) == _etag_of(first)
+    assert [entry.kind for entry in journal.entries()].count("ideas") == 1
+
+
+def test_cards_route_returns_304_on_if_none_match():
+    store, journal = _seeded_store(), Journal()
+    first = route_http("GET", "/cards.json?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    etag = _etag_of(first)
+    assert etag
+    cached = route_http(
+        "GET", "/cards.json?underlying=TEST", {}, store, journal, CONFIG, NOW, if_none_match=etag
+    )
+    assert cached.status == 304
+    assert cached.body == b""
+    assert _etag_of(cached) == etag
+
+
+def test_cards_cache_invalidates_on_new_snapshot():
+    store, journal = _seeded_store(), Journal()
+    first = route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    _new_snapshot(store)
+    second = route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert second.body != first.body
+    assert [entry.kind for entry in journal.entries()].count("ideas") == 2
+
+
+def test_board_route_caches_and_theme_change_invalidates():
+    from bot.muse import FormData
+
+    store, journal = _seeded_store(), Journal()
+    first = route_http("GET", "/board", {}, store, journal, CONFIG, NOW)
+    assert first.status == 200
+    assert _etag_of(first)
+    second = route_http("GET", "/board", {}, store, journal, CONFIG, NOW)
+    assert second.body == first.body
+    route_http("POST", "/settings", FormData({"theme": "light"}), store, journal, CONFIG, NOW)
+    third = route_http("GET", "/board", {}, store, journal, CONFIG, NOW)
+    assert third.body != first.body
+
+
+def test_demo_route_caches_and_snapshot_change_invalidates():
+    store, journal = _seeded_store(), Journal()
+    first = route_http("GET", "/demo?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert first.status == 200
+    assert _etag_of(first)
+    second = route_http("GET", "/demo?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert second.body == first.body
+    _new_snapshot(store)
+    third = route_http("GET", "/demo?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert third.body != first.body
+
+
+def test_replay_csv_route_serves_download():
+    store, journal = _seeded_store(), Journal()
+    _new_snapshot(store)
+    steps = route_http("GET", "/replay.csv?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert steps.status == 200
+    assert steps.content_type == "text/csv"
+    assert dict(steps.headers)["Content-Disposition"] == 'attachment; filename="replay-TEST-steps.csv"'
+    assert steps.body.decode("utf-8").splitlines()[0].startswith("timestamp_utc,snapshot_id")
+    fills = route_http(
+        "GET", "/replay.csv?underlying=TEST&section=fills", {}, store, journal, CONFIG, NOW
+    )
+    assert fills.status == 200
+    assert fills.body.decode("utf-8").splitlines()[0].startswith("timestamp_utc,symbol")
+    bad = route_http(
+        "GET", "/replay.csv?underlying=TEST&section=nope", {}, store, journal, CONFIG, NOW
+    )
+    assert bad.status == 400

@@ -14,6 +14,10 @@ def _paper_net(journal: Journal, symbol: str) -> float:
     return open_trade_size(journal, symbol)
 
 
+def _lead(text: str) -> str:
+    return text[:1].upper() + text[1:] if text else text
+
+
 def explain_position(symbol: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
     from bot.holdings import describe_holding
 
@@ -35,8 +39,8 @@ def explain_position(symbol: str, store: SnapshotStore, journal: Journal, now: d
     spot = bar.close if bar is not None else None
     profile = compute_gex(snapshot, snapshot_id, spot=spot)
     regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
-    spot_text = f"{spot:g}" if spot is not None else "n/a"
-    flip_text = f"{profile.flip_point:g}" if profile.flip_point is not None else "none"
+    spot_text = f"{spot:.2f}" if spot is not None else "n/a"
+    flip_text = f"{profile.flip_point:.2f}" if profile.flip_point is not None else "none"
     walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:2]
     if walls:
         wall_bit = "; ".join(f"{strike:g} {compact_dollars(value)}" for strike, value in walls)
@@ -80,14 +84,20 @@ def explain_position(symbol: str, store: SnapshotStore, journal: Journal, now: d
                 debate_bit = f"debate says {verdict}"
         except ValueError as exc:
             debate_bit = str(exc).replace("\n", " ")
-    bits = [describe_holding(h) for h in holdings]
+    sentences = []
+    if holdings:
+        position_bit = ", ".join(describe_holding(h) for h in holdings)
+        verb = "sit" if len(holdings) > 1 else "sits"
+        sentences.append(f"Your {position_bit} {verb} in {regime}: {brief_bit}; walls {wall_bit}.")
     if net != 0:
-        bits.append(f"paper {net:g} {clean} shares")
-    shares_bit = ", ".join(bits) if bits else f"paper {net:g} {clean} shares"
-    paragraph = (
-        f"Your {shares_bit} sit in {regime}: {brief_bit}; "
-        f"walls {wall_bit}; {wheel_bit}; {debate_bit}."
-    )
+        side = "long" if net > 0 else "short"
+        paper_bit = f"Paper book: {abs(net):g} {clean} shares {side}"
+        if holdings:
+            sentences.append(f"{paper_bit}, alongside your saved holding.")
+        else:
+            sentences.append(f"{paper_bit}, sitting in {regime}: {brief_bit}; walls {wall_bit}.")
+    sentences.append(f"{_lead(wheel_bit)}. {_lead(debate_bit)}.")
+    paragraph = " ".join(sentences)
     paragraph = " ".join(paragraph.split())
     journal.append(now, "position_explained", {"symbol": clean, "text": paragraph})
     return paragraph

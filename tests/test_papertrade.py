@@ -38,18 +38,18 @@ def test_paper_trade_fills_once_and_pnl_marks_it():
     journal = Journal()
     bar = store.read_latest_bar("TEST")
     note = paper_trade_step("TEST", _signal("long"), bar, journal, NOW)
-    assert note == "paper trade: buy 1000 TEST @ 100.00"
+    assert note == "paper trade: buy 900 TEST @ 100.00"
     kinds = [entry.kind for entry in journal.entries()]
     assert kinds == ["intent_proposed", "intent_approved", "fill"]
     fill = journal.entries()[-1].payload
     assert fill["symbol"] == "TEST"
     assert fill["side"] == "buy"
     assert fill["price"] == 100.0
-    assert fill["size"] == 1000.0
-    assert open_trade_size(journal, "TEST") == 1000.0
+    assert fill["size"] == 900.0
+    assert open_trade_size(journal, "TEST") == 900.0
     assert open_trade_size(journal, "OTHER") == 0.0
     pnl = paper_pnl_text(journal, store)
-    assert "TEST: size 1000 avg 100.00 mark 100.00 pnl +0.00" in pnl
+    assert "TEST: size 900 avg 100.00 mark 100.00 pnl +0.00" in pnl
     assert "total paper pnl: +0.00" in pnl
 
 
@@ -60,7 +60,7 @@ def test_paper_trade_marks_profit_when_bar_moves():
     store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW + timedelta(minutes=15),
                                open=100.0, high=100.0, low=99.0, close=99.0, volume=500.0))
     pnl = paper_pnl_text(journal, store)
-    assert "TEST: size -1000 avg 100.00 mark 99.00 pnl +1000.00" in pnl
+    assert "TEST: size -900 avg 100.00 mark 99.00 pnl +900.00" in pnl
 
 
 def test_paper_trade_short_at_same_mark_prints_positive_zero():
@@ -96,6 +96,63 @@ def test_paper_trade_skips_without_bar():
     assert note == ""
     assert journal.entries()[-1].kind == "trade_skipped"
     assert journal.entries()[-1].payload["reason"] == "no bar"
+
+
+def test_paper_trade_step_saves_account_to_store():
+    from bot.research import PAPER_ACCOUNT_ID
+
+    store = _seeded_store()
+    journal = Journal()
+    bar = store.read_latest_bar("TEST")
+    assert paper_trade_step("TEST", _signal("long"), bar, journal, NOW, store) != ""
+    account = store.read_paper_account(PAPER_ACCOUNT_ID)
+    assert account is not None
+    assert account.last_day == "2026-10-27"
+    assert account.state.day_pnl == 0.0
+    assert account.equity_curve == (("2026-10-27", 100000.0),)
+    assert account.peak_equity == 100000.0
+
+
+def test_paper_trade_step_reuses_stored_state_instead_of_rebuilding():
+    from bot.research import PAPER_ACCOUNT_ID
+    from bot.risk import new_paper_account
+    from bot.shapes import RiskState
+
+    store = _seeded_store()
+    journal = Journal()
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "price": 100.0, "size": 900.0, "venue": "paper"})
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "sell", "price": 100.0, "size": 900.0, "venue": "paper"})
+    bar = store.read_latest_bar("TEST")
+    breached = RiskState(account_size=100000.0, risk_per_trade=0.01, day_pnl=-2000.0,
+                         halt_active=False, kill_active=False)
+    store.save_paper_account(new_paper_account(PAPER_ACCOUNT_ID, breached, "2026-10-27"))
+    assert paper_trade_step("TEST", _signal("long"), bar, journal, NOW, store) == ""
+    assert journal.entries()[-1].kind == "intent_vetoed"
+    assert paper_trade_step("TEST", _signal("long"), bar, Journal(), NOW) != ""
+
+
+def test_paper_trade_step_rolls_account_on_new_day():
+    from bot.research import PAPER_ACCOUNT_ID
+    from bot.risk import new_paper_account
+    from bot.shapes import RiskState
+
+    store = _seeded_store()
+    journal = Journal()
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    store.save_paper_account(new_paper_account(
+        PAPER_ACCOUNT_ID,
+        RiskState(account_size=100000.0, risk_per_trade=0.01, day_pnl=50.0,
+                  halt_active=True, kill_active=False),
+        yesterday,
+    ))
+    bar = store.read_latest_bar("TEST")
+    assert paper_trade_step("TEST", _signal("long"), bar, journal, NOW, store) != ""
+    kinds = [entry.kind for entry in journal.entries()]
+    assert kinds[0] == "paper_roll"
+    account = store.read_paper_account(PAPER_ACCOUNT_ID)
+    assert account.last_day == "2026-10-27"
+    assert account.day_pnl[yesterday] == 50.0
+    assert account.state.halt_active is False
 
 
 def test_paper_trade_step_blocks_after_day_loss_breach():

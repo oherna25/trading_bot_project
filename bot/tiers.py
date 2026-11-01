@@ -8,7 +8,7 @@ from typing import Mapping
 from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
 from bot.localmodels import LOCAL_REGISTRY, local_available, local_weights
-from bot.models import MODEL_REGISTRY, select_backend, spend_today
+from bot.models import chat_spec, select_backend, spend_today, user_model_status
 
 TASK_CLASS = {
     "reason": "draft",
@@ -68,12 +68,12 @@ def select_model_tier(
                 last_reason = "no local weights"
             continue
         backend, reason = select_backend(step, journal, now, env)
-        if backend == "model":
-            model_id = MODEL_REGISTRY[step].model_id
-            decision = TierDecision(task, "model", step, model_id, "")
+        if backend in ("model", "user"):
+            model_id = chat_spec(step, env).model_id
+            decision = TierDecision(task, backend, step, model_id, "")
             journal.append(
                 now, "tier_selected",
-                {"task": task, "class": klass, "tier": "model", "role": step, "model": model_id},
+                {"task": task, "class": klass, "tier": backend, "role": step, "model": model_id},
             )
             return decision
         last_reason = reason
@@ -106,9 +106,16 @@ def format_tier_status(status: Mapping[str, object]) -> str:
     except (TypeError, ValueError):
         spend_text = "$0.00"
     budget_text = f"${float(budget):,.2f}" if isinstance(budget, (int, float)) else "unset"
+    user_source = str(status.get("user_source") or "")
+    user_detail = str(status.get("user_model") or "none")
+    if user_source:
+        user_detail += f" ({user_source})"
+    if status.get("user_model_error"):
+        user_detail += f" ({status.get('user_model_error')})"
     lines = [
         f"tier status: spend {spend_text} / {budget_text} today",
         f"local: {status.get('local_model') or 'none'}",
+        f"user model: {user_detail}",
     ]
     for klass, order in CLASS_ORDER.items():
         lines.append(f"{klass}: {' -> '.join(order)}")
@@ -120,10 +127,12 @@ def tier_status(
 ) -> dict[str, object]:
     found = local_weights(env)
     name = found[0] if found is not None else ""
-    return {
+    status: dict[str, object] = {
         "spend_today_usd": spend_today(journal, now),
         "day_budget_usd": _day_budget(env),
         "local_available": found is not None,
         "local_model": LOCAL_REGISTRY[name].model_id if name else None,
         "tasks": dict(TASK_CLASS),
     }
+    status.update(user_model_status(env))
+    return status

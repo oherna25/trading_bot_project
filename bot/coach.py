@@ -7,9 +7,10 @@ from typing import Any, Mapping
 from bot.journal import Journal
 from bot.localmodels import LocalRunner, run_local
 from bot.models import (
-    MODEL_REGISTRY,
     HttpPost,
-    model_api_key,
+    chat_api_key,
+    chat_base_url,
+    chat_spec,
     prompt_hash,
     receipt_payload,
     run_analyst,
@@ -135,11 +136,11 @@ def coach_review(
             text, receipt = run_local("coach", prompt, env, runner=local_runner)
             receipts = [receipt]
             model_id = receipt.model_id
-        elif decision.tier == "model":
-            spec = MODEL_REGISTRY[decision.role]
+        elif decision.tier in ("model", "user"):
+            spec = chat_spec(decision.role, env)
             text, receipts = run_analyst(
                 spec,
-                model_api_key(env),
+                chat_api_key(decision.role, env),
                 [
                     {"role": "system", "content": COACH_SYSTEM},
                     {"role": "user", "content": prompt},
@@ -148,6 +149,7 @@ def coach_review(
                 {},
                 prompt,
                 http_post,
+                base_url=chat_base_url(decision.role, env),
             )
             model_id = spec.model_id
         else:

@@ -11,9 +11,11 @@ from bot.exposure import compute_gex
 from bot.shapes import (
     Bar,
     ChainSnapshot,
+    CharmProfile,
     DexProfile,
     GexProfile,
     Signal,
+    VannaProfile,
     VexProfile,
 )
 from bot.store import SnapshotStore
@@ -68,11 +70,15 @@ def _gex_so_what(profile: GexProfile, spot: Optional[float]) -> str:
     return "so what: " + "; ".join(bits) + "."
 
 
-def _exposure_so_what(kind: str, profile: VexProfile | DexProfile) -> str:
+def _exposure_so_what(kind: str, profile: VexProfile | DexProfile | CharmProfile | VannaProfile) -> str:
     walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))
     heavy = f"; heaviest strike {walls[0][0]:g}" if walls else ""
     if kind == "VEX":
         return f"so what: a 1pt IV rise is worth {compact_dollars(profile.total_exposure)} across the chain{heavy}."
+    if kind == "CHARM":
+        return f"so what: charm bleeds {compact_dollars(profile.total_exposure)} delta per day{heavy}."
+    if kind == "VANNA":
+        return f"so what: a 1pt IV rise shifts delta by {compact_dollars(profile.total_exposure)} share-equivalents{heavy}."
     return f"so what: net {compact_dollars(profile.total_exposure)} share-equivalents{heavy}."
 
 
@@ -217,14 +223,19 @@ def previous_profile(
 
 def format_exposure_brief(
     kind: str,
-    profile: VexProfile | DexProfile,
+    profile: VexProfile | DexProfile | CharmProfile | VannaProfile,
     snapshot: ChainSnapshot,
     bar: Optional[Bar],
     now: datetime,
 ) -> str:
     spot = bar.close if bar is not None else None
     age = _format_age(now - snapshot.timestamp_utc)
-    units = "$ per vol point" if kind == "VEX" else "delta x OI x 100"
+    units = {
+        "VEX": "$ per vol point",
+        "DEX": "delta x OI x 100",
+        "CHARM": "delta bleed per day",
+        "VANNA": "delta per vol point",
+    }.get(kind, "delta x OI x 100")
     spot_text = f"{spot:.2f}" if spot is not None else "unknown"
     walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:10]
     lines = [

@@ -46,6 +46,15 @@ def test_history_values_sort_oldest_first():
     assert history_values({"2026-10-03": 0.3, "2026-10-01": 0.1, "2026-10-02": 0.2}) == [0.1, 0.2, 0.3]
 
 
+def test_history_values_orders_mixed_day_and_timestamp_keys():
+    history = {
+        "2026-10-27T14:30:00+00:00": 0.31,
+        "2026-10-27": 0.29,
+        "2026-10-26T14:30:00+00:00": 0.25,
+    }
+    assert history_values(history) == [0.25, 0.29, 0.31]
+
+
 def test_histories_for_reads_store_newest_last():
     store = SnapshotStore()
     store.save_iv("TEST", "2026-10-02", 0.2)
@@ -164,6 +173,29 @@ def test_implied_volatility_round_trips_known_vols():
             assert implied_volatility(price, 100.0, 105.0, 0.25, side, rate=0.04) == pytest.approx(vol, abs=1e-4)
 
 
+def test_bs_price_matches_textbook_values_and_parity():
+    import math
+
+    from bot.ivrank import bs_price
+
+    assert bs_price(100.0, 100.0, 1.0, 0.2, "call", rate=0.05) == pytest.approx(10.4506, abs=1e-3)
+    assert bs_price(100.0, 100.0, 1.0, 0.2, "put", rate=0.05) == pytest.approx(5.5735, abs=1e-3)
+    call = bs_price(100.0, 105.0, 0.25, 0.3, "call")
+    put = bs_price(100.0, 105.0, 0.25, 0.3, "put")
+    assert call - put == pytest.approx(100.0 - 105.0 * math.exp(-0.04 * 0.25), abs=1e-9)
+
+
+def test_bs_price_edge_cases():
+    from bot.ivrank import bs_price
+
+    assert bs_price(105.0, 100.0, 0.0, 0.3, "call") == 5.0
+    assert bs_price(95.0, 100.0, -1.0, 0.3, "put") == 5.0
+    assert bs_price(100.0, 100.0, 1.0, 0.2, "maybe") is None
+    assert bs_price(100.0, 100.0, 1.0, -0.1, "call") is None
+    assert bs_price(100.0, 100.0, 1.0, None, "call") is None
+    assert bs_price(0.0, 100.0, 1.0, 0.2, "call") is None
+
+
 def test_implied_volatility_edge_cases_return_none():
     assert implied_volatility(2.50, 100.0, 100.0, 0.0, "call") is None
     assert implied_volatility(2.50, 100.0, 100.0, -1.0, "call") is None
@@ -247,6 +279,47 @@ def test_backfill_chat_keyword_and_tool():
     tool_reply = dispatch_tool("backfill_iv", {}, store, Journal(), stub_config, NOW, underlying="TEST")
     assert tool_reply.ok
     assert "no new samples" in tool_reply.reply
+
+
+def test_card_iv_rank_matches_tool_rank_on_same_store():
+    from bot.muse import dispatch_tool
+    from bot.shapes import OperatorProfile, default_operator_config
+    from bot.tradecards import format_trade_cards, query_trade_cards
+
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="TEST", timestamp_utc=NOW,
+            source_name="tradier_sandbox", latency_ms=9.0,
+            contracts_list=(
+                OptionContract(
+                    strike=95.0, expiry="2026-11-20", call_or_put="put", open_interest=6000.0,
+                    gamma=0.05, price=2.50, bid=2.40, ask=2.60, iv=0.30,
+                ),
+                OptionContract(
+                    strike=105.0, expiry="2026-11-20", call_or_put="call", open_interest=3000.0,
+                    gamma=0.05, price=2.50, bid=2.40, ask=2.60, iv=0.30,
+                ),
+            ),
+        )
+    )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
+                               open=99.0, high=101.0, low=98.0, close=100.0, volume=1000.0))
+    store.save_profile(OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    ))
+    for n in range(24):
+        store.save_iv("TEST", (NOW - timedelta(days=24 - n)).isoformat(), 0.20 + n * 0.001)
+    store.save_iv("TEST", NOW.isoformat(), 0.21)
+    rank = iv_rank(histories_for(store, ["TEST"])["TEST"])
+    assert rank == 43.5
+    cards = query_trade_cards("trade ideas", "TEST", store, Journal(), NOW, env={})
+    assert cards
+    assert f"iv rank {rank:.1f}" in format_trade_cards(cards)
+    tool_reply = dispatch_tool("get_iv_rank", {}, store, Journal(),
+                               default_operator_config(), NOW, underlying="TEST")
+    assert tool_reply.ok
+    assert f"TEST: {rank:.1f}" in tool_reply.reply
 
 
 def test_backfill_never_uses_a_future_bar():

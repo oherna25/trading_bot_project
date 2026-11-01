@@ -112,19 +112,26 @@ def test_rank_ideas_orders_by_gamma_open_interest():
 
 
 def test_rank_ideas_caps_total_and_per_direction():
-    snapshot = ChainSnapshot(
-        underlying="WIDE",
-        timestamp_utc=NOW,
-        source_name="tradier_sandbox",
-        latency_ms=1.0,
-        contracts_list=tuple(
-            _contract(80.0 + n, "2026-11-20", "call", 100.0 + n * 10.0, 0.01) for n in range(12)
-        ),
-    )
-    snapshot_id = f"WIDE:{NOW.isoformat()}"
-    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    expiries = ["2026-11-20", "2026-12-18", "2027-01-15"]
+
+    def _wide(symbol):
+        snapshot = ChainSnapshot(
+            underlying=symbol,
+            timestamp_utc=NOW,
+            source_name="tradier_sandbox",
+            latency_ms=1.0,
+            contracts_list=tuple(
+                _contract(80.0 + n, expiries[n % 3], "call", 100.0 + n * 10.0, 0.01)
+                for n in range(6)
+            ),
+        )
+        snapshot_id = f"{symbol}:{NOW.isoformat()}"
+        return (snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)
+
+    ideas = rank_ideas([_wide("WIDEA"), _wide("WIDEB")])
     assert len(ideas) == 7
-    assert {idea.strike for idea in ideas} == {85.0 + n for n in range(7)}
+    assert all(idea.direction == "long" for idea in ideas)
+    assert {idea.symbol for idea in ideas} == {"WIDEA", "WIDEB"}
 
 
 def test_rank_ideas_timeframe_filters_by_expiry():
@@ -464,11 +471,13 @@ def test_rank_ideas_excludes_same_day_and_expired_contracts():
     assert {i.strike for i in ideas} == {102.0, 103.0}
 
 
-def test_rank_ideas_caps_each_direction_in_mixed_universe():
+def test_rank_ideas_round_robins_across_symbols():
+    expiries = ["2026-11-20", "2026-12-18", "2027-01-15", "2027-02-19"]
+
     def _snapshot(symbol, side, sign):
         contracts = tuple(
             OptionContract(
-                strike=100.0 + n, expiry="2026-11-20", call_or_put=side,
+                strike=100.0 + n, expiry=expiries[n % 4], call_or_put=side,
                 open_interest=1000.0, gamma=0.05,
             )
             for n in range(8)
@@ -483,10 +492,77 @@ def test_rank_ideas_caps_each_direction_in_mixed_universe():
 
     ideas = rank_ideas([_snapshot("UP", "call", 1), _snapshot("DOWN", "put", -1)])
     assert len(ideas) == 10
+    assert [idea.symbol for idea in ideas[:4]] == ["DOWN", "UP", "DOWN", "UP"]
     longs = [i for i in ideas if i.direction == "long"]
     shorts = [i for i in ideas if i.direction == "short"]
-    assert len(longs) == 3
-    assert len(shorts) == 7
+    assert len(longs) == 5
+    assert len(shorts) == 5
+
+
+def test_diversify_interleaves_symbols_and_drops_blocked_heads():
+    from bot.ideas import diversify
+
+    cands = [("A", "E1", 100.0), ("A", "E1", 101.0), ("A", "E1", 102.0), ("B", "E1", 50.0)]
+    picked = diversify(
+        cands, 10, symbol_of=lambda c: c[0], expiry_of=lambda c: c[1], strike_of=lambda c: c[2]
+    )
+    assert picked == [
+        ("A", "E1", 100.0), ("B", "E1", 50.0), ("A", "E1", 101.0), ("A", "E1", 102.0)
+    ]
+    same_cluster = [("A", "E1", 100.0), ("A", "E1", 100.1), ("A", "E1", 100.2)]
+    assert diversify(
+        same_cluster, 10, symbol_of=lambda c: c[0], expiry_of=lambda c: c[1],
+        strike_of=lambda c: c[2],
+    ) == same_cluster[:2]
+    same_expiry = [("A", "E1", 100.0), ("A", "E1", 101.0)]
+    assert len(diversify(
+        same_expiry, 10, symbol_of=lambda c: c[0], expiry_of=lambda c: c[1],
+        strike_of=lambda c: c[2], max_per_expiry=1,
+    )) == 1
+
+
+def test_rank_ideas_caps_per_symbol_with_round_robin_fill():
+    aaa = ChainSnapshot(
+        underlying="AAA", timestamp_utc=NOW, source_name="tradier_sandbox", latency_ms=1.0,
+        contracts_list=tuple(
+            _contract(100.0 + n, "2026-11-20" if n % 2 == 0 else "2026-12-18", "call", 5000.0, 0.20)
+            for n in range(8)
+        ),
+    )
+    bbb = ChainSnapshot(
+        underlying="BBB", timestamp_utc=NOW, source_name="tradier_sandbox", latency_ms=1.0,
+        contracts_list=(
+            _contract(50.0, "2026-11-20", "call", 1000.0, 0.05),
+            _contract(51.0, "2026-11-20", "call", 1000.0, 0.05),
+        ),
+    )
+
+    def _entry_for(snapshot):
+        snapshot_id = f"{snapshot.underlying}:{NOW.isoformat()}"
+        return (snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)
+
+    ideas = rank_ideas([_entry_for(aaa), _entry_for(bbb)])
+    symbols = [idea.symbol for idea in ideas]
+    assert symbols == ["AAA", "BBB", "AAA", "BBB", "AAA", "AAA", "AAA"]
+    assert symbols.count("AAA") == 5
+
+
+def test_rank_ideas_cluster_cap_groups_nearby_strikes():
+    snapshot = ChainSnapshot(
+        underlying="AAA", timestamp_utc=NOW, source_name="tradier_sandbox", latency_ms=1.0,
+        contracts_list=(
+            _contract(100.0, "2026-11-20", "call", 5000.0, 0.20),
+            _contract(100.0, "2026-11-20", "put", 1000.0, 0.20),
+            _contract(100.4, "2026-11-20", "call", 5000.0, 0.20),
+            _contract(100.4, "2026-11-20", "put", 1000.0, 0.20),
+            _contract(110.0, "2026-12-18", "call", 5000.0, 0.20),
+            _contract(110.0, "2026-12-18", "put", 1000.0, 0.20),
+        ),
+    )
+    snapshot_id = f"AAA:{NOW.isoformat()}"
+    ideas = rank_ideas([(snapshot_id, snapshot, compute_gex(snapshot, snapshot_id), None)])
+    assert len([idea for idea in ideas if idea.strike < 105.0]) == 2
+    assert len(ideas) == 4
 
 
 def _spy_only_store() -> SnapshotStore:

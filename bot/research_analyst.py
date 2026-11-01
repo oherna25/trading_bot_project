@@ -16,6 +16,9 @@ from bot.tiers import select_model_tier
 from bot.models import (
     MODEL_REGISTRY,
     HttpPost,
+    chat_api_key,
+    chat_base_url,
+    chat_spec,
     gex_tool_result,
     model_api_key,
     prompt_hash,
@@ -39,6 +42,7 @@ def analyst_tool(text: str, snapshot: ChainSnapshot, profile: GexProfile, bar: O
         thesis=f"analyst read on {snapshot.underlying} for query: {text}",
         confidence=0.5,
         snapshot_id="",
+        symbol=snapshot.underlying,
     )
 
 
@@ -110,7 +114,7 @@ def spark_signal(
     http_post: HttpPost | None,
     grounding: bool = False,
 ) -> Signal:
-    spec = MODEL_REGISTRY["analyst"]
+    spec = chat_spec("analyst", env)
     prompt = _analyst_prompt(text, snapshot, profile, bar)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": ANALYST_SYSTEM},
@@ -118,7 +122,7 @@ def spark_signal(
     ]
     reply, receipts = run_analyst(
         spec,
-        model_api_key(env),
+        chat_api_key("analyst", env),
         messages,
         [GEX_TOOL],
         {
@@ -128,6 +132,7 @@ def spark_signal(
         },
         prompt,
         http_post,
+        base_url=chat_base_url("analyst", env),
     )
     for receipt in receipts:
         journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
@@ -151,6 +156,7 @@ def spark_signal(
         thesis=thesis,
         confidence=_parse_confidence(reply),
         snapshot_id=snapshot_id,
+        symbol=snapshot.underlying,
     )
 
 
@@ -229,8 +235,8 @@ def advisory_review(
     prompt = _review_prompt(evidence, journal)
     try:
         text, receipts = run_analyst(
-            MODEL_REGISTRY["reviewer"],
-            model_api_key(env),
+            chat_spec("reviewer", env),
+            chat_api_key("reviewer", env),
             [
                 {"role": "system", "content": REVIEW_SYSTEM},
                 {"role": "user", "content": prompt},
@@ -240,6 +246,7 @@ def advisory_review(
             prompt,
             http_post,
             reasoning_effort="high",
+            base_url=chat_base_url("reviewer", env),
         )
     except Exception as exc:
         journal.append(now, "review_skipped", {"reason": type(exc).__name__})
@@ -280,6 +287,7 @@ def local_signal(
         thesis=thesis,
         confidence=_parse_confidence(reply),
         snapshot_id=snapshot_id,
+        symbol=snapshot.underlying,
     )
 
 

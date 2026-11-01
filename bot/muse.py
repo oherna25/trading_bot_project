@@ -253,6 +253,7 @@ def create_server(
                     self.command, self.path, payload, store, journal, config, now,
                     auth_token=expected, authorization=authorization,
                     session_controller=controller,
+                    if_none_match=self.headers.get("If-None-Match", ""),
                 )
             self._send(response, head_only)
             self._access(response.status, started)
@@ -296,6 +297,9 @@ def serve(
     session_schedule: str = "",
     session_underlyings: Sequence[str] = (),
 ) -> None:
+    from bot.tradecards import start_reason_worker
+
+    start_reason_worker()
     create_server(
         store, journal, config, host, port, store_dir,
         refresh_seconds=refresh_seconds,

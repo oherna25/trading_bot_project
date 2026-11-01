@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta
 from typing import Mapping, Optional, Sequence
 
 from bot.diff import compact_dollars
-from bot.ideas import symbols_for, unknown_symbols
+from bot.ideas import diversify, symbols_for, unknown_symbols
 from bot.ivrank import histories_for, iv_rank
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, OptionContract, PremiumCandidate
@@ -196,7 +196,14 @@ def screen_premium(
             continue
         survivors.extend(replace(hit, iv_rank=rank) for hit in symbol_hits)
     survivors.sort(key=lambda c: (-c.premium_return, c.symbol, c.strike, c.expiry, c.action))
-    return survivors[:WHEEL_MAX_RESULTS], dropped
+    selected = diversify(
+        survivors,
+        WHEEL_MAX_RESULTS,
+        symbol_of=lambda c: c.symbol,
+        expiry_of=lambda c: c.expiry,
+        strike_of=lambda c: c.strike,
+    )
+    return selected, dropped
 
 
 def _long_shares(store: SnapshotStore) -> dict[str, float]:
@@ -298,9 +305,13 @@ def wheel_response(
         if not ivs:
             continue
         average = sum(ivs) / len(ivs)
+        # Day key on purpose: screens render often, and a timestamp key would
+        # append a history point per render. Ingest writers use snapshot-time keys.
         store.save_iv(symbol, day_iso, average)
         journal.append(
-            now, "iv_recorded", {"symbol": symbol, "date": day_iso, "iv": average, "points": len(ivs)}
+            now, "iv_recorded",
+            {"symbol": symbol, "date": day_iso, "iv": average, "points": len(ivs),
+             "source": "wheel_screen"},
         )
     journal.append(
         now,

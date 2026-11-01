@@ -5,13 +5,24 @@ import pytest
 
 from bot.exposure import compute_gex
 from bot.journal import Journal
-from bot.models import MODEL_REGISTRY, prompt_hash, select_backend, spend_today
+from bot.models import (
+    MODEL_REGISTRY,
+    chat_api_key,
+    chat_base_url,
+    chat_spec,
+    prompt_hash,
+    read_user_model,
+    select_backend,
+    spend_today,
+)
 from bot.research import analyst_backend, handle_chat_query
 from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 FULL_ENV = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+USER_ENV = {"USER_MODEL_API_KEY": "user-secret-1", "USER_MODEL_BASE_URL": "https://llm.example/v1",
+            "USER_MODEL_ID": "anything-llm"}
 
 
 def _seeded_store() -> SnapshotStore:
@@ -121,6 +132,108 @@ def test_select_backend_spent_budget_falls_back():
 
 def test_select_backend_ok_when_configured():
     assert select_backend("analyst", Journal(), NOW, FULL_ENV) == ("model", "")
+
+
+def test_select_backend_user_key_needs_no_budget():
+    assert select_backend("analyst", Journal(), NOW, dict(USER_ENV)) == ("user", "")
+
+
+def test_select_backend_user_key_wins_over_builtin():
+    assert select_backend("analyst", Journal(), NOW, {**FULL_ENV, **USER_ENV}) == ("user", "")
+    assert select_backend("reviewer", Journal(), NOW, {**FULL_ENV, **USER_ENV}) == ("user", "")
+
+
+def test_select_backend_user_key_ignored_for_provider_roles():
+    backend, reason = select_backend("grounding", Journal(), NOW, dict(USER_ENV))
+    assert backend == "fallback"
+    assert reason == "missing META_MODEL_API_KEY"
+
+
+def test_select_backend_invalid_user_url_fails_loud():
+    env = dict(USER_ENV, USER_MODEL_BASE_URL="notaurl")
+    backend, reason = select_backend("analyst", Journal(), NOW, env)
+    assert backend == "fallback"
+    assert "USER_MODEL_BASE_URL" in reason
+
+
+def test_runtime_user_model_wins_over_env():
+    from bot.models import chat_api_key, read_runtime_user_model, select_backend, set_runtime_user_model
+    from bot.shapes import UserModelConfig
+
+    env = {"USER_MODEL_API_KEY": "env-key", "MODEL_DAY_BUDGET_USD": "5"}
+    set_runtime_user_model(UserModelConfig(api_key="sess-key",
+                                           base_url="https://llm.example/v1", model_id="sess-model"))
+    try:
+        assert select_backend("analyst", Journal(), NOW, env) == ("user", "")
+        assert chat_api_key("analyst", env) == "sess-key"
+        assert read_runtime_user_model() is not None
+    finally:
+        set_runtime_user_model(None)
+
+
+def test_clear_runtime_falls_back_to_env():
+    from bot.models import chat_api_key, set_runtime_user_model
+    from bot.shapes import UserModelConfig
+
+    env = {"USER_MODEL_API_KEY": "env-key", "MODEL_DAY_BUDGET_USD": "5"}
+    set_runtime_user_model(UserModelConfig(api_key="sess-key",
+                                           base_url="https://llm.example/v1", model_id="sess-model"))
+    set_runtime_user_model(None)
+    assert chat_api_key("analyst", env) == "env-key"
+
+
+def test_read_user_model_defaults():
+    config, error = read_user_model({"USER_MODEL_API_KEY": " k "})
+    assert error == ""
+    assert config is not None
+    assert config.api_key == "k"
+    assert config.base_url == "https://api.openai.com/v1"
+    assert config.model_id == "gpt-4o-mini"
+
+
+def test_read_user_model_absent_is_not_an_error():
+    assert read_user_model({}) == (None, "")
+
+
+def test_chat_spec_uses_user_model_with_zero_price():
+    spec = chat_spec("analyst", dict(USER_ENV))
+    assert spec.model_id == "anything-llm"
+    assert spec.endpoint == "/chat/completions"
+    assert spec.price_in == 0.0 and spec.price_out == 0.0
+    assert chat_api_key("analyst", dict(USER_ENV)) == "user-secret-1"
+    assert chat_base_url("analyst", dict(USER_ENV)) == "https://llm.example/v1"
+    assert chat_spec("analyst", dict(FULL_ENV)).model_id == "muse-spark-1.3"
+    assert chat_base_url("analyst", dict(FULL_ENV)) == "https://api.meta.ai/v1"
+
+
+def test_analyst_backend_user_key_hits_user_endpoint():
+    seen = {}
+
+    def post(url, headers, payload, timeout):
+        seen["url"] = url
+        seen["auth"] = headers["Authorization"]
+        seen["model"] = payload["model"]
+        return {
+            "choices": [{"message": {"content": "User model thesis.\nDIRECTION: long\nCONFIDENCE: 0.6"}}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 10},
+        }
+
+    store = _seeded_store()
+    snapshot_id, snapshot, profile, bar = _snapshot_parts(store)
+    journal = Journal()
+    signal = analyst_backend("brief", snapshot_id, snapshot, profile, bar, journal, NOW,
+                             live_models=True, env=dict(USER_ENV), http_post=post)
+    assert signal.thesis == "User model thesis."
+    assert seen["url"] == "https://llm.example/v1/chat/completions"
+    assert seen["auth"] == "Bearer user-secret-1"
+    assert seen["model"] == "anything-llm"
+    receipts = [e for e in journal.entries() if e.kind == "model_receipt"]
+    assert len(receipts) == 1
+    assert receipts[0].payload["model_id"] == "anything-llm"
+    assert receipts[0].payload["cost_usd"] == 0.0
+    assert "user-secret-1" not in json.dumps([e.payload for e in journal.entries()])
+    tiers = [e for e in journal.entries() if e.kind == "tier_selected"]
+    assert tiers and tiers[0].payload["tier"] == "user"
 
 
 def test_spend_today_sums_only_today_receipts():

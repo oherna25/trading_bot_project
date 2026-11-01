@@ -13,7 +13,7 @@ from bot.diff import compact_dollars
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.localmodels import LocalRunner, local_available, run_local
-from bot.models import MODEL_REGISTRY, HttpPost, model_api_key, receipt_payload, run_analyst
+from bot.models import HttpPost, chat_api_key, chat_base_url, chat_spec, receipt_payload, run_analyst
 from bot.research import change_alerts
 from bot.store import SnapshotStore
 from bot.tiers import select_model_tier
@@ -176,11 +176,11 @@ def narrate_alert(
             )
             receipts = [receipt]
             model_id = receipt.model_id
-        elif decision.tier == "model":
-            spec = MODEL_REGISTRY[decision.role]
+        elif decision.tier in ("model", "user"):
+            spec = chat_spec(decision.role, env)
             reply, receipts = run_analyst(
                 spec,
-                model_api_key(env),
+                chat_api_key(decision.role, env),
                 [
                     {"role": "system", "content": NARRATE_SYSTEM},
                     {"role": "user", "content": text},
@@ -189,6 +189,7 @@ def narrate_alert(
                 {},
                 text,
                 http_post,
+                base_url=chat_base_url(decision.role, env),
             )
             model_id = spec.model_id
         else:

@@ -38,6 +38,29 @@ def test_bundle_round_trip_preserves_snapshots_bars_journal_profile(tmp_path):
     assert loaded_store.read_profile() == store.read_profile()
 
 
+def test_bundle_round_trip_preserves_paper_accounts(tmp_path):
+    from bot.risk import new_paper_account, record_paper_state
+    from bot.shapes import RiskState
+
+    store, journal = SnapshotStore(), Journal()
+    account = new_paper_account(
+        "paper",
+        RiskState(account_size=100000.0, risk_per_trade=0.01, day_pnl=120.0,
+                  halt_active=False, kill_active=False),
+        "2026-10-27",
+    )
+    account = record_paper_state(
+        account, RiskState(account_size=100000.0, risk_per_trade=0.01, day_pnl=200.0,
+                           halt_active=False, kill_active=False),
+        "2026-10-27",
+    )
+    store.save_paper_account(account)
+    save_bundle(str(tmp_path), store, journal)
+    assert os.path.exists(tmp_path / "paper_accounts.json")
+    loaded, _ = load_bundle(str(tmp_path))
+    assert loaded.read_paper_account("paper") == account
+
+
 def test_bundle_round_trip_preserves_delta(tmp_path):
     from bot.shapes import ChainSnapshot, OptionContract
 
@@ -50,7 +73,8 @@ def test_bundle_round_trip_preserves_delta(tmp_path):
             latency_ms=1.0,
             contracts_list=(
                 OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
-                               open_interest=100.0, gamma=0.05, delta=0.55),
+                               open_interest=100.0, gamma=0.05, delta=0.55,
+                               charm=0.04, vanna=0.06),
             ),
         )
     )
@@ -58,6 +82,8 @@ def test_bundle_round_trip_preserves_delta(tmp_path):
     loaded, _ = load_bundle(str(tmp_path))
     _, snapshot = loaded.read_latest("TEST")
     assert snapshot.contracts_list[0].delta == 0.55
+    assert snapshot.contracts_list[0].charm == 0.04
+    assert snapshot.contracts_list[0].vanna == 0.06
 
 
 def test_save_bundle_applies_retention(tmp_path):

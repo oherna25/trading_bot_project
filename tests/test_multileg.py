@@ -69,7 +69,7 @@ def test_build_intent_with_legs_sums_notional():
 def test_single_leg_intent_has_empty_legs():
     intent = build_intent(_signal(), "sig-1", _state(), Journal(), NOW)
     assert intent.legs == ()
-    assert intent_notional(intent) == pytest.approx(1000.0)
+    assert intent_notional(intent) == pytest.approx(600.0)
     assert not is_options_intent(intent)
 
 
@@ -121,10 +121,15 @@ def test_review_rejects_bad_leg_schema(leg):
 
 
 def test_paper_fill_journals_combo_legs():
+    from bot.shapes import OperatorProfile
+
     journal = Journal()
     state = _state()
     intent = build_intent(_signal(), "sig-1", state, journal, NOW, _spread())
-    fill, _, _ = submit_paper(intent, 2.5, state, None, LIMITS, journal, NOW)
+    profile = OperatorProfile(
+        risk_tolerance="moderate", portfolio_size=50000.0, knowledge="intermediate", options_ok=True
+    )
+    fill, _, _ = submit_paper(intent, 2.5, state, None, LIMITS, journal, NOW, profile=profile)
     assert fill.venue == "paper"
     assert fill.size == pytest.approx(1000.0)
     entry = next(e for e in journal.entries() if e.kind == "fill")

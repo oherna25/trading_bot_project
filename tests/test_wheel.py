@@ -166,6 +166,31 @@ def test_screen_ranks_by_premium_return_desc():
     assert [c.strike for c in candidates] == [90.0, 95.0]
 
 
+def test_screen_caps_per_symbol_with_round_robin_fill():
+    aaa = _snapshot(
+        "AAA", *[_contract(90.0 + n, FRIDAY, "put", bid=2.00, ask=2.10) for n in range(8)]
+    )
+    bbb = _snapshot(
+        "BBB",
+        _contract(150.0, OTHER_FRIDAY, "put", bid=2.00, ask=2.10),
+        _contract(151.0, OTHER_FRIDAY, "put", bid=2.00, ask=2.10),
+    )
+    candidates, _ = screen_premium(
+        [("AAA:snap", aaa, _bar()), ("BBB:snap", bbb, _bar())], NOW
+    )
+    symbols = [c.symbol for c in candidates]
+    assert symbols == ["AAA", "BBB", "AAA", "BBB", "AAA", "AAA", "AAA"]
+    assert symbols.count("AAA") == 5
+
+
+def test_screen_caps_per_expiry():
+    aaa = _snapshot(
+        "AAA", *[_contract(90.0 + n, FRIDAY, "put", bid=2.00, ask=2.10) for n in range(8)]
+    )
+    candidates, _ = screen_premium([("AAA:snap", aaa, _bar())], NOW)
+    assert len(candidates) == 5
+
+
 def test_screen_skips_calls_without_a_bar():
     snapshot = _snapshot(
         "TEST",
@@ -204,7 +229,8 @@ def test_wheel_response_formats_header_and_call_shares_note():
     assert "wheel_screened" in kinds
     assert "iv_recorded" in kinds
     recorded = [e for e in journal.entries() if e.kind == "iv_recorded"][0]
-    assert recorded.payload == {"symbol": "TEST", "date": "2026-10-27", "iv": pytest.approx(0.29), "points": 2}
+    assert recorded.payload == {"symbol": "TEST", "date": "2026-10-27", "iv": pytest.approx(0.29),
+                                      "points": 2, "source": "wheel_screen"}
 
 
 def test_wheel_response_records_iv_into_store_and_shows_rank_when_known():

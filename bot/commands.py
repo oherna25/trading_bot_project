@@ -7,13 +7,14 @@ from typing import Any, Mapping
 
 from bot.journal import Journal
 from bot.models import (
-    MODEL_REGISTRY,
     HttpPost,
-    model_api_key,
+    chat_api_key,
+    chat_base_url,
+    chat_spec,
     receipt_payload,
     run_analyst,
 )
-from bot.risk import review_intent, submit_paper
+from bot.risk import IntentRejectedError, submit_paper
 from bot.shapes import OrderIntent, OrderLeg, RiskLimits, RiskState
 from bot.store import SnapshotStore
 from bot.tiers import select_model_tier
@@ -226,12 +227,12 @@ def _close_entry(
         risk_numbers={"close": 1.0, "size": size}, signal_id=signal_id, legs=legs,
     )
     journal.append(now, "intent_proposed", {"signal_id": signal_id, "size": size, "close": True})
-    verdict = review_intent(intent, COMMAND_STATE, COMMAND_LIMITS, journal, now,
-                            profile=store.read_profile())
-    if verdict != "approved":
+    try:
+        fill, _, _ = submit_paper(intent, mark, COMMAND_STATE, None, COMMAND_LIMITS, journal, now,
+                                  profile=store.read_profile())
+    except IntentRejectedError:
         reason = journal.entries()[-1].payload.get("reason", "vetoed")
         return f"{label}: rejected ({reason})"
-    fill, _, _ = submit_paper(intent, mark, COMMAND_STATE, None, COMMAND_LIMITS, journal, now)
     note = " at cost, no live option quote" if entry["kind"] != "stock" else ""
     return f"{label}: closed {size:g} @ {fill.price:.2f}{note}"
 
@@ -341,12 +342,12 @@ def _roll(action: Mapping[str, Any], store: SnapshotStore,
         ),
     )
     journal.append(now, "intent_proposed", {"signal_id": "portfolio-roll-open", "size": size})
-    verdict = review_intent(intent, COMMAND_STATE, COMMAND_LIMITS, journal, now,
-                            profile=store.read_profile())
-    if verdict != "approved":
+    try:
+        submit_paper(intent, float(entry["avg"]), COMMAND_STATE, None, COMMAND_LIMITS, journal, now,
+                     profile=store.read_profile())
+    except IntentRejectedError:
         reason = journal.entries()[-1].payload.get("reason", "vetoed")
         return [closed, f"reopen rejected ({reason})"]
-    submit_paper(intent, float(entry["avg"]), COMMAND_STATE, None, COMMAND_LIMITS, journal, now)
     label = _describe(entry)
     return [closed, f"rolled {label} to {to_expiry} at cost"]
 
@@ -423,7 +424,7 @@ def spark_translate(
     http_post: HttpPost | None = None,
 ) -> dict[str, Any]:
     decision = select_model_tier("portfolio", journal, now, env)
-    if decision.tier != "model":
+    if decision.tier not in ("model", "user"):
         return {"action": "unknown"}
     book_json = json.dumps(open_book(journal), default=str)
     prompt = f"Request: {text}\nOpen book: {book_json}"
@@ -431,16 +432,17 @@ def spark_translate(
         {"role": "system", "content": PORTFOLIO_SYSTEM},
         {"role": "user", "content": prompt},
     ]
-    spec = MODEL_REGISTRY[decision.role]
+    spec = chat_spec(decision.role, env)
     try:
         reply, receipts = run_analyst(
             spec,
-            model_api_key(env),
+            chat_api_key(decision.role, env),
             messages,
             [POSITIONS_TOOL],
             {"get_positions": lambda args: book_json},
             prompt,
             http_post,
+            base_url=chat_base_url(decision.role, env),
         )
     except Exception:
         return {"action": "unknown"}

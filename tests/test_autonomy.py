@@ -93,7 +93,7 @@ def test_enable_live_with_evidence_and_checklist_arms_adapter(monkeypatch, tmp_p
     monkeypatch.delenv("TRADIER_ACCOUNT_ID", raising=False)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(LiveConfigError):
-        submit_live(_intent())
+        submit_live(_intent(), _state(), None, LIMITS, Journal(), NOW, reference_price=100.0)
 
 
 def test_kill_switch_halts_and_needs_operator_reset():
@@ -110,6 +110,13 @@ def test_kill_switch_halts_and_needs_operator_reset():
     assert not cleared.kill_active
     assert not cleared.halt_active
     assert review_intent(_intent(), cleared, LIMITS, journal, NOW) == "approved"
+
+
+def test_submit_live_fails_closed_without_gate_inputs():
+    journal = Journal()
+    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    with pytest.raises(LiveDisabledError):
+        submit_live(_intent())
 
 
 def test_submit_live_risk_review_rejects_oversized_intent():

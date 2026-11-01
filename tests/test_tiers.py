@@ -86,3 +86,39 @@ def test_tier_status_reports_spend_and_local(tmp_path):
     assert status["local_available"] is True
     assert status["local_model"] == "muse-glimmer-3b"
     assert status["tasks"]["coach"] == "premium"
+
+
+def test_user_key_selects_user_tier_without_budget_or_local():
+    journal = Journal()
+    env = {"USER_MODEL_API_KEY": "u1", "USER_MODEL_ID": "anything-llm"}
+    decision = tiers.select_model_tier("analyst", journal, NOW, env)
+    assert (decision.tier, decision.role) == ("user", "analyst")
+    assert decision.model_id == "anything-llm"
+
+
+def test_user_key_wins_over_hosted_and_local(tmp_path):
+    journal = Journal()
+    local_only = {"USER_MODEL_API_KEY": "u1", **_local_env(tmp_path)}
+    assert tiers.select_model_tier("reason", journal, NOW, local_only).tier == "local"
+    env = {"META_MODEL_API_KEY": "k", "MODEL_DAY_BUDGET_USD": "5",
+           "USER_MODEL_API_KEY": "u1", **_local_env(tmp_path)}
+    assert tiers.select_model_tier("analyst", journal, NOW, env).tier == "user"
+    assert tiers.select_model_tier("reason", journal, NOW,
+                                   {k: v for k, v in env.items() if "GLIMMER" not in k}).tier == "user"
+
+
+def test_invalid_user_url_reports_error_in_status():
+    journal = Journal()
+    status = tiers.tier_status(journal, NOW, {"USER_MODEL_API_KEY": "u1",
+                                              "USER_MODEL_BASE_URL": "notaurl"})
+    assert status["user_key_set"] is False
+    assert "USER_MODEL_BASE_URL" in str(status["user_model_error"])
+
+
+def test_tier_status_reports_user_model():
+    journal = Journal()
+    status = tiers.tier_status(journal, NOW, {"USER_MODEL_API_KEY": "u1",
+                                              "USER_MODEL_ID": "anything-llm"})
+    assert status["user_key_set"] is True
+    assert status["user_model"] == "anything-llm"
+    assert tiers.format_tier_status(status).splitlines()[2] == "user model: anything-llm (env)"

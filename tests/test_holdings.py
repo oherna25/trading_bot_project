@@ -63,12 +63,40 @@ def test_holdings_report_reads_positional_risk():
     text = holdings_text(store)
     assert text.startswith("your book vs current positioning:")
     assert "SHORT 1 TEST put 105 2026-11-20" in text
-    assert "strike $10.0 below the 115 flip" in text
+    assert "strike $10.0 below the 115.00 flip" in text
     assert "$5 ITM vs spot 100" in text
     assert "wall at 105: $2M" in text
     assert "LONG 50 TEST stock @ spot 100" in text
-    assert "spot $15.0 below the 115 flip" in text
+    assert "spot $15.0 below the 115.00 flip" in text
     assert "top wall 95 at -$3M" in text
+
+
+def _fractional_flip_store() -> SnapshotStore:
+    store = SnapshotStore()
+    store.save(
+        ChainSnapshot(
+            underlying="TEST", timestamp_utc=NOW,
+            source_name="tradier_sandbox", latency_ms=9.0,
+            contracts_list=(
+                _contract(100.0, "put", 200.0, 0.05),
+                _contract(101.0, "call", 600.0, 0.05),
+            ),
+        )
+    )
+    store.save_bar("TEST", Bar(interval="1d", timestamp_utc=NOW,
+                               open=99.0, high=101.0, low=98.0, close=100.0, volume=1000.0))
+    return store
+
+
+def test_holdings_rounds_fractional_flip_to_cents():
+    store = _fractional_flip_store()
+    save_holdings_text(
+        [{"symbol": "TEST", "kind": "stock", "side": "long", "qty": 50}],
+        store, Journal(), NOW,
+    )
+    text = holdings_text(store)
+    assert "spot $0.3 below the 100.33 flip" in text
+    assert "100.333" not in text
 
 
 def test_holdings_empty_and_missing_snapshot():

@@ -5,10 +5,17 @@ import pytest
 
 from bot.journal import Journal
 from bot.risk import (
+    IntentRejectedError,
     build_intent,
     drawdown_paused,
+    new_paper_account,
+    paper_drawdown,
+    paper_equity,
+    paper_portfolio_view,
     positions_capped,
+    record_paper_state,
     review_intent,
+    roll_paper_account,
     sector_capped,
     submit_paper,
 )
@@ -33,10 +40,13 @@ def _signal() -> Signal:
 def test_build_intent_sizes_from_account_and_risk():
     journal = Journal()
     intent = build_intent(_signal(), "sig-1", _state(), journal, NOW)
-    assert intent.size == 1000.0
+    assert intent.size == 600.0
     assert intent.symbol == "TEST"
     assert intent.side == "buy"
-    assert intent.risk_numbers == {"account_size": 100000.0, "risk_per_trade": 0.01, "size": 1000.0}
+    assert intent.risk_numbers == {
+        "account_size": 100000.0, "risk_per_trade": 0.01, "confidence": 0.6,
+        "confidence_scale": 0.6, "size": 600.0,
+    }
     assert journal.entries()[-1].kind == "intent_proposed"
 
 
@@ -68,8 +78,8 @@ def test_paper_fill_reconciles_with_intent():
     intent = build_intent(_signal(), "sig-1", state, journal, NOW)
     fill, position, updated = submit_paper(intent, 100.0, state, None, LIMITS, journal, NOW)
     assert fill.venue == "paper"
-    assert fill.size == intent.size == 1000.0
-    assert position.net_size == 1000.0
+    assert fill.size == intent.size == 600.0
+    assert position.net_size == 600.0
     assert position.average_price == 100.0
     assert position.unrealized_pnl == 0.0
     assert updated.day_pnl == 0.0
@@ -81,7 +91,7 @@ def test_day_loss_breach_halts_and_blocks_further_intents():
     state = _state()
     intent = build_intent(_signal(), "sig-1", state, journal, NOW)
     _, _, updated = submit_paper(intent, 80.0, state, None, LIMITS, journal, NOW, ask=100.0)
-    assert updated.day_pnl == -20000.0
+    assert updated.day_pnl == -12000.0
     assert updated.halt_active
     assert journal.entries()[-1].kind == "halt"
     next_intent = build_intent(_signal(), "sig-2", updated, journal, NOW)
@@ -98,11 +108,11 @@ def test_flat_signal_produces_no_intent():
 def test_options_sizing_uses_max_loss_per_contract():
     journal = Journal()
     intent = build_intent(_signal(), "sig-1", _state(), journal, NOW, max_loss_per_contract=250.0)
-    assert intent.risk_numbers["contracts"] == 4.0
-    assert intent.size == 1000.0
+    assert intent.risk_numbers["contracts"] == 2.0
+    assert intent.size == 500.0
     small = build_intent(_signal(), "sig-2", _state(), journal, NOW, max_loss_per_contract=300.0)
-    assert small.risk_numbers["contracts"] == 3.0
-    assert small.size == 900.0
+    assert small.risk_numbers["contracts"] == 2.0
+    assert small.size == 600.0
 
 
 def test_paper_fill_uses_touch_plus_slippage_and_fees():
@@ -115,8 +125,8 @@ def test_paper_fill_uses_touch_plus_slippage_and_fees():
     )
     assert fill.price == pytest.approx(100.1 * 1.001)
     assert position.average_price == pytest.approx(100.1 * 1.001)
-    assert position.unrealized_pnl == pytest.approx((100.0 - 100.1 * 1.001) * 1000.0)
-    assert updated.day_pnl == pytest.approx((100.0 - 100.1 * 1.001) * 1000.0 - 5.0)
+    assert position.unrealized_pnl == pytest.approx((100.0 - 100.1 * 1.001) * 600.0)
+    assert updated.day_pnl == pytest.approx((100.0 - 100.1 * 1.001) * 600.0 - 5.0)
     assert not updated.halt_active
 
 
@@ -129,7 +139,7 @@ def test_closing_fill_books_realized_pnl():
     sell = replace(intent, side="sell")
     _, closed, final = submit_paper(sell, 110.0, updated, position, LIMITS, journal, NOW)
     assert closed.net_size == 0.0
-    assert final.day_pnl == 10000.0
+    assert final.day_pnl == 6000.0
 
 
 def test_zero_caps_with_view_preserve_approval():
@@ -219,5 +229,103 @@ def test_day_pnl_accumulates_across_fills():
     _, position, updated = submit_paper(intent, 100.0, state, None, LIMITS, journal, NOW)
     assert updated.day_pnl == 0.0
     _, position2, updated2 = submit_paper(intent, 101.0, updated, position, LIMITS, journal, NOW)
-    assert position2.unrealized_pnl == 1000.0
-    assert updated2.day_pnl == 1000.0
+    assert position2.unrealized_pnl == 600.0
+    assert updated2.day_pnl == 600.0
+
+
+def test_build_intent_prefers_signal_symbol_over_snapshot_prefix():
+    journal = Journal()
+    signal = Signal(direction="long", thesis="t", confidence=1.0,
+                    snapshot_id="TEST:snap-1", symbol="MSFT")
+    assert build_intent(signal, "sig-1", _state(), journal, NOW).symbol == "MSFT"
+
+
+def test_build_intent_scales_size_by_confidence():
+    full = build_intent(replace(_signal(), confidence=1.0), "sig-1", _state(), Journal(), NOW)
+    assert full.size == 1000.0
+    journal = Journal()
+    assert build_intent(replace(_signal(), confidence=0.0), "sig-2", _state(), journal, NOW) is None
+    assert journal.entries()[-1].kind == "intent_skipped"
+    clamped = build_intent(replace(_signal(), confidence=1.5), "sig-3", _state(), Journal(), NOW)
+    assert clamped.size == 1000.0
+
+
+def test_submit_paper_enforces_gate_without_caller_review():
+    from bot.shapes import OrderIntent
+
+    journal = Journal()
+    oversized = OrderIntent(symbol="TEST", side="buy", size=999999.0,
+                            risk_numbers={"size": 999999.0}, signal_id="sig-9")
+    with pytest.raises(IntentRejectedError):
+        submit_paper(oversized, 100.0, _state(), None, LIMITS, journal, NOW)
+    assert journal.entries()[-1].kind == "intent_vetoed"
+    assert "fill" not in [entry.kind for entry in journal.entries()]
+
+
+def test_submit_paper_blocks_options_without_profile():
+    from bot.shapes import OrderIntent, OrderLeg
+
+    journal = Journal()
+    combo = OrderIntent(
+        symbol="TEST", side="buy", size=500.0, risk_numbers={"size": 500.0}, signal_id="sig-9",
+        legs=(OrderLeg(symbol="TEST", side="buy", size=500.0, strike=100.0,
+                       expiry="2026-11-20", call_or_put="call"),),
+    )
+    with pytest.raises(IntentRejectedError):
+        submit_paper(combo, 2.5, _state(), None, LIMITS, journal, NOW)
+    assert journal.entries()[-1].payload["reason"] == "options blocked by profile"
+
+
+def test_review_allows_close_past_day_targets_but_not_halt():
+    from bot.shapes import OrderIntent
+
+    journal = Journal()
+    closing = OrderIntent(symbol="TEST", side="sell", size=600.0,
+                          risk_numbers={"size": 600.0, "close": True}, signal_id="sig-9")
+    assert review_intent(closing, _state(day_pnl=800.0), LIMITS, journal, NOW) == "approved"
+    assert review_intent(closing, _state(day_pnl=-2000.0), LIMITS, journal, NOW) == "approved"
+    assert review_intent(closing, _state(halt_active=True), LIMITS, journal, NOW) == "rejected"
+
+
+def test_paper_account_seeds_curve_and_peaks():
+    account = new_paper_account("paper", _state(day_pnl=120.0), "2026-10-27")
+    assert account.last_day == "2026-10-27"
+    assert account.total_pnl == 120.0
+    assert account.day_pnl == {"2026-10-27": 120.0}
+    assert account.equity_curve == (("2026-10-27", 100120.0),)
+    assert account.peak_equity == 100120.0
+    assert account.peak_day_pnl == 120.0
+    assert paper_equity(account) == 100120.0
+
+
+def test_paper_account_roll_resets_day_but_keeps_kill_and_total():
+    account = new_paper_account("paper", _state(day_pnl=200.0, halt_active=True), "2026-10-27")
+    rolled = roll_paper_account(account, "2026-10-28")
+    assert rolled.state.day_pnl == 0.0
+    assert rolled.state.halt_active is False
+    assert rolled.total_pnl == 200.0
+    assert rolled.peak_day_pnl is None
+    assert rolled.last_day == "2026-10-28"
+    assert roll_paper_account(rolled, "2026-10-28") is rolled
+    killed = new_paper_account("paper", _state(kill_active=True), "2026-10-27")
+    assert roll_paper_account(killed, "2026-10-28").state.kill_active is True
+
+
+def test_paper_account_record_tracks_total_peak_curve_and_drawdown():
+    account = new_paper_account("paper", _state(), "2026-10-27")
+    account = record_paper_state(account, _state(day_pnl=500.0), "2026-10-27")
+    account = record_paper_state(account, _state(day_pnl=300.0), "2026-10-27")
+    assert account.total_pnl == 300.0
+    assert account.peak_day_pnl == 500.0
+    assert account.peak_equity == 100500.0
+    assert account.equity_curve == (("2026-10-27", 100300.0),)
+    assert account.day_pnl == {"2026-10-27": 300.0}
+    dollars, pct = paper_drawdown(account)
+    assert dollars == 200.0
+    assert pct == pytest.approx(200.0 / 100500.0)
+    account = record_paper_state(account, _state(day_pnl=100.0), "2026-10-28")
+    assert account.total_pnl == 400.0
+    assert account.day_pnl == {"2026-10-27": 300.0, "2026-10-28": 100.0}
+    assert [day for day, _ in account.equity_curve] == ["2026-10-27", "2026-10-28"]
+    view = paper_portfolio_view(account)
+    assert view.peak_day_pnl == 100.0

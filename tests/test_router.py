@@ -9,7 +9,7 @@ from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 CONFIG = OperatorConfig(max_day_loss=1000.0, day_profit_target=500.0, max_trade_size=5000.0)
-ENV = {"META_MODEL_API_KEY": "key-1"}
+ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
 
 
 def _seeded_store() -> SnapshotStore:

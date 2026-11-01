@@ -10,6 +10,7 @@ from bot.shapes import (
     OperatorProfile,
     OrderIntent,
     OrderLeg,
+    PaperAccount,
     PortfolioView,
     Position,
     RiskLimits,
@@ -106,6 +107,10 @@ def _leg_summary(leg: OrderLeg) -> dict[str, object]:
     }
 
 
+class IntentRejectedError(RuntimeError):
+    pass
+
+
 def build_intent(
     signal: Signal,
     signal_id: str,
@@ -118,11 +123,17 @@ def build_intent(
     if signal.direction not in ("long", "short"):
         journal.append(now, "intent_skipped", {"signal_id": signal_id, "reason": f"direction {signal.direction}"})
         return None
-    budget = state.account_size * state.risk_per_trade
+    scale = min(1.0, max(0.0, signal.confidence))
+    budget = state.account_size * state.risk_per_trade * scale
     risk_numbers = {
         "account_size": state.account_size,
         "risk_per_trade": state.risk_per_trade,
+        "confidence": signal.confidence,
+        "confidence_scale": scale,
     }
+    if budget <= 0:
+        journal.append(now, "intent_skipped", {"signal_id": signal_id, "reason": "confidence scales budget to zero"})
+        return None
     if max_loss_per_contract is not None and max_loss_per_contract > 0:
         contracts = int(budget // max_loss_per_contract)
         if contracts < 1:
@@ -139,7 +150,7 @@ def build_intent(
     if leg_tuple:
         risk_numbers["legs"] = float(len(leg_tuple))
     intent = OrderIntent(
-        symbol=signal.snapshot_id.split(":")[0],
+        symbol=signal.symbol or signal.snapshot_id.split(":")[0],
         side="buy" if signal.direction == "long" else "sell",
         size=total,
         risk_numbers=risk_numbers,
@@ -223,7 +234,9 @@ def review_intent(
     if intent_notional(intent) > limits.max_trade_size:
         journal.append(now, "intent_vetoed", {"reason": "outside trade targets"})
         return "rejected"
-    if state.day_pnl <= -limits.max_day_loss or state.day_pnl >= limits.day_profit_target:
+    if not intent.risk_numbers.get("close") and (
+        state.day_pnl <= -limits.max_day_loss or state.day_pnl >= limits.day_profit_target
+    ):
         journal.append(now, "intent_vetoed", {"reason": "outside day targets"})
         return "rejected"
     journal.append(now, "intent_approved", {"signal_id": intent.signal_id, "size": intent.size})
@@ -293,7 +306,13 @@ def submit_paper(
     ask: Optional[float] = None,
     slippage_bps: float = 0.0,
     fees: float = 0.0,
+    profile: Optional[OperatorProfile] = None,
+    view: Optional[PortfolioView] = None,
 ) -> tuple[Fill, Position, RiskState]:
+    if review_intent(intent, state, limits, journal, now, profile=profile, view=view) != "approved":
+        entries = journal.entries()
+        reason = entries[-1].payload.get("reason", "vetoed") if entries else "vetoed"
+        raise IntentRejectedError(f"paper intent rejected by risk review ({reason})")
     touch = paper_fill_price(intent.side, mark_price, bid, ask)
     slip = touch * slippage_bps / 10000.0
     fill_price = touch + slip if intent.side == "buy" else touch - slip
@@ -321,3 +340,75 @@ def submit_paper(
         updated_state = fire_halt(updated_state)
         journal.append(now, "halt", {"day_pnl": updated_state.day_pnl})
     return fill, updated_position, updated_state
+
+
+def paper_equity(account: PaperAccount) -> float:
+    return account.state.account_size + account.total_pnl
+
+
+def new_paper_account(account_id: str, state: RiskState, today: str) -> PaperAccount:
+    equity = state.account_size + state.day_pnl
+    return PaperAccount(
+        account_id=account_id,
+        state=state,
+        total_pnl=state.day_pnl,
+        day_pnl={today: state.day_pnl},
+        equity_curve=((today, equity),),
+        peak_equity=equity,
+        peak_day_pnl=state.day_pnl,
+        last_day=today,
+    )
+
+
+def roll_paper_account(account: PaperAccount, today: str) -> PaperAccount:
+    if not account.last_day:
+        return replace(account, last_day=today)
+    if account.last_day == today:
+        return account
+    return replace(
+        account,
+        state=replace(account.state, day_pnl=0.0, halt_active=False),
+        peak_day_pnl=None,
+        last_day=today,
+    )
+
+
+def record_paper_state(account: PaperAccount, state: RiskState, today: str) -> PaperAccount:
+    rolled = roll_paper_account(account, today)
+    delta = state.day_pnl - rolled.state.day_pnl
+    total = rolled.total_pnl + delta
+    equity = state.account_size + total
+    prior_peak = rolled.peak_day_pnl
+    peak_day = state.day_pnl if prior_peak is None else max(prior_peak, state.day_pnl)
+    days = dict(rolled.day_pnl)
+    days[today] = state.day_pnl
+    curve = tuple((day, value) for day, value in rolled.equity_curve if day != today)
+    curve += ((today, equity),)
+    return replace(
+        rolled,
+        state=state,
+        total_pnl=total,
+        day_pnl=days,
+        equity_curve=curve,
+        peak_equity=max(rolled.peak_equity, equity),
+        peak_day_pnl=peak_day,
+        last_day=today,
+    )
+
+
+def paper_drawdown(account: PaperAccount) -> tuple[float, float]:
+    dollars = max(0.0, account.peak_equity - paper_equity(account))
+    pct = dollars / account.peak_equity if account.peak_equity > 0 else 0.0
+    return dollars, pct
+
+
+def paper_portfolio_view(
+    account: PaperAccount,
+    open_positions: int = 0,
+    open_symbols: Sequence[str] = (),
+) -> PortfolioView:
+    return PortfolioView(
+        open_positions=open_positions,
+        open_symbols=tuple(open_symbols),
+        peak_day_pnl=account.peak_day_pnl,
+    )

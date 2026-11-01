@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from bot.diff import compact_dollars
 from bot.journal import Journal
-from bot.models import MODEL_REGISTRY, HttpPost, model_api_key, receipt_payload, run_analyst, select_backend
+from bot.models import HttpPost, chat_api_key, chat_base_url, chat_spec, receipt_payload, run_analyst, select_backend
 from bot.store import need_snapshot_text
 from bot.tradecards import PROFILE_REQUIRED, TradeCard
 
@@ -74,18 +74,19 @@ def _model_case(
     http_post: HttpPost | None,
 ) -> str | None:
     backend, reason = select_backend(role, journal, now, env)
-    if backend != "model":
+    if backend not in ("model", "user"):
         journal.append(now, "model_fallback", {"reason": reason, "debate": role})
         return None
     try:
         text, receipts = run_analyst(
-            MODEL_REGISTRY[role],
-            model_api_key(env),
+            chat_spec(role, env),
+            chat_api_key(role, env),
             [{"role": "system", "content": system}, {"role": "user", "content": stats_text}],
             [],
             {},
             stats_text,
             http_post,
+            base_url=chat_base_url(role, env),
         )
     except Exception as exc:
         journal.append(now, "model_fallback", {"reason": type(exc).__name__, "debate": role})
@@ -112,9 +113,9 @@ def debate_card(
         bull = _model_case("analyst", BULL_SYSTEM, stats_text, card, journal, now, env, http_post)
         bear = _model_case("reviewer", BEAR_SYSTEM, stats_text, card, journal, now, env, http_post)
         if bull is not None:
-            bull_source = MODEL_REGISTRY["analyst"].model_id
+            bull_source = chat_spec("analyst", env).model_id
         if bear is not None:
-            bear_source = MODEL_REGISTRY["reviewer"].model_id
+            bear_source = chat_spec("reviewer", env).model_id
     bull_text = bull if bull is not None else _fallback_bull(card)
     bear_text = bear if bear is not None else _fallback_bear(card)
     if card.confidence >= 0.5:

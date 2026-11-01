@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
-from bot.models import MODEL_REGISTRY, HttpPost, run_analyst
+from bot.models import MODEL_API_BASE_URL, MODEL_REGISTRY, HttpPost, chat_spec, effective_user_model, run_analyst
 
 API_KEY_ENV = "META_MODEL_API_KEY"
 REASON_TIMEOUT_SECONDS = 60.0
@@ -32,6 +32,11 @@ def select_reason_backend(
     journal: Journal, now: datetime, env: Mapping[str, str] | None = None
 ) -> tuple[str, str]:
     _ = (journal, now)
+    user, _, error = effective_user_model(env)
+    if user is not None:
+        return "user", ""
+    if error:
+        return "fallback", error
     values = _read_meta_env(env)
     if not values.get(API_KEY_ENV):
         return "fallback", f"missing {API_KEY_ENV}"
@@ -44,17 +49,22 @@ def generate_reason(
     http_post: HttpPost | None = None,
     timeout: float = REASON_TIMEOUT_SECONDS,
 ) -> tuple[str, float]:
-    values = _read_meta_env(env)
-    key = values.get(API_KEY_ENV, "")
-    if not key:
-        raise ValueError(f"missing {API_KEY_ENV}")
+    user, _, _ = effective_user_model(env)
+    if user is not None:
+        spec, key, base_url = chat_spec("analyst", env), user.api_key, user.base_url
+    else:
+        values = _read_meta_env(env)
+        key = values.get(API_KEY_ENV, "")
+        if not key:
+            raise ValueError(f"missing {API_KEY_ENV}")
+        spec, base_url = MODEL_REGISTRY["analyst"], MODEL_API_BASE_URL
     prompt = json.dumps(stats)
     messages = [
         {"role": "system", "content": REASON_SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
     text, receipts = run_analyst(
-        MODEL_REGISTRY["analyst"], key, messages, [], {}, prompt, http_post, timeout
+        spec, key, messages, [], {}, prompt, http_post, timeout, base_url=base_url
     )
     reason = text.strip() if isinstance(text, str) else ""
     if not reason:

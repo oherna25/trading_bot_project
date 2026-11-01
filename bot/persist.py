@@ -15,6 +15,8 @@ from bot.shapes import (
     JournalEntry,
     OperatorProfile,
     OptionContract,
+    PaperAccount,
+    RiskState,
 )
 from bot.store import SnapshotStore
 
@@ -27,6 +29,7 @@ HOLDINGS_FILE = "holdings.json"
 SETTINGS_FILE = "settings.json"
 EARNINGS_FILE = "earnings.json"
 ALERT_RULES_FILE = "alert_rules.json"
+PAPER_ACCOUNTS_FILE = "paper_accounts.json"
 
 
 def _freeze(value: Any) -> Any:
@@ -66,6 +69,8 @@ def _freeze_contract(contract: OptionContract) -> dict[str, Any]:
         "gamma": contract.gamma,
         "vega": contract.vega,
         "delta": contract.delta,
+        "charm": contract.charm,
+        "vanna": contract.vanna,
         "price": contract.price,
         "bid": contract.bid,
         "ask": contract.ask,
@@ -82,6 +87,8 @@ def _thaw_contract(raw: dict[str, Any]) -> OptionContract:
         gamma=raw.get("gamma"),
         vega=raw.get("vega"),
         delta=raw.get("delta"),
+        charm=raw.get("charm"),
+        vanna=raw.get("vanna"),
         price=raw.get("price"),
         bid=raw.get("bid"),
         ask=raw.get("ask"),
@@ -201,6 +208,48 @@ def _thaw_profile(raw: dict[str, Any]) -> OperatorProfile:
     )
 
 
+def _freeze_paper_account(account: PaperAccount) -> dict[str, Any]:
+    return {
+        "account_id": account.account_id,
+        "state": {
+            "account_size": account.state.account_size,
+            "risk_per_trade": account.state.risk_per_trade,
+            "day_pnl": account.state.day_pnl,
+            "halt_active": account.state.halt_active,
+            "kill_active": account.state.kill_active,
+        },
+        "total_pnl": account.total_pnl,
+        "day_pnl": dict(account.day_pnl),
+        "equity_curve": [[day, equity] for day, equity in account.equity_curve],
+        "peak_equity": account.peak_equity,
+        "peak_day_pnl": account.peak_day_pnl,
+        "last_day": account.last_day,
+    }
+
+
+def _thaw_paper_account(raw: dict[str, Any]) -> PaperAccount:
+    state = raw.get("state", {})
+    peak = raw.get("peak_day_pnl")
+    return PaperAccount(
+        account_id=str(raw.get("account_id", "")),
+        state=RiskState(
+            account_size=float(state.get("account_size", 0.0)),
+            risk_per_trade=float(state.get("risk_per_trade", 0.0)),
+            day_pnl=float(state.get("day_pnl", 0.0)),
+            halt_active=bool(state.get("halt_active", False)),
+            kill_active=bool(state.get("kill_active", False)),
+        ),
+        total_pnl=float(raw.get("total_pnl", 0.0)),
+        day_pnl={str(day): float(pnl) for day, pnl in (raw.get("day_pnl") or {}).items()},
+        equity_curve=tuple(
+            (str(day), float(equity)) for day, equity in (raw.get("equity_curve") or [])
+        ),
+        peak_equity=float(raw.get("peak_equity", 0.0)),
+        peak_day_pnl=None if peak is None else float(peak),
+        last_day=str(raw.get("last_day", "")),
+    )
+
+
 def _write_json(path: str, payload: Any) -> None:
     tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as handle:
@@ -278,6 +327,10 @@ def save_bundle(
         {symbol: day.isoformat() for symbol, day in store.all_earnings().items()},
     )
     _write_json(os.path.join(store_dir, ALERT_RULES_FILE), store.list_alert_rules())
+    _write_json(
+        os.path.join(store_dir, PAPER_ACCOUNTS_FILE),
+        [_freeze_paper_account(account) for account in store.all_paper_accounts().values()],
+    )
     return bundle_mtimes(store_dir)
 
 
@@ -336,12 +389,19 @@ def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
         raw_rules = _read_json(rules_path)
         if isinstance(raw_rules, list):
             store.restore_alert_rules([item for item in raw_rules if isinstance(item, dict)])
+    accounts_path = os.path.join(store_dir, PAPER_ACCOUNTS_FILE)
+    if os.path.exists(accounts_path):
+        raw_accounts = _read_json(accounts_path)
+        if isinstance(raw_accounts, list):
+            for item in raw_accounts:
+                if isinstance(item, dict):
+                    store.save_paper_account(_thaw_paper_account(item))
     return store, journal
 
 
 BUNDLE_FILES = (
     SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE, HOLDINGS_FILE,
-    SETTINGS_FILE, EARNINGS_FILE, ALERT_RULES_FILE,
+    SETTINGS_FILE, EARNINGS_FILE, ALERT_RULES_FILE, PAPER_ACCOUNTS_FILE,
 )
 
 
