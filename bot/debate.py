@@ -32,6 +32,8 @@ def _stats(card: TradeCard) -> dict[str, Any]:
         "spread_pct": card.spread_pct,
         "earnings_date": card.earnings_date,
         "iv_rank": card.iv_rank,
+        "entry": card.entry,
+        "hedge_strike": card.hedge_strike,
     }
 
 

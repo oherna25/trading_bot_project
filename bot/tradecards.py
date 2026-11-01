@@ -229,6 +229,7 @@ class TradeCard:
     reason_source: str
     earnings_date: Optional[str] = None
     iv_rank: Optional[float] = None
+    entry: str = ""
 
 
 def fallback_reason(stats: Mapping[str, Any]) -> str:
@@ -353,6 +354,7 @@ def build_trade_cards(
                 reason_source=reason_source,
                 earnings_date=idea.earnings_date,
                 iv_rank=idea.iv_rank,
+                entry=idea.trigger,
             )
         )
     return cards
@@ -531,8 +533,8 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
     lines = [f"trade cards ({len(cards)}):"]
     for number, card in enumerate(cards, 1):
         line = (
-            f"{number}. {card.symbol} {card.direction} {card.spread} "
-            f"expiry {card.expiry} confidence {card.confidence:.2f} "
+            f"{number}. {contract_text(card)} "
+            f"confidence {card.confidence:.2f} "
             f"max loss {_rounded(card.max_loss, 2)} breakeven {_rounded(card.breakeven, 2)} "
             f"wall {compact_dollars(card.wall_exposure) if card.wall_exposure is not None else 'none'} {card.regime} "
             f"spot {_rounded(card.spot, 2)} flip {_rounded(card.flip_point, 2)}"
@@ -541,12 +543,39 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
             line += f" earnings {card.earnings_date}"
         if card.iv_rank is not None:
             line += f" iv rank {card.iv_rank:.1f}"
-        lines.append(f"{line}: {card.reason}")
+        line += f" | {entry_text(card)} | {targets_text(card)}"
+        lines.append(f"{line} | reason {card.reason}")
     return "\n".join(lines)
 
 
 def _rounded(value: Optional[float], places: int) -> Optional[float]:
     return None if value is None else round(value, places)
+
+
+def contract_text(card: TradeCard) -> str:
+    base = f"{card.symbol} {card.direction} {card.spread} expiry {card.expiry}"
+    legs = f"{card.call_or_put} {card.strike:g}"
+    if card.hedge_strike is not None:
+        legs += f" / hedge {card.hedge_strike:g}"
+    debit = _net_text(card.net_debit)
+    return f"contract {base} ({legs}, {debit})"
+
+
+def targets_text(card: TradeCard) -> str:
+    parts: list[str] = []
+    if card.breakeven is not None:
+        parts.append(f"breakeven {card.breakeven:g}")
+    if card.hedge_strike is not None:
+        parts.append(f"target {card.hedge_strike:g} (max profit beyond)")
+    if card.max_loss is not None:
+        parts.append(f"capped loss ${card.max_loss:.0f}")
+    if not parts:
+        return "targets open-ended"
+    return "targets " + ", ".join(parts)
+
+
+def entry_text(card: TradeCard) -> str:
+    return f"entry {card.entry}" if card.entry else "entry n/a"
 
 
 def cards_to_json(cards: Sequence[TradeCard]) -> dict:
@@ -574,6 +603,9 @@ def cards_to_json(cards: Sequence[TradeCard]) -> dict:
                 "reason_source": card.reason_source,
                 "earnings_date": card.earnings_date,
                 "iv_rank": _rounded(card.iv_rank, 1),
+                "entry": card.entry,
+                "contract": contract_text(card),
+                "targets": targets_text(card),
             }
             for card in cards
         ]
@@ -613,6 +645,9 @@ def trade_cards_html(
     for offset, card in enumerate(cards):
         index = start_index + offset
         stats = [
+            f"contract {card.symbol} {card.direction} {card.spread} expiry {card.expiry}",
+            f"{entry_text(card)}",
+            f"{targets_text(card)}",
             f"confidence {card.confidence:.2f}",
             f"max loss {_money(card.max_loss)}",
             f"breakeven {_rounded(card.breakeven, 2) if card.breakeven is not None else 'n/a'}",
@@ -647,7 +682,7 @@ def trade_cards_html(
             "<article>"
             f"<h2>{html.escape(card.symbol)} {html.escape(card.direction)} "
             f"{html.escape(card.spread)} expiry {html.escape(card.expiry)}</h2>"
-            f"<ul>{items}</ul><p>{html.escape(card.reason)}</p>{take}"
+            f"<ul>{items}</ul><p>reason: {html.escape(card.reason)}</p>{take}"
             "</article>"
         )
     return page(

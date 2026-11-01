@@ -31,7 +31,7 @@ JSON_KEYS = [
     "symbol", "direction", "spread", "strike", "expiry", "call_or_put", "hedge_strike",
     "confidence", "snapshot_id", "max_loss", "breakeven", "net_debit", "spread_pct",
     "wall_exposure", "regime", "spot", "flip_point", "reason", "reason_source",
-    "earnings_date", "iv_rank",
+    "earnings_date", "iv_rank", "entry", "contract", "targets",
 ]
 
 

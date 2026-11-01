@@ -64,6 +64,8 @@ def share_numbers(card: TradeCard) -> dict[str, Any]:
         "regime": card.regime,
         "spot": card.spot,
         "flip_point": card.flip_point,
+        "entry": card.entry,
+        "hedge_strike": card.hedge_strike,
     }
 
 
@@ -76,13 +78,15 @@ def _money(value: Any) -> str:
 
 def share_text(card: TradeCard, art_hash: str | None = None) -> str:
     from bot.theme import BRAND
+    from bot.tradecards import entry_text, targets_text
 
     wall = _money(card.wall_exposure) if card.wall_exposure is not None else "n/a"
     spot = f"{card.spot:g}" if card.spot is not None else "n/a"
     flip = f"{card.flip_point:g}" if card.flip_point is not None else "none"
     loss = f"max loss {_money(card.max_loss)}" if card.max_loss is not None else "loss uncapped"
     lines = [
-        f"{card.symbol} {card.direction} {card.spread} {card.expiry} (confidence {card.confidence:.2f})",
+        f"contract {card.symbol} {card.direction} {card.spread} {card.expiry} (confidence {card.confidence:.2f})",
+        f"{entry_text(card)} | {targets_text(card)}",
         f"wall {wall} | regime {card.regime} | spot {spot} vs flip {flip} | {loss}",
         f"why: {card.reason}",
     ]
