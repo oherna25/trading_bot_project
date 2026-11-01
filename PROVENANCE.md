@@ -26,6 +26,12 @@ These paths are the hackathon slice. Everything else is supporting context.
 Run `git status --short` before you archive the repo. Commit the slice above so
 the history shows it.
 
+Nov 1 UI work sits outside the graded slice. Commit `8a1f07d` gives trade
+cards badges, a confidence meter, a payoff-at-expiry diagram, and a
+spot-vs-flip gauge (`bot/tradecards.py`, `bot/dashboard.py`, `bot/theme.py`,
+plus README tour text and screenshots). It is presentation over the existing
+cards engine. It makes no model claim and changes no gate.
+
 ## What existed before Nov 1
 
 The options engine predates the Meta slice. It ingests chains and bars,
