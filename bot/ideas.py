@@ -125,6 +125,12 @@ NON_TICKER_WORDS = frozenset(
     """.split()
 )
 
+SCAN_RE = re.compile(r"\bscan\b|\bscreener\b|\bbreadth\b|\ball symbols\b|\ball tickers\b", re.IGNORECASE)
+
+
+def broad_scan_requested(text: str) -> bool:
+    return bool(SCAN_RE.search(text or ""))
+
 MIN_OPEN_INTEREST = 100.0
 MAX_SPREAD_PCT = 10.0
 TIGHT_SPREAD_PCT = 5.0
@@ -136,6 +142,16 @@ MAX_PER_SYMBOL = 5
 MAX_PER_EXPIRY = 5
 MAX_PER_STRIKE_CLUSTER = 2
 MIN_DAYS_TO_EXPIRY = 1
+
+
+def ideas_limit() -> int:
+    try:
+        configured = int(os.environ.get("SCAN_MAX_IDEAS", "") or 0)
+    except ValueError:
+        configured = 0
+    if configured > 0:
+        return max(1, min(50, configured))
+    return 15
 
 T = TypeVar("T")
 
@@ -276,6 +292,10 @@ def symbols_for(text: str, store: SnapshotStore, default: str) -> list[str]:
             if underlying not in ordered:
                 ordered.append(underlying)
         return ordered
+    if broad_scan_requested(text):
+        stored = _store_underlyings(store)
+        if stored:
+            return stored
     candidates = candidate_symbols(text)
     if candidates:
         return candidates
@@ -309,6 +329,55 @@ def spread_pct(contract: OptionContract) -> Optional[float]:
     if contract.bid is None or contract.ask is None or not contract.price:
         return None
     return (contract.ask - contract.bid) / contract.price * 100.0
+
+
+def quality_bonus(
+    contract: OptionContract,
+    direction: str,
+    pct: Optional[float],
+    days: Optional[int],
+    iv_rank_value: Optional[float] = None,
+) -> float:
+    """Small data-driven adjustments that only apply when real quotes exist.
+
+    Fixtures without bid/ask/delta score exactly as before, so offline
+    expectations stay stable while live chains get liquidity, alignment,
+    tenor, and IV-rank refinement.
+    """
+    if pct is None and contract.delta is None and iv_rank_value is None and days is None:
+        return 0.0
+    has_quote = pct is not None
+    bonus = 0.0
+    if contract.delta is not None:
+        if direction == "long":
+            if contract.call_or_put == "call" and contract.delta > 0:
+                bonus += 0.04
+            elif contract.call_or_put == "put":
+                bonus -= 0.03
+            elif contract.delta <= 0:
+                bonus -= 0.03
+        elif direction == "short":
+            if contract.call_or_put == "put" and contract.delta < 0:
+                bonus += 0.04
+            elif contract.call_or_put == "call":
+                bonus -= 0.03
+            elif contract.delta >= 0:
+                bonus -= 0.03
+    if has_quote:
+        assert pct is not None
+        if pct <= 2.0:
+            bonus += 0.03
+        if days is not None:
+            if 7 <= days <= 45:
+                bonus += 0.02
+            elif days < 3 or days > 90:
+                bonus -= 0.03
+        if iv_rank_value is not None:
+            if iv_rank_value >= 30.0:
+                bonus += 0.03
+            elif iv_rank_value <= 15.0:
+                bonus -= 0.03
+    return bonus
 
 
 def _contract_index(
@@ -404,6 +473,8 @@ def rank_ideas(
     if not candidates:
         return []
     top_score = max(score for score, *_ in candidates)
+    histories = iv_history or {}
+    rank_by_symbol = {symbol: _iv_rank(history) for symbol, history in histories.items()}
     ranked = []
     for score, snapshot_id, snapshot, profile, bar, direction, contract, pct in candidates:
         exposure = profile.per_strike_exposure.get(contract.strike, 0.0)
@@ -438,7 +509,11 @@ def rank_ideas(
             confidence += 0.10
         if max_loss is not None:
             confidence += 0.05
-        confidence = min(0.9, confidence)
+        days = _days_to_expiry(contract.expiry, now if now is not None else snapshot.timestamp_utc)
+        confidence += quality_bonus(
+            contract, direction, pct, days, rank_by_symbol.get(snapshot.underlying)
+        )
+        confidence = min(0.9, max(0.05, confidence))
         earnings_map = earnings or {}
         ref = now if now is not None else snapshot.timestamp_utc
         earnings_day = earnings_map.get(snapshot.underlying)
@@ -471,11 +546,9 @@ def rank_ideas(
     ranked.sort(
         key=lambda c: (-c[0], -c[1], c[3].underlying, c[7].strike, c[7].expiry, c[7].call_or_put)
     )
-    histories = iv_history or {}
-    rank_by_symbol = {symbol: _iv_rank(history) for symbol, history in histories.items()}
     picked = diversify(
         ranked,
-        MAX_IDEAS,
+        ideas_limit(),
         symbol_of=lambda row: row[3].underlying,
         expiry_of=lambda row: row[7].expiry,
         strike_of=lambda row: row[7].strike,

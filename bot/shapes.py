@@ -297,6 +297,14 @@ class DashboardSettings:
     theme: str = "dark"
     default_underlying: str = "SPY"
     refresh_seconds: int = 60
+    live_auto_send: bool = False
+    live_min_confidence: float = 0.80
+
+
+def _parse_live_auto_send(raw: Any) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    return str(raw or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def dashboard_settings_from(raw: Any) -> DashboardSettings:
@@ -315,4 +323,19 @@ def dashboard_settings_from(raw: Any) -> DashboardSettings:
         raise ValueError(f"refresh_seconds must be an integer 0-{MAX_REFRESH_SECONDS}; got {refresh_raw!r}") from None
     if isinstance(refresh_raw, bool) or not 0 <= refresh <= MAX_REFRESH_SECONDS:
         raise ValueError(f"refresh_seconds must be an integer 0-{MAX_REFRESH_SECONDS}; got {refresh_raw!r}")
-    return DashboardSettings(theme=theme, default_underlying=underlying, refresh_seconds=refresh)
+    auto_raw = raw.get("live_auto_send", False)
+    live_auto_send = _parse_live_auto_send(auto_raw)
+    conf_raw = raw.get("live_min_confidence", 0.80)
+    try:
+        live_min_confidence = float(conf_raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError(f"live_min_confidence must be a number 0-1; got {conf_raw!r}") from None
+    if isinstance(conf_raw, bool) or not 0 <= live_min_confidence <= 1:
+        raise ValueError(f"live_min_confidence must be a number 0-1; got {conf_raw!r}")
+    return DashboardSettings(
+        theme=theme,
+        default_underlying=underlying,
+        refresh_seconds=refresh,
+        live_auto_send=live_auto_send,
+        live_min_confidence=live_min_confidence,
+    )

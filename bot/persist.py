@@ -166,6 +166,8 @@ def _freeze_settings(settings: DashboardSettings) -> dict[str, Any]:
         "theme": settings.theme,
         "default_underlying": settings.default_underlying,
         "refresh_seconds": settings.refresh_seconds,
+        "live_auto_send": settings.live_auto_send,
+        "live_min_confidence": settings.live_min_confidence,
     }
 
 

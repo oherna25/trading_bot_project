@@ -25,9 +25,11 @@ MARKETDATA_BASE_URL = "https://api.marketdata.app/v1"
 YAHOO_BASE_URL = "https://query1.finance.yahoo.com"
 ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 
-HTTP_TIMEOUT_SECONDS = 30.0
+HTTP_TIMEOUT_SECONDS = 10.0
 BAR_DAYS = 5
 TRADIER_MAX_EXPIRIES = 2
+FEED_CACHE_TTL_SECONDS = 60.0
+_FEED_CACHE: dict[str, tuple[float, object]] = {}
 
 HttpGet = Callable[..., Any]
 
@@ -48,15 +50,52 @@ def _as_list(value: Any) -> list[Any]:
     return [value]
 
 
+def _feed_timeout(explicit: float | None = None) -> float:
+    if explicit is not None and explicit > 0:
+        return explicit
+    try:
+        configured = float(os.environ.get("FEED_TIMEOUT_SECONDS", "") or 0)
+    except ValueError:
+        configured = 0.0
+    return configured if configured > 0 else HTTP_TIMEOUT_SECONDS
+
+
+def _feed_cache_ttl() -> float:
+    try:
+        configured = float(os.environ.get("FEED_CACHE_TTL_SECONDS", "") or 0)
+    except ValueError:
+        configured = 0.0
+    return configured if configured >= 0 else FEED_CACHE_TTL_SECONDS
+
+
+def _cache_key(url: str, params: dict[str, Any] | None) -> str:
+    items = sorted((k, "" if v is None else str(v)) for k, v in (params or {}).items())
+    return f"{url}?{'&'.join(f'{k}={v}' for k, v in items)}"
+
+
+def clear_feed_cache() -> None:
+    _FEED_CACHE.clear()
+
+
 def _urllib_get(url: str, headers: dict[str, str] | None, params: dict[str, Any] | None, timeout: float) -> Any:
+    effective_timeout = _feed_timeout(timeout)
+    ttl = _feed_cache_ttl()
+    key = _cache_key(url, params)
+    if ttl > 0:
+        hit = _FEED_CACHE.get(key)
+        if hit is not None and hit[0] > time.time():
+            return hit[1]
     query = urllib.parse.urlencode({k: v for k, v in (params or {}).items() if v is not None})
     full_url = url + ("?" + query if query else "")
     request = urllib.request.Request(full_url, headers=headers or {})
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+            with urllib.request.urlopen(request, timeout=effective_timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+                if ttl > 0:
+                    _FEED_CACHE[key] = (time.time() + ttl, payload)
+                return payload
         except urllib.error.HTTPError as exc:
             last_error = exc
             if exc.code not in (429, 500, 502, 503, 504):
@@ -64,7 +103,7 @@ def _urllib_get(url: str, headers: dict[str, str] | None, params: dict[str, Any]
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = exc
         if attempt < 2:
-            time.sleep(0.25 * (2**attempt))
+            time.sleep(0.15 * (2**attempt))
     raise FeedUnavailableError(f"feed request failed after retries: {type(last_error).__name__}") from last_error
 
 
@@ -455,13 +494,14 @@ _yahoo_cookies: http.cookiejar.CookieJar = http.cookiejar.CookieJar()
 
 
 def _yahoo_live_payload(symbol: str) -> Any:
+    timeout = _feed_timeout(None)
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_yahoo_cookies))
     headers = {"User-Agent": "trading-bot/0.1"}
     crumb_request = urllib.request.Request(f"{YAHOO_BASE_URL}/v1/test/getcrumb", headers=headers)
-    crumb = opener.open(crumb_request, timeout=HTTP_TIMEOUT_SECONDS).read().decode().strip()
+    crumb = opener.open(crumb_request, timeout=timeout).read().decode().strip()
     url = f"{YAHOO_BASE_URL}/v7/finance/options/{symbol}?crumb={crumb}"
     request = urllib.request.Request(url, headers=headers)
-    with opener.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
+    with opener.open(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -754,7 +794,9 @@ def feed_health_html(feeds: dict[str, dict[str, Any]]) -> str:
         ]
         rows.append("<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in cells) + "</tr>")
     return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>feed health</title></head><body>"
+        "<!doctype html><html lang=\"en\"><head><meta charset='utf-8'>"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        "<title>feed health</title></head><body>"
         "<h1>feed health</h1>"
         "<table><thead><tr><th>feed</th><th>kind</th><th>status</th><th>ok</th><th>fail</th>"
         "<th>last success</th><th>last latency</th><th>avg latency</th>"

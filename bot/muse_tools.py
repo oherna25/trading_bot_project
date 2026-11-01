@@ -108,6 +108,21 @@ def _dex_brief_handler(
     return dex_brief_response(underlying, store, journal, now)
 
 
+def _spark_audit_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.spark import spark_audit_response
+
+    query = args.get("query", "") if isinstance(args, dict) else ""
+    live = args.get("live_models", False) if isinstance(args, dict) else False
+    grounding = args.get("grounding", False) if isinstance(args, dict) else False
+    return spark_audit_response(
+        str(query or "spark audit"), underlying, store, journal, now,
+        live_models=bool(live), grounding=bool(grounding),
+    )
+
+
 def _journal_tail_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
@@ -470,6 +485,32 @@ def _take_paper_trade_handler(
     )
 
 
+def _take_live_trade_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    from bot.live_trade import take_live_trade
+
+    raw_index = args.get("index", 0)
+    try:
+        index = int(raw_index)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError("index must be an integer") from None
+    snapshot = args.get("snapshot")
+    return take_live_trade(
+        index, underlying, store, journal, config, now,
+        snapshot_id=str(snapshot) if snapshot else None,
+    )
+
+
+def _live_status_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, underlying
+    from bot.live_trade import live_status_text
+
+    return live_status_text(store, journal, now)
+
+
 def _trackrecord_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
@@ -554,11 +595,37 @@ def _live_board_handler(
     return live_board_text(store, now)
 
 
+def _strategy_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.strategy import evaluate_strategy, parse_strategy
+
+    raw = ""
+    if isinstance(args, dict):
+        raw = str(args.get("text", args.get("strategy", args.get("query", ""))) or "")
+    return evaluate_strategy(parse_strategy(raw or "my strategy", underlying, store), store, journal, now)
+
+
+def _builder_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.builder import builder_preview_text
+
+    params: dict[str, Any] = {"underlying": underlying}
+    if isinstance(args, dict):
+        params.update(args)
+    return builder_preview_text(store, journal, now, params) + "\nopen /builder for the visual form"
+
+
 def settings_summary(settings: DashboardSettings) -> str:
     return (
         f"settings: theme={settings.theme} "
         f"default_underlying={settings.default_underlying} "
         f"refresh_seconds={settings.refresh_seconds} "
+        f"live_auto_send={settings.live_auto_send} "
+        f"live_min_confidence={settings.live_min_confidence:.2f} "
         f"{user_model_summary()}"
     )
 
@@ -623,6 +690,8 @@ def save_settings_merge(
         "theme": current.theme,
         "default_underlying": current.default_underlying,
         "refresh_seconds": current.refresh_seconds,
+        "live_auto_send": current.live_auto_send,
+        "live_min_confidence": current.live_min_confidence,
     }
     for key in merged:
         if key in raw:
@@ -635,6 +704,8 @@ def save_settings_merge(
             "theme": settings.theme,
             "default_underlying": settings.default_underlying,
             "refresh_seconds": settings.refresh_seconds,
+            "live_auto_send": settings.live_auto_send,
+            "live_min_confidence": settings.live_min_confidence,
         },
     )
     key = raw.get("user_model_key", "") if isinstance(raw, Mapping) else ""
@@ -735,6 +806,9 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     ),
     "get_vex_brief": MuseTool("get_vex_brief", "Read the computed VEX brief for an underlying", _vex_brief_handler),
     "get_dex_brief": MuseTool("get_dex_brief", "Read the computed DEX brief for an underlying", _dex_brief_handler),
+    "get_spark_audit": MuseTool(
+        "get_spark_audit", "Muse Spark audit: model thesis checked against the engine", _spark_audit_handler
+    ),
     "journal_tail": MuseTool("journal_tail", "Read the tail of the journal", _journal_tail_handler),
     "paper_pnl": MuseTool("paper_pnl", "Report paper P&L from journaled fills", _paper_pnl_handler),
     "get_iv_rank": MuseTool("get_iv_rank", "Report IV rank per underlying from stored histories", _iv_rank_handler),
@@ -806,6 +880,14 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "take_paper_trade": MuseTool(
         "take_paper_trade", "Take a trade card as a paper trade", _take_paper_trade_handler
     ),
+    "take_live_trade": MuseTool(
+        "take_live_trade",
+        "Send one qualifying trade card to the live broker (armed adapter, confidence threshold, risk review)",
+        _take_live_trade_handler,
+    ),
+    "get_live_status": MuseTool(
+        "get_live_status", "Live ordering arming state plus auto-send threshold", _live_status_handler
+    ),
     "get_trackrecord": MuseTool(
         "get_trackrecord", "Closed paper trades with win rate and equity",
         _trackrecord_handler,
@@ -837,5 +919,13 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_live_board": MuseTool(
         "get_live_board", "Tickers with feed source and quote age badges",
         _live_board_handler,
+    ),
+    "evaluate_strategy": MuseTool(
+        "evaluate_strategy", "Backtest a user-stated strategy over stored snapshots and bars",
+        _strategy_handler,
+    ),
+    "show_builder": MuseTool(
+        "show_builder", "Preview visual-builder guardrails as matching ideas plus backtest",
+        _builder_handler,
     ),
 }

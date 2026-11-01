@@ -55,7 +55,7 @@ def _regime_span(regime: str) -> str:
 
 def _board_table(rows: list[dict[str, Any]]) -> str:
     cells = [
-        "<table><thead><tr><th>Symbol</th><th>Regime</th><th>Spot</th>"
+        "<div class=\"table-scroll\"><table><thead><tr><th>Symbol</th><th>Regime</th><th>Spot</th>"
         "<th>Flip</th><th>Wall</th></tr></thead><tbody>"
     ]
     for row in rows:
@@ -69,7 +69,7 @@ def _board_table(rows: list[dict[str, Any]]) -> str:
             f"<tr><td>{html.escape(str(row['symbol']))}</td><td>{_regime_span(str(row['regime']))}</td>"
             f"<td>{spot_text}</td><td>{flip_text}</td><td>{html.escape(wall_text)}</td></tr>"
         )
-    cells.append("</tbody></table>")
+    cells.append("</tbody></table></div>")
     return "".join(cells)
 
 
@@ -145,6 +145,8 @@ def _holdings_html(store: SnapshotStore) -> str:
 ACTION_LINKS = (
     ("brief", "get_gex_brief", "Computed GEX brief for the symbol."),
     ("ideas", "get_trade_ideas", "Ranked trade ideas with triggers."),
+    ("builder", "show_builder", "Visual guardrails plus backtest preview."),
+    ("strategy", "evaluate_strategy", "Backtest a user-stated strategy."),
     ("wheel", "get_wheel_ideas", "Cash-secured-put and covered-call screen."),
     ("vex", "get_vex_brief", "Vega exposure brief."),
     ("dex", "get_dex_brief", "Delta exposure brief."),
@@ -213,6 +215,12 @@ def _actions_html(underlying: str) -> str:
         "<input type=\"hidden\" name=\"tool\" value=\"take_paper_trade\">"
         f"{hidden_symbol}<label class=\"field\">index<input name=\"index\" value=\"0\" size=\"4\">"
         "</label><button class=\"solid\" type=\"submit\">take this trade (paper)</button></form></div>"
+        "<div class=\"action\"><h3>live</h3><p>Arm/disarm live ordering and send qualifying cards to the broker.</p>"
+        f"<p><a href=\"/live\">open live toggle</a></p>"
+        f"<form class=\"block\" method=\"post\" action=\"/action\">"
+        "<input type=\"hidden\" name=\"tool\" value=\"take_live_trade\">"
+        f"{hidden_symbol}<label class=\"field\">index<input name=\"index\" value=\"0\" size=\"4\">"
+        "</label><button class=\"solid\" type=\"submit\">send card to broker (live)</button></form></div>"
         "<div class=\"action\"><h3>load</h3><p>Fetch a fresh snapshot for a symbol.</p>"
         "<form class=\"block\" method=\"post\" action=\"/action\">"
         "<input type=\"hidden\" name=\"tool\" value=\"load_snapshot\">"

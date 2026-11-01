@@ -247,7 +247,7 @@ def live_board_fragment(store: SnapshotStore, now: datetime) -> str:
     if not rows:
         return f"<p>{html.escape(empty_store_text())}</p>"
     cells = [
-        "<table><tr><th>symbol</th><th>regime</th><th>total gex</th><th>spot</th>"
+        "<div class=\"table-scroll\"><table><tr><th>symbol</th><th>regime</th><th>total gex</th><th>spot</th>"
         "<th>flip</th><th>flip dist %</th><th>biggest wall</th>"
         "<th>feed</th><th>quote</th></tr>"
     ]
@@ -281,7 +281,7 @@ def live_board_fragment(store: SnapshotStore, now: datetime) -> str:
             f"<td>{_badge(feed_label, feed_state)}</td>"
             f"<td>{_badge(quote_label, quote_state)}</td></tr>"
         )
-    cells.append("</table>")
+    cells.append("</table></div>")
     cells.append(
         "<p class=\"sub\">quote green at 5m or fresher, amber older; "
         "feed green at 6h or fresher, amber older</p>"

@@ -148,6 +148,28 @@
 - Social features stay conditional on the open question below (open question).
 - Phase 5 starts after Phase 3 evidence exists and runs parallel to Phase 4 (plan decision).
 
+**Phase 6. Live toggle and confidence-gated execution.**
+
+- The `/live` page arms and disarms through the unchanged `enable_live` gate (signature, full checklist, journaled paper evidence, clean halt/kill state) and the `kill_switch`; misses journal `live_blocked` (plan decision).
+- `DashboardSettings` carries `live_auto_send` (default off) and `live_min_confidence` (default 0.80), persisted in `settings.json` and validated 0-1 at the boundary (plan decision).
+- `take_live_trade` sends one qualifying card through `submit_live` with option legs built from the card and sized by `size_for_card`; below-threshold cards journal `live_skipped` and never reach the venue (plan decision).
+- `maybe_auto_live` repeats the check across cards only when auto-send is on, caps at 3 fills per run, and never raises (plan decision).
+- New files are `bot/live_trade.py` plus `tests/test_live_trade.py` (observed this session).
+- Phase 6 starts after Phase 4 evidence exists (plan decision).
+
+**Phase 7. Strategy feedback and visual builder.**
+
+- `parse_strategy` turns plain-English guardrails (direction, DTE band, OI, spread, flip) into a `StrategySpec`; `evaluate_strategy` backtests it over stored snapshots and bars through `replay_week` with a custom `signal_fn`, scored against buy-and-hold (plan decision).
+- `GET /builder` renders the same guardrails as a form with matching-idea preview plus backtest; `POST /strategy` serves the text path (plan decision).
+- New files are `bot/strategy.py`, `bot/builder.py` plus `tests/test_strategy.py`, `tests/test_builder.py` (observed this session).
+- Phase 7 starts after Phase 1 evidence exists and reuses the replay harness unchanged (plan decision).
+
+**Phase 8. Feed speed, scan breadth, signal quality, mobile layout.**
+
+- Feeds use a 10s timeout with a 60s GET cache and parallel multi-symbol refresh; `SCAN_BROAD=1` widens the universe and `SCAN_MAX_IDEAS` overrides the top-15 cap (plan decision).
+- Quoteless fixtures score exactly as before; live quotes earn delta, spread, tenor, and IV-rank quality adjustments (plan decision).
+- Pages carry a viewport, responsive grids, scrollable tables, 44px targets, and no-zoom inputs (plan decision).
+
 ## Validation Plan
 
 - Phase 0 passes when each spike shows its artifact, namely a chain file plus a scheduled run log plus a chat transcript plus a tool-call log plus one coverage table per free source (plan decision).
@@ -161,6 +183,9 @@
 - Phase 4 passes when the kill switch drill stops ordering within the stated limit and needs a reset (assumption).
 - Phase 4 passes when the operator signs the go-live checklist in the journal (assumption).
 - Phase 5 passes when card stats match engine numbers on the same snapshot (plan decision).
+- Phase 6 passes when the disarmed take is rejected with no venue call, the armed take fills through review, and the formal gate script exits PASS on the tree (plan decision).
+- Phase 7 passes when the parsed spec round-trips the stated guardrails and the feedback names fills plus PnL plus the next guardrail to move (plan decision).
+- Phase 8 passes when the full suite stays green with quoteless fixture scores unchanged and the stylesheet carries its responsive rules (plan decision).
 - The highest-risk validation is GEX correctness in Phase 1, because wrong exposure corrupts every later signal (plan decision).
 - The second highest-risk validation is the Phase 4 live gate, because it guards real money (plan decision).
 
@@ -175,6 +200,7 @@
 - The paid GEX API is excluded from v1 on price, so engine accuracy rests on the cross-check (Sources, SqueezeMetrics plans page).
 - Finnhub free scope is unverified beyond its homepage, so adoption waits on the spike (evidence gap).
 - Live paper fills will lag where feeds delay, so promotion criteria discount delayed-fill performance (plan decision).
+- Live broker fills are open-only for now: no close path or position sync tracks them yet, so the roadmap carries that item (observed this session).
 - The operator picks research-only or full autonomy for v1, and the default is research-only first (open question).
 - The operator picks chat-first or cards-first, and the default is chat-first (open question).
 - The operator clarifies whether Grok bot style means a model choice or a conversational tone, and both branches stay feasible (open question).

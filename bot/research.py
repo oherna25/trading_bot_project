@@ -338,6 +338,24 @@ def route_chat(
         return set_rule_response(text, store, journal, now)
     if re.search(r"\bwheels?\b", lowered):
         return wheel_response(text, underlying, store, journal, now)
+    if re.search(r"\bbuilder\b", lowered):
+        from bot.builder import builder_preview_text
+        from urllib.parse import parse_qs
+
+        builder_params: dict[str, str] = {"underlying": underlying}
+        if "?" in text:
+            query = text.split("?", 1)[1]
+            for key, values in parse_qs(query).items():
+                if values:
+                    builder_params[key] = values[0]
+        return (
+            builder_preview_text(store, journal, now, builder_params)
+            + "\nopen /builder in the dashboard for the visual form"
+        )
+    if re.search(r"\bmy strategy\b|\bmy play\b|\bmy setup\b|\bbacktest my\b|\bevaluate my\b|\btest my\b|\bstrategy:", lowered):
+        from bot.strategy import evaluate_strategy, parse_strategy
+
+        return evaluate_strategy(parse_strategy(text, underlying, store), store, journal, now)
     if re.search(r"\bshare\b", lowered) and "card" in lowered:
         from bot.cards import share_card
 
@@ -353,6 +371,12 @@ def route_chat(
         return ideas_response(text, underlying, store, journal, now)
     if re.search(r"\bvex\b", lowered) or "vega exposure" in lowered:
         return vex_brief_response(underlying, store, journal, now)
+    if re.search(r"\bspark audit\b|\bspark check\b|\baudit.*spark\b", lowered):
+        from bot.spark import spark_audit_response
+
+        return spark_audit_response(
+            text, underlying, store, journal, now, live_models, grounding
+        )
     if re.search(r"\bdex\b", lowered) or "delta exposure" in lowered:
         return dex_brief_response(underlying, store, journal, now)
     if re.search(r"\bcharm\b", lowered) or "charm exposure" in lowered:
@@ -457,16 +481,53 @@ def live_brief(
 ) -> str:
     chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
     bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
-    if ingest_first_working(chains, ingest_chain, underlying, store, journal, now, context_factory) is None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    lock = threading.RLock()
+    chain_result: list[Optional[str]] = [None]
+    bars_result: list[Optional[str]] = [None]
+
+    def _chain_job() -> None:
+        with lock:
+            chain_result[0] = ingest_first_working(
+                chains, ingest_chain, underlying, store, journal, now, context_factory
+            )
+
+    def _bars_job() -> None:
+        with lock:
+            used = ingest_first_working(
+                bars, ingest_bars, underlying, store, journal, now, context_factory
+            )
+            if used != "finnhub":
+                ingest_first_working(
+                    ("finnhub",), ingest_bars, underlying, store, journal, now, context_factory
+                )
+            bars_result[0] = used
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        chain_future = pool.submit(_chain_job)
+        bars_future = pool.submit(_bars_job)
+        chain_future.result()
+        bars_future.result()
+    if chain_result[0] is None:
         raise FeedUnavailableError(f"all chain feeds failed for {underlying}")
-    bars_used = ingest_first_working(bars, ingest_bars, underlying, store, journal, now, context_factory)
-    if bars_used != "finnhub":
-        ingest_first_working(("finnhub",), ingest_bars, underlying, store, journal, now, context_factory)
     backfill_iv_history(store, journal, now)
     reply, signal = handle_chat_query(
         "live session brief", underlying, store, journal, now, live_models, grounding, cards
     )
     _record_option_iv(underlying, store, journal, now, context_factory)
+    if live_models:
+        from bot.spark import spark_audit_response
+
+        try:
+            audit = spark_audit_response(
+                "live session spark audit", underlying, store, journal, now,
+                live_models=True, grounding=grounding,
+            )
+            reply += f"\n{audit}"
+        except ValueError:
+            pass
     if paper_trade:
         note = paper_trade_step(underlying, signal, store.read_latest_bar(underlying), journal, now, store)
         if note:

@@ -4,6 +4,14 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Live toggle and confidence-gated broker sends (2026-11-01)
+
+* `/live` arms and disarms live ordering through the unchanged `enable_live` gate (signature, full checklist, journaled paper evidence, clean halt/kill state) and the `kill_switch`. Misses journal `live_blocked` with the reason. See `enable_live_ui` and `kill_live_ui` in `bot/live_trade.py`.
+* `DashboardSettings` carries `live_auto_send` (default off) and `live_min_confidence` (default 0.80), edited on `/settings` and `/live`, persisted in `settings.json`, validated 0-1 at the boundary. Below-threshold cards journal `live_skipped` and never reach the venue.
+* `take_live_trade` sends one qualifying card through `submit_live` with option legs built from the card and sized by `size_for_card`; `maybe_auto_live` repeats the check across cards when auto-send is on, caps at 3 fills per run, and never raises. The formal gate check still exits `PASS` on this tree.
+* Strategy feedback (`bot/strategy.py`: `parse_strategy`, `evaluate_strategy`, `POST /strategy`) and the visual builder (`bot/builder.py`, `GET /builder`) backtest guardrails over stored snapshots and bars through `replay_week` with a custom `signal_fn`.
+* Feeds use a 10s timeout with a 60s GET cache, multi-symbol refresh runs concurrently, `SCAN_BROAD=1` widens the universe, and ideas rank top-15 with quote-aware quality adjustments that leave quoteless fixtures scoring as before.
+
 ## Bring-your-own model key (2026-11-01)
 
 * `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default OpenAI) and `USER_MODEL_ID` (default gpt-4o-mini) routes the analyst and reviewer roles to any OpenAI-compatible chat API. The operator's key pays their bill, so no day budget is needed; receipts journal at zero cost. Grounding, voice, and image roles stay on the built-in key. See `read_user_model` and `select_backend` in `bot/models.py`.

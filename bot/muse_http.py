@@ -232,6 +232,17 @@ def openapi_spec() -> dict:
                     "responses": {"200": {"description": "Saved settings"}},
                 },
             },
+            "/live": {
+                "get": {
+                    "summary": "Live ordering status plus arm/disarm toggle",
+                    "responses": {"200": {"description": "Live page"}},
+                },
+                "post": {
+                    "summary": "Arm (enable) or disarm (kill) live ordering",
+                    "requestBody": {"required": True},
+                    "responses": {"200": {"description": "Live page with result"}},
+                },
+            },
             "/holdings": {
                 "post": {
                     "summary": "Save operator holdings",
@@ -262,6 +273,19 @@ def openapi_spec() -> dict:
                 "get": {
                     "summary": "Live board fragment",
                     "responses": {"200": {"description": "Board table fragment"}},
+                }
+            },
+            "/builder": {
+                "get": {
+                    "summary": "Visual strategy builder",
+                    "responses": {"200": {"description": "Builder form plus preview"}},
+                }
+            },
+            "/strategy": {
+                "post": {
+                    "summary": "Evaluate a user-stated strategy",
+                    "requestBody": {"required": True},
+                    "responses": {"200": {"description": "Strategy feedback"}},
                 }
             },
             "/chart": {
@@ -393,7 +417,7 @@ def _multipart_file(payload: bytes) -> bytes | None:
 ACTION_POST_ONLY = frozenset({
     "set_holdings", "set_settings", "set_profile", "run_session",
     "backfill_iv", "load_snapshot", "read_chart_image", "read_document",
-    "take_paper_trade", "onboarding_step",
+    "take_paper_trade", "take_live_trade", "onboarding_step",
     "set_alert_rule", "cancel_alert_rule",
     "set_user_model", "clear_user_model",
 })
@@ -456,8 +480,19 @@ def _settings_html(store: SnapshotStore) -> str:
         f"<input name=\"default_underlying\" value=\"{html.escape(settings.default_underlying, quote=True)}\" size=\"8\">"
         "</label><label class=\"field\">refresh_seconds"
         f"<input name=\"refresh_seconds\" value=\"{settings.refresh_seconds}\" size=\"6\">"
+        "</label>"
+        f"<label class=\"field\">live_auto_send<select name=\"live_auto_send\">"
+        f"<option value=\"0\"{' selected' if not settings.live_auto_send else ''}>off</option>"
+        f"<option value=\"1\"{' selected' if settings.live_auto_send else ''}>on</option>"
+        "</select></label>"
+        "<label class=\"field\">live_min_confidence"
+        f"<input name=\"live_min_confidence\" value=\"{settings.live_min_confidence:.2f}\" size=\"6\">"
         "</label><input type=\"hidden\" name=\"next\" value=\"/settings\">"
         "<button class=\"solid\" type=\"submit\">save settings</button></form>"
+        "<p class=\"sub\">live_auto_send on means qualifying trade cards "
+        "(confidence at or above live_min_confidence) are sent to the live broker "
+        "when the adapter is armed; the adapter itself is armed only on the "
+        "<a href=\"/live\">live page</a>, never here.</p>"
         "<form class=\"block\" method=\"post\" action=\"/settings\">"
         "<label class=\"field\">model key (session only, never stored)"
         "<input type=\"password\" name=\"user_model_key\" value=\"\" size=\"24\" autocomplete=\"off\">"
@@ -476,6 +511,62 @@ def _settings_html(store: SnapshotStore) -> str:
     return page(
         "settings", "settings, shared by all pages", settings_summary(settings), body,
         settings.default_underlying, "settings", settings, "/settings",
+    )
+
+
+def _live_html(store: SnapshotStore, journal: Journal, now: datetime, note: str = "") -> str:
+    import bot.autonomy as autonomy
+    from bot.live_trade import live_status_text
+    from bot.theme import page
+
+    settings = store.read_settings()
+    status = live_status_text(store, journal, now)
+    armed = autonomy.live_enabled
+    badge = (
+        "<p><span class=\"fresh\">armed</span> -- live orders can move money</p>"
+        if armed
+        else "<p><span class=\"stale\">off</span> -- live orders are blocked</p>"
+    )
+    note_html = f"<pre>{html.escape(note)}</pre>" if note else ""
+    body = (
+        f"<p class=\"sub\">{html.escape(status)}</p>{badge}{note_html}"
+        "<h2>Arm</h2>"
+        "<form class=\"block\" method=\"post\" action=\"/live\">"
+        "<input type=\"hidden\" name=\"action\" value=\"enable\">"
+        "<label class=\"field\">operator signature"
+        "<input name=\"signature\" value=\"\" size=\"24\" autocomplete=\"off\">"
+        "</label>"
+        "<label class=\"field\">paper evidence reviewed"
+        "<input type=\"checkbox\" name=\"paper_evidence_reviewed\" value=\"1\">"
+        "</label>"
+        "<label class=\"field\">risk limits set"
+        "<input type=\"checkbox\" name=\"risk_limits_set\" value=\"1\">"
+        "</label>"
+        "<label class=\"field\">kill switch tested"
+        "<input type=\"checkbox\" name=\"kill_switch_tested\" value=\"1\">"
+        "</label>"
+        "<button class=\"solid\" type=\"submit\">arm live ordering</button></form>"
+        "<p class=\"sub\">Arming needs a signature, all three checklist boxes, "
+        "journaled paper evidence (clean days, drawdown bound, a halt or kill drill), "
+        "and a clean halt/kill state. Misses journal live_blocked with the reason.</p>"
+        "<h2>Disarm</h2>"
+        "<form class=\"block\" method=\"post\" action=\"/live\">"
+        "<input type=\"hidden\" name=\"action\" value=\"kill\">"
+        "<button class=\"solid\" type=\"submit\">kill switch (disarm)</button></form>"
+        "<h2>Auto-send threshold</h2>"
+        "<form class=\"block\" method=\"post\" action=\"/settings\">"
+        f"<label class=\"field\">live_auto_send<select name=\"live_auto_send\">"
+        f"<option value=\"0\"{' selected' if not settings.live_auto_send else ''}>off</option>"
+        f"<option value=\"1\"{' selected' if settings.live_auto_send else ''}>on</option>"
+        "</select></label>"
+        "<label class=\"field\">live_min_confidence"
+        f"<input name=\"live_min_confidence\" value=\"{settings.live_min_confidence:.2f}\" size=\"6\">"
+        "</label><input type=\"hidden\" name=\"next\" value=\"/live\">"
+        "<button class=\"solid\" type=\"submit\">save threshold</button></form>"
+    )
+    return page(
+        "live ordering", "live ordering, armed only with signature plus evidence",
+        status, body, settings.default_underlying, "live", settings, "/live",
     )
 
 
@@ -714,6 +805,37 @@ def route_http(
         from bot.charts import live_board_fragment
 
         return HttpResponse.html(200, live_board_fragment(store, now))
+    if method == "GET" and clean == "/builder":
+        from bot.builder import builder_html, builder_preview_text
+
+        query_string = path.split("?", 1)[1] if "?" in path else ""
+        params = parse_qs(query_string)
+        flat: dict[str, str] = {
+            key: (values[0] if values else "") for key, values in params.items()
+        }
+        if "underlying" not in flat:
+            flat["underlying"] = _page_underlying(path, store)
+        preview = ""
+        if params:
+            preview = builder_preview_text(store, journal, now, flat)
+        return HttpResponse.html(200, builder_html(store, journal, now, flat, preview))
+    if method == "POST" and clean == "/strategy":
+        from bot.strategy import evaluate_strategy, parse_strategy
+
+        text = ""
+        underlying = _page_underlying(path, store)
+        if isinstance(payload, dict):
+            text = str(payload.get("text", payload.get("strategy", "")) or "")
+            raw_underlying = str(payload.get("underlying", "") or "").strip()
+            if raw_underlying:
+                underlying = raw_underlying.upper()
+            if not text.strip():
+                return _fail(400, "strategy needs text like 'my strategy: long SPY 7-30 DTE'")
+        else:
+            return _fail(400, "strategy needs a JSON object with text")
+        return HttpResponse.json(
+            200, {"ok": True, "reply": evaluate_strategy(parse_strategy(text, underlying, store), store, journal, now)}
+        )
     if method == "GET" and clean == "/earnings":
         from bot.earnings import earnings_html
 
@@ -883,6 +1005,34 @@ def route_http(
         return HttpResponse.html(200, _action_html(tool, underlying, reply.reply, now, store))
     if method == "GET" and clean == "/settings":
         return HttpResponse.html(200, _settings_html(store))
+    if method == "GET" and clean == "/live":
+        return HttpResponse.html(200, _live_html(store, journal, now))
+    if method == "POST" and clean == "/live":
+        if not isinstance(payload, dict):
+            return HttpResponse.html(400, _cards_error_html("live needs an action plus arguments"))
+        from bot.live_trade import enable_live_ui, kill_live_ui
+
+        action = str(payload.get("action", "") or "").strip().lower()
+        try:
+            if action == "kill":
+                note = kill_live_ui(store, journal, now)
+            elif action == "enable":
+                checklist = {
+                    "paper_evidence_reviewed": _truthy(payload.get("paper_evidence_reviewed")),
+                    "risk_limits_set": _truthy(payload.get("risk_limits_set")),
+                    "kill_switch_tested": _truthy(payload.get("kill_switch_tested")),
+                }
+                note = enable_live_ui(
+                    str(payload.get("signature", "") or ""), checklist,
+                    store, journal, config, now,
+                )
+            else:
+                return HttpResponse.html(400, _cards_error_html("live action must be enable or kill"))
+        except ValueError as exc:
+            return HttpResponse.html(400, _cards_error_html(str(exc)))
+        if isinstance(payload, FormData) and str(payload.get("next", "") or ""):
+            return HttpResponse.redirect(str(payload.get("next")))
+        return HttpResponse.html(200, _live_html(store, journal, now, note))
     if method == "POST" and clean == "/settings":
         if not isinstance(payload, dict):
             return _fail(400, "settings must be an object or a form post")
@@ -901,6 +1051,8 @@ def route_http(
                 "theme": saved.theme,
                 "default_underlying": saved.default_underlying,
                 "refresh_seconds": saved.refresh_seconds,
+                "live_auto_send": saved.live_auto_send,
+                "live_min_confidence": saved.live_min_confidence,
                 "user_key_set": user_status.get("user_key_set"),
                 "user_model": user_status.get("user_model"),
                 "user_source": user_status.get("user_source"),
@@ -942,7 +1094,8 @@ def _cards_error_html(message: str) -> str:
     from bot.theme import BRAND
 
     return (
-        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>trade cards | {BRAND}</title></head>"
         f"<body><h1>trade cards</h1><p>{html.escape(message, quote=True)}</p></body></html>"
     )

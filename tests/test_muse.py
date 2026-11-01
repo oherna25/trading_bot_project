@@ -137,7 +137,7 @@ def test_registry_tools_answer(monkeypatch):
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     assert set(TOOL_REGISTRY) == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
-        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
+        "get_vex_brief", "get_dex_brief", "get_spark_audit", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
         "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
         "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
@@ -148,6 +148,8 @@ def test_registry_tools_answer(monkeypatch):
         "set_alert_rule", "list_alert_rules", "cancel_alert_rule",
         "get_open_brief", "get_live_board",
         "set_user_model", "clear_user_model",
+        "evaluate_strategy", "show_builder",
+        "take_live_trade", "get_live_status",
     }
     store = _seeded_store()
     journal = Journal()
@@ -246,7 +248,7 @@ def test_route_mcp_tools_list_names_registry():
     body = _json_body(response)
     assert {tool["name"] for tool in body["tools"]} == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
-        "get_vex_brief", "get_dex_brief", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
+        "get_vex_brief", "get_dex_brief", "get_spark_audit", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
         "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
         "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
@@ -257,6 +259,8 @@ def test_route_mcp_tools_list_names_registry():
         "set_alert_rule", "list_alert_rules", "cancel_alert_rule",
         "get_open_brief", "get_live_board",
         "set_user_model", "clear_user_model",
+        "evaluate_strategy", "show_builder",
+        "take_live_trade", "get_live_status",
     }
 
 

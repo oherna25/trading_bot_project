@@ -445,6 +445,11 @@ def query_trade_cards(
             "cards": len(cards),
         },
     )
+    if store.read_settings().live_auto_send:
+        from bot.config import operator_config
+        from bot.live_trade import maybe_auto_live
+
+        maybe_auto_live(cards, store, journal, operator_config(store.read_profile()), now)
     if cache_key is not None:
         if len(_card_cache) >= CARD_CACHE_MAX:
             _card_cache.pop(next(iter(_card_cache)), None)

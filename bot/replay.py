@@ -10,9 +10,8 @@ from typing import Any, Optional, Sequence
 from bot.diff import compact_dollars, signed_dollars
 from bot.exposure import compute_gex
 from bot.journal import Journal
-from bot.research import analyst_tool, derive_display
 from bot.risk import IntentRejectedError, build_intent, fire_halt, submit_paper
-from bot.shapes import Bar, ChainSnapshot, OrderIntent, PaperEvidence, Position, RiskLimits, RiskState
+from bot.shapes import Bar, ChainSnapshot, OrderIntent, PaperEvidence, Position, RiskLimits, RiskState, Signal
 from bot.store import SnapshotStore, snapshot_id_for
 
 REPLAY_COMMISSION_DEFAULT = 0.0
@@ -58,6 +57,7 @@ def replay_week(
     commission_per_fill: float = REPLAY_COMMISSION_DEFAULT,
     slippage_bps: float = REPLAY_SLIPPAGE_BPS_DEFAULT,
     run_id: Optional[str] = None,
+    signal_fn: Any | None = None,
 ) -> Journal:
     ordered = sorted(snapshot_list, key=lambda s: s.timestamp_utc)
     if run_id is None and ordered:
@@ -136,12 +136,26 @@ def replay_week(
             if active_state.day_pnl <= -active_limits.max_day_loss and not active_state.halt_active:
                 active_state = fire_halt(active_state)
                 journal.append(stamp, "halt", {"day_pnl": active_state.day_pnl})
-        signal = derive_display(
-            replace(analyst_tool("replay", snapshot, profile, spot_bar), snapshot_id=snapshot_id),
-            snapshot,
-            profile,
-            spot_bar,
-        )
+        if signal_fn is not None:
+            custom = signal_fn(snapshot, profile, spot_bar)
+            if custom is None:
+                signal = Signal(
+                    direction="flat", thesis="custom strategy skips", confidence=0.0,
+                    snapshot_id=snapshot_id, symbol=snapshot.underlying,
+                )
+            elif isinstance(custom, Signal):
+                signal = replace(custom, snapshot_id=snapshot_id)
+            else:
+                signal = custom
+        else:
+            from bot.research import analyst_tool, derive_display
+
+            signal = derive_display(
+                replace(analyst_tool("replay", snapshot, profile, spot_bar), snapshot_id=snapshot_id),
+                snapshot,
+                profile,
+                spot_bar,
+            )
         journal.append(
             snapshot.timestamp_utc,
             "signal",

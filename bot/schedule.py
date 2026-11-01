@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Callable, Sequence
 
@@ -12,6 +14,24 @@ from bot.journal import Journal
 from bot.persist import load_bundle, save_bundle
 from bot.research import ingest_first_working, live_brief
 from bot.store import SnapshotStore
+
+
+DEFAULT_SCAN_UNIVERSE = ("SPY", "QQQ", "IWM", "DIA", "AAPL", "MSFT", "NVDA", "TSLA")
+
+
+def scan_universe() -> list[str]:
+    raw = os.environ.get("SCAN_UNIVERSE", "")
+    if raw.strip():
+        return normalize_underlyings(raw)
+    return list(DEFAULT_SCAN_UNIVERSE)
+
+
+def broad_symbols(fixed: Sequence[str], store: SnapshotStore | None) -> list[str]:
+    base = tick_symbols(fixed, store)
+    for symbol in scan_universe():
+        if symbol not in base:
+            base.append(symbol)
+    return base
 
 
 def normalize_underlyings(underlying: str | Sequence[str]) -> list[str]:
@@ -37,6 +57,23 @@ def tick_symbols(fixed: Sequence[str], store: SnapshotStore | None) -> list[str]
     return tick or ["SPY"]
 
 
+def _scan_broad_requested(broad: bool | None = None) -> bool:
+    if broad is not None:
+        return broad
+    return os.environ.get("SCAN_BROAD", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _resolve_symbols(
+    underlying: str | Sequence[str],
+    store: SnapshotStore | None,
+    broad: bool | None = None,
+) -> list[str]:
+    fixed = normalize_underlyings(underlying)
+    if _scan_broad_requested(broad):
+        return broad_symbols(fixed, store)
+    return tick_symbols(fixed, store)
+
+
 def run_session_core(
     underlying: str | Sequence[str],
     store: SnapshotStore,
@@ -50,6 +87,7 @@ def run_session_core(
     grounding: bool = False,
     cards: bool = False,
     paper_trade: bool = False,
+    broad: bool | None = None,
 ) -> str:
     """Ingest plus brief plus session journals against loaded state.
 
@@ -57,13 +95,13 @@ def run_session_core(
     nothing and saves nothing; the caller owns the bundle.
     """
     moment = now or datetime.now(timezone.utc)
-    symbols = tick_symbols(normalize_underlyings(underlying), store)
-    replies = []
-    failures = []
-    for symbol in symbols:
+    symbols = _resolve_symbols(underlying, store, broad)
+    lock = threading.RLock()
+
+    def _one(symbol: str) -> tuple[str, str | None, str | None]:
         try:
-            replies.append(
-                live_brief(
+            with lock:
+                text = live_brief(
                     symbol,
                     store,
                     journal,
@@ -76,11 +114,32 @@ def run_session_core(
                     cards,
                     paper_trade,
                 )
-            )
-            push_alerts(symbol, store, journal, moment)
+                push_alerts(symbol, store, journal, moment)
+            return symbol, text, None
         except FeedUnavailableError as exc:
-            journal.append(moment, "session_failed", {"underlying": symbol, "reason": str(exc)})
-            failures.append(f"scheduled session failed for {symbol}: {exc}")
+            with lock:
+                journal.append(moment, "session_failed", {"underlying": symbol, "reason": str(exc)})
+            return symbol, None, f"scheduled session failed for {symbol}: {exc}"
+
+    replies: list[str] = []
+    failures: list[str] = []
+    if len(symbols) > 1:
+        with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as pool:
+            outcomes = list(pool.map(_one, symbols))
+        by_symbol = {symbol: (text, error) for symbol, text, error in outcomes}
+        for symbol in symbols:
+            text, error = by_symbol[symbol]
+            if text is not None:
+                replies.append(text)
+            if error is not None:
+                failures.append(error)
+    else:
+        for symbol in symbols:
+            _, text, error = _one(symbol)
+            if text is not None:
+                replies.append(text)
+            if error is not None:
+                failures.append(error)
     if replies:
         journal.append(moment, "session_saved", {"underlyings": symbols, "store_dir": store_dir})
     from bot.tradecards import drain_reason_queue
@@ -152,6 +211,7 @@ def refresh_core(
     bar_feeds: Sequence[str] | None = None,
     context_factory: Callable[[str], FeedContext] = live_context,
     store_dir: str = "",
+    broad: bool | None = None,
 ) -> dict[str, str | None]:
     """Ingest-only refresh against passed-in state.
 
@@ -161,16 +221,33 @@ def refresh_core(
     moment = now or datetime.now(timezone.utc)
     chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
     bars = tuple(bar_feeds) if bar_feeds is not None else BAR_FEEDS
+    symbols = normalize_underlyings(underlying)
+    if _scan_broad_requested(broad):
+        for symbol in scan_universe():
+            if symbol not in symbols:
+                symbols.append(symbol)
+    lock = threading.RLock()
     used: dict[str, str | None] = {}
-    for symbol in normalize_underlyings(underlying):
-        chain = ingest_first_working(chains, ingest_chain, symbol, store, journal, moment, context_factory)
-        bars_used = ingest_first_working(bars, ingest_bars, symbol, store, journal, moment, context_factory)
-        if bars_used != "finnhub":
-            ingest_first_working(("finnhub",), ingest_bars, symbol, store, journal, moment, context_factory)
-        if chain is None:
-            journal.append(moment, "refresh_failed", {"underlying": symbol})
-        evaluate_alert_rules(store, journal, moment, symbol)
-        used[symbol] = chain
+
+    def _one(symbol: str) -> tuple[str, str | None]:
+        with lock:
+            chain = ingest_first_working(chains, ingest_chain, symbol, store, journal, moment, context_factory)
+            bars_used = ingest_first_working(bars, ingest_bars, symbol, store, journal, moment, context_factory)
+            if bars_used != "finnhub":
+                ingest_first_working(("finnhub",), ingest_bars, symbol, store, journal, moment, context_factory)
+            if chain is None:
+                journal.append(moment, "refresh_failed", {"underlying": symbol})
+            evaluate_alert_rules(store, journal, moment, symbol)
+        return symbol, chain
+
+    if len(symbols) > 1:
+        with ThreadPoolExecutor(max_workers=min(8, len(symbols))) as pool:
+            for symbol, chain in pool.map(_one, symbols):
+                used[symbol] = chain
+    else:
+        for symbol in symbols:
+            _, chain = _one(symbol)
+            used[symbol] = chain
     backfill_iv_history(store, journal, moment)
     journal.append(moment, "refreshed", {"underlyings": sorted(used), "store_dir": store_dir})
     return used
