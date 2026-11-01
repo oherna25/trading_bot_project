@@ -629,6 +629,231 @@ def _net_text(net_debit: Optional[float]) -> str:
     return f"${-net_debit:.0f} credit"
 
 
+def _clamp01(value: float) -> float:
+    return min(1.0, max(0.0, value))
+
+
+def confidence_meter_html(confidence: float) -> str:
+    pct = _clamp01(float(confidence)) * 100.0
+    band = "hot" if confidence >= 0.7 else ("warm" if confidence >= 0.5 else "cool")
+    return (
+        f"<div class=\"conf-row\"><span>confidence <b>{confidence:.2f}</b></span>"
+        f"<div class=\"meter {band}\" role=\"img\" aria-label=\"confidence {confidence:.2f}\">"
+        f"<i style=\"width:{pct:.0f}%\"></i></div></div>"
+    )
+
+
+def card_badges_html(card: TradeCard) -> str:
+    arrow = "▲" if card.direction == "long" else ("▼" if card.direction == "short" else "●")
+    regime_mark = "●"
+    return (
+        f"<span class=\"badge {html.escape(card.direction)}\">{html.escape(arrow)} "
+        f"{html.escape(card.direction)}</span>"
+        f"<span class=\"badge regime\">{html.escape(regime_mark)} "
+        f"{html.escape(card.regime)}</span>"
+        f"<span class=\"badge expiry\">{html.escape(card.expiry)}</span>"
+    )
+
+
+def spot_flip_gauge_svg(spot: Optional[float], flip: Optional[float]) -> str:
+    width, height = 300, 56
+    left, right, top = 12, 12, 10
+    track_y = top + 16
+    if spot is None or flip is None:
+        return (
+            f"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
+            "role=\"img\" aria-label=\"spot versus flip unavailable\">"
+            "<text x=\"12\" y=\"32\" font-size=\"12\" fill=\"#8b949e\">"
+            "spot vs flip n/a</text></svg>"
+        )
+    center = (spot + flip) / 2.0
+    half = max(abs(spot - flip) * 2.0, abs(spot) * 0.03, 1.0)
+
+    def x_of(value: float) -> float:
+        frac = (value - (center - half)) / (2.0 * half)
+        return left + _clamp01(frac) * (width - left - right)
+
+    spot_x = x_of(spot)
+    flip_x = x_of(flip)
+    above = spot >= flip
+    caption = f"spot {spot:g} {'above' if above else 'below'} flip {flip:g}"
+    return (
+        f"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
+        f"role=\"img\" aria-label=\"{html.escape(caption)}\">"
+        f"<rect x=\"{left}\" y=\"{track_y}\" width=\"{width - left - right}\" height=\"8\" "
+        "rx=\"4\" fill=\"#eef1f4\"/>"
+        f"<line x1=\"{flip_x:.1f}\" y1=\"{top}\" x2=\"{flip_x:.1f}\" y2=\"{track_y + 14}\" "
+        "stroke=\"#24292f\" stroke-width=\"2\" stroke-dasharray=\"5 3\">"
+        f"<title>flip {flip:g}</title></line>"
+        f"<circle cx=\"{spot_x:.1f}\" cy=\"{track_y + 4:.1f}\" r=\"7\" fill=\"#0969da\">"
+        f"<title>spot {spot:g}</title></circle>"
+        f"<text x=\"{left}\" y=\"{height - 6}\" font-size=\"11\" fill=\"#57606a\">"
+        f"{html.escape(f'{center - half:g}')}</text>"
+        f"<text x=\"{width - right}\" y=\"{height - 6}\" text-anchor=\"end\" "
+        f"font-size=\"11\" fill=\"#57606a\">{html.escape(f'{center + half:g}')}</text>"
+        "</svg>"
+    )
+
+
+def payoff_svg(card: TradeCard) -> str:
+    width, height = 320, 132
+    left, right, top, bottom = 44, 12, 12, 26
+    loss = card.max_loss if card.max_loss is not None and card.max_loss > 0 else (
+        abs(card.net_debit) if card.net_debit else 100.0
+    )
+    low = high = card.strike
+    if card.hedge_strike is not None:
+        low = min(card.strike, card.hedge_strike)
+        high = max(card.strike, card.hedge_strike)
+        span = max(high - low, 1.0)
+        x0, x1 = low - span * 0.6, high + span * 0.6
+    else:
+        ref = abs((card.breakeven or card.strike) - card.strike)
+        span = max(ref * 2.0, abs(card.strike) * 0.05, 5.0)
+        x0, x1 = card.strike - span, card.strike + span
+    width_dollars = abs(high - low) * 100.0 if card.hedge_strike is not None else loss * 2.0
+    profit = max(width_dollars - loss, loss * 0.5, 10.0)
+    y_top, y_bot = profit * 1.15, -loss * 1.15
+    if y_top <= 0:
+        y_top = 10.0
+    if y_bot >= 0:
+        y_bot = -10.0
+
+    def x_of(value: float) -> float:
+        frac = (value - x0) / (x1 - x0) if x1 != x0 else 0.5
+        return left + _clamp01(frac) * (width - left - right)
+
+    def y_of(pnl: float) -> float:
+        frac = (y_top - pnl) / (y_top - y_bot) if y_top != y_bot else 0.5
+        return top + frac * (height - top - bottom)
+
+    zero_y = y_of(0.0)
+    if card.hedge_strike is None:
+        if card.call_or_put == "put":
+            points = [(x0, profit), (card.strike, -loss), (x1, -loss)]
+        else:
+            points = [(x0, -loss), (card.strike, -loss), (x1, profit)]
+    elif card.call_or_put == "put":
+        points = [(x0, profit), (low, profit), (high, -loss), (x1, -loss)]
+    else:
+        points = [(x0, -loss), (low, -loss), (high, profit), (x1, profit)]
+    path = "M " + " L ".join(f"{x_of(x):.1f} {y_of(y):.1f}" for x, y in points)
+    kink_labels = []
+    for mark, label in ((low, f"{low:g}"), (high, f"{high:g}")):
+        kink_labels.append(
+            f"<text x=\"{x_of(mark):.1f}\" y=\"{height - 8}\" text-anchor=\"middle\" "
+            f"font-size=\"10\" fill=\"#57606a\">{html.escape(label)}</text>"
+        )
+    caption = f"payoff at expiry, max loss {_money(card.max_loss)}"
+    if card.breakeven is not None:
+        caption += f", breakeven {card.breakeven:g}"
+    return (
+        f"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
+        f"role=\"img\" aria-label=\"{html.escape(caption)}\">"
+        f"<line x1=\"{left}\" y1=\"{zero_y:.1f}\" x2=\"{width - right}\" y2=\"{zero_y:.1f}\" "
+        "stroke=\"#57606a\" stroke-width=\"1\" stroke-dasharray=\"4 3\"/>"
+        f"<path d=\"{path}\" fill=\"none\" stroke=\"#0969da\" stroke-width=\"2.5\" "
+        "stroke-linejoin=\"round\" stroke-linecap=\"round\"/>"
+        f"<text x=\"{left}\" y=\"{top + 10}\" font-size=\"10\" fill=\"#1a7f37\">"
+        f"+{_money(profit)}</text>"
+        f"<text x=\"{left}\" y=\"{height - bottom + 12:.0f}\" font-size=\"10\" fill=\"#cf222e\">"
+        f"-{_money(loss)}</text>"
+        f"{''.join(kink_labels)}</svg>"
+    )
+
+
+def card_facts_html(card: TradeCard, profile=None) -> str:
+    facts = [
+        ("Spread", f"{card.spread}"),
+        ("Strike", f"{card.strike:g}"),
+        ("Net", _net_text(card.net_debit)),
+        ("Max loss", _money(card.max_loss)),
+        ("Breakeven", f"{card.breakeven:g}" if card.breakeven is not None else "n/a"),
+        ("Wall", f"{card.wall_exposure:.0f}" if card.wall_exposure is not None else "n/a"),
+        ("IV rank", f"{card.iv_rank:.0f}" if card.iv_rank is not None else "n/a"),
+        ("Earnings", card.earnings_date or "none"),
+    ]
+    if profile is None:
+        sizing = SIZING_HINT
+    else:
+        _, _, sizing = size_for_card(card.max_loss, risk_cap_for(profile))
+        sizing = sizing
+    cells = "".join(
+        f"<div class=\"fact\"><span>{html.escape(name)}</span><b>{html.escape(value)}</b></div>"
+        for name, value in facts
+    )
+    return f"<div class=\"facts\">{cells}</div><p class=\"sub\">size: {html.escape(sizing)}</p>"
+
+
+def card_article(
+    card: TradeCard,
+    index: int,
+    profile=None,
+    compact: bool = False,
+) -> str:
+    stats = [
+        f"contract {card.symbol} {card.direction} {card.spread} expiry {card.expiry}",
+        f"{entry_text(card)}",
+        f"{targets_text(card)}",
+        f"confidence {card.confidence:.2f}",
+        f"max loss {_money(card.max_loss)}",
+        f"breakeven {_rounded(card.breakeven, 2) if card.breakeven is not None else 'n/a'}",
+        f"net {_net_text(card.net_debit)}",
+        f"spread width {card.spread_pct:.1f}%" if card.spread_pct is not None else "spread width n/a",
+        f"wall exposure {card.wall_exposure:.0f}"
+        if card.wall_exposure is not None
+        else "wall exposure n/a",
+        f"regime {card.regime}",
+        f"spot {_rounded(card.spot, 2) if card.spot is not None else 'n/a'} "
+        f"vs flip {_rounded(card.flip_point, 2) if card.flip_point is not None else 'n/a'}",
+    ]
+    if card.earnings_date is not None:
+        stats.append(f"earnings {card.earnings_date} inside expiry")
+    if card.iv_rank is not None:
+        stats.append(f"iv rank {card.iv_rank:.1f}")
+    if profile is None:
+        stats.append(SIZING_HINT)
+    else:
+        _, _, sizing = size_for_card(card.max_loss, risk_cap_for(profile))
+        stats.append(f"size: {sizing}")
+    items = "".join(f"<li>{html.escape(item)}</li>" for item in stats)
+    take = (
+        "<form class=\"block\" method=\"post\" action=\"/action\">"
+        "<input type=\"hidden\" name=\"tool\" value=\"take_paper_trade\">"
+        f"<input type=\"hidden\" name=\"underlying\" value=\"{html.escape(card.symbol, quote=True)}\">"
+        f"<input type=\"hidden\" name=\"snapshot\" value=\"{html.escape(card.snapshot_id, quote=True)}\">"
+        f"<input type=\"hidden\" name=\"index\" value=\"{index}\">"
+        "<button class=\"solid\" type=\"submit\">take this trade (paper)</button></form>"
+    )
+    gauge_cap = "spot above flip: supports longs" if (
+        card.spot is not None and card.flip_point is not None and card.spot >= card.flip_point
+    ) else (
+        "spot below flip: favors shorts" if (
+            card.spot is not None and card.flip_point is not None
+        ) else "spot vs flip unavailable"
+    )
+    visual = (
+        "<div class=\"card-visual\">"
+        f"<div class=\"card-head\"><h2>{html.escape(card.symbol)} "
+        f"{html.escape(card.direction)} {html.escape(card.spread)}</h2>"
+        f"{card_badges_html(card)}</div>"
+        f"{confidence_meter_html(card.confidence)}"
+        "<div class=\"visual-grid\">"
+        "<div class=\"visual\"><h3>Payoff at expiry</h3>"
+        f"{payoff_svg(card)}"
+        f"<p class=\"cap\">{html.escape(targets_text(card))}</p></div>"
+        "<div class=\"visual\"><h3>Spot vs flip</h3>"
+        f"{spot_flip_gauge_svg(card.spot, card.flip_point)}"
+        f"<p class=\"cap\">{html.escape(gauge_cap)}</p></div>"
+        "</div>"
+        f"{card_facts_html(card, profile)}"
+        "</div>"
+        f"<div class=\"card-body\"><ul>{items}</ul>"
+        f"<p>reason: {html.escape(card.reason)}</p>{take}</div>"
+    )
+    return f"<article><div class=\"trade-card\">{visual}</div></article>"
+
+
 def trade_cards_html(
     cards: Sequence[TradeCard],
     underlying: str,
@@ -646,50 +871,10 @@ def trade_cards_html(
             title, title, f"{len(cards)} cards", "<p>trade cards: none found</p>",
             underlying, "cards", resolved, f"/cards?underlying={underlying}",
         )
-    parts = []
-    for offset, card in enumerate(cards):
-        index = start_index + offset
-        stats = [
-            f"contract {card.symbol} {card.direction} {card.spread} expiry {card.expiry}",
-            f"{entry_text(card)}",
-            f"{targets_text(card)}",
-            f"confidence {card.confidence:.2f}",
-            f"max loss {_money(card.max_loss)}",
-            f"breakeven {_rounded(card.breakeven, 2) if card.breakeven is not None else 'n/a'}",
-            f"net {_net_text(card.net_debit)}",
-            f"spread width {card.spread_pct:.1f}%" if card.spread_pct is not None else "spread width n/a",
-            f"wall exposure {card.wall_exposure:.0f}"
-            if card.wall_exposure is not None
-            else "wall exposure n/a",
-            f"regime {card.regime}",
-            f"spot {_rounded(card.spot, 2) if card.spot is not None else 'n/a'} "
-            f"vs flip {_rounded(card.flip_point, 2) if card.flip_point is not None else 'n/a'}",
-        ]
-        if card.earnings_date is not None:
-            stats.append(f"earnings {card.earnings_date} inside expiry")
-        if card.iv_rank is not None:
-            stats.append(f"iv rank {card.iv_rank:.1f}")
-        if profile is None:
-            stats.append(SIZING_HINT)
-        else:
-            _, _, sizing = size_for_card(card.max_loss, risk_cap_for(profile))
-            stats.append(f"size: {sizing}")
-        items = "".join(f"<li>{html.escape(item)}</li>" for item in stats)
-        take = (
-            "<form class=\"block\" method=\"post\" action=\"/action\">"
-            "<input type=\"hidden\" name=\"tool\" value=\"take_paper_trade\">"
-            f"<input type=\"hidden\" name=\"underlying\" value=\"{html.escape(card.symbol, quote=True)}\">"
-            f"<input type=\"hidden\" name=\"snapshot\" value=\"{html.escape(card.snapshot_id, quote=True)}\">"
-            f"<input type=\"hidden\" name=\"index\" value=\"{index}\">"
-            "<button class=\"solid\" type=\"submit\">take this trade (paper)</button></form>"
-        )
-        parts.append(
-            "<article>"
-            f"<h2>{html.escape(card.symbol)} {html.escape(card.direction)} "
-            f"{html.escape(card.spread)} expiry {html.escape(card.expiry)}</h2>"
-            f"<ul>{items}</ul><p>reason: {html.escape(card.reason)}</p>{take}"
-            "</article>"
-        )
+    parts = [
+        card_article(card, start_index + offset, profile=profile)
+        for offset, card in enumerate(cards)
+    ]
     return page(
         title, title, f"{len(cards)} cards, from stored snapshots", "".join(parts),
         underlying, "cards", resolved, f"/cards?underlying={underlying}",

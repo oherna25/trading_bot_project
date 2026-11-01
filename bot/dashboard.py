@@ -89,7 +89,7 @@ def _money(value: Any) -> str:
 
 def _top_card_html(symbol: str, store: SnapshotStore, journal: Journal, now: datetime) -> str:
     from bot.demo import demo_cards
-    from bot.tradecards import PROFILE_REQUIRED, risk_cap_for, size_for_card
+    from bot.tradecards import PROFILE_REQUIRED, card_article
 
     profile = store.read_profile()
     if profile is None:
@@ -102,34 +102,11 @@ def _top_card_html(symbol: str, store: SnapshotStore, journal: Journal, now: dat
         f"/card?underlying={_urlencode(symbol)}"
         f"&snapshot={_urlencode(snapshot_id)}&index=0"
     )
-    direction_cls = "long" if card.direction == "long" else "short"
-    wall = compact_dollars(card.wall_exposure) if card.wall_exposure is not None else "n/a"
-    spot = f"{card.spot:g}" if card.spot is not None else "n/a"
-    flip = f"{card.flip_point:g}" if card.flip_point is not None else "n/a"
-    _, _, sizing = size_for_card(card.max_loss, risk_cap_for(profile))
-    rows = [
-        ("Direction", f"<span class=\"{direction_cls}\">{html.escape(card.direction)}</span>"),
-        ("Spread", html.escape(f"{card.spread} {card.expiry}")),
-        ("Strike", f"{card.strike:g}"),
-        ("Confidence", f"{card.confidence:.2f}"),
-        ("Wall", html.escape(wall)),
-        ("Regime", _regime_span(card.regime)),
-        ("Spot vs flip", f"{spot} vs {flip}"),
-        ("Max loss", _money(card.max_loss)),
-        ("Size", html.escape(sizing)),
-        ("Breakeven", f"{card.breakeven}" if card.breakeven is not None else "n/a"),
-        ("Reason", html.escape(f"{card.reason} [{card.reason_source}]")),
-    ]
-    if card.earnings_date is not None:
-        rows.append(("Earnings", html.escape(card.earnings_date)))
-    if card.iv_rank is not None:
-        rows.append(("IV rank", f"{card.iv_rank:.0f}"))
-    terms = "".join(f"<dt>{name}</dt><dd>{value}</dd>" for name, value in rows)
-    return (
+    permalink = (
         f"<p>{html.escape(card.symbol)} {html.escape(card.spread)} "
         f"<a href=\"{html.escape(link, quote=True)}\">trade cards permalink</a></p>"
-        f"<dl>{terms}</dl>"
     )
+    return permalink + card_article(card, 0, profile=profile)
 
 
 def _holdings_html(store: SnapshotStore) -> str:

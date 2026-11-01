@@ -278,8 +278,10 @@ def test_dashboard_route_returns_all_sections():
     assert "<span>underlyings</span>" in body
     assert "<span>active alerts</span>" in body
     assert "<span>holdings</span>" in body
-    assert "<dt>Confidence</dt>" in body
-    assert "<dt>Reason</dt>" in body
+    assert "confidence" in body
+    assert "Payoff at expiry" in body
+    assert "Spot vs flip" in body
+    assert "reason:" in body
     assert "/card?underlying=TEST&amp;snapshot=" in body
     assert 'http-equiv="refresh" content="60"' in body
     assert "background:#0d1117" in body
