@@ -793,6 +793,71 @@ def _profile_write_handler(
     return save_profile_answers(args, store, journal, now)
 
 
+def _list_strategies_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, store, journal, config, now, underlying
+    from bot.deployments import list_strategies_text
+
+    return list_strategies_text()
+
+
+def _deploy_strategy_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del config
+    from bot.deployments import create_deployment
+
+    if not isinstance(args, dict):
+        raise ValueError("deploy_strategy needs strategy_id, symbols, capital")
+    strategy_id = str(args.get("strategy_id", args.get("strategy", "")) or "")
+    raw_symbols = args.get("symbols", args.get("symbol", underlying))
+    if isinstance(raw_symbols, (list, tuple)):
+        symbols = [str(item) for item in raw_symbols]
+    else:
+        symbols = [item for item in str(raw_symbols).replace(",", " ").split() if item]
+    deployment = create_deployment(
+        store,
+        strategy_id,
+        symbols,
+        mode=str(args.get("mode", "paper") or "paper"),
+        capital_cap=float(args.get("capital", args.get("capital_cap", 50000.0)) or 50000.0),
+    )
+    journal.append(
+        now, "deployment_created",
+        {"deployment_id": deployment.id, "strategy_id": deployment.strategy_id, "symbols": list(deployment.symbols), "mode": deployment.mode, "capital_cap": deployment.capital_cap},
+    )
+    return f"deployment {deployment.id} created: {deployment.strategy_id} on {','.join(deployment.symbols)} {deployment.mode} capital {deployment.capital_cap:.0f}"
+
+
+def _list_deployments_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, now, underlying
+    from bot.deployments import deployments_text
+
+    return deployments_text(store, journal)
+
+
+def _run_deployments_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config, underlying
+    from bot.deployments import run_deployments
+
+    return run_deployments(store, journal, now) or "deployments: nothing opened or closed"
+
+
+def _deployment_trackrecord_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del store, config, now, underlying
+    from bot.deployments import strategy_trackrecord_text
+
+    deployment_id = str(args.get("deployment_id", "") or "") if isinstance(args, dict) else ""
+    return strategy_trackrecord_text(journal, deployment_id or None)
+
+
 TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_gex_brief": MuseTool("get_gex_brief", "Read the computed GEX brief for an underlying", _gex_brief_handler),
     "get_trade_cards": MuseTool(
@@ -923,6 +988,26 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "evaluate_strategy": MuseTool(
         "evaluate_strategy", "Backtest a user-stated strategy over stored snapshots and bars",
         _strategy_handler,
+    ),
+    "list_strategies": MuseTool(
+        "list_strategies", "List deployable premium-selling strategies in the registry",
+        _list_strategies_handler,
+    ),
+    "deploy_strategy": MuseTool(
+        "deploy_strategy", "Create a persisted strategy deployment (paper by default) that the scheduled session runs daily",
+        _deploy_strategy_handler,
+    ),
+    "list_deployments": MuseTool(
+        "list_deployments", "List strategy deployments with capital deployed, utilization, and realized PnL",
+        _list_deployments_handler,
+    ),
+    "run_deployments": MuseTool(
+        "run_deployments", "Run all active deployments now: manage open shorts, then open new premium sales",
+        _run_deployments_handler,
+    ),
+    "get_deployment_trackrecord": MuseTool(
+        "get_deployment_trackrecord", "Per-strategy closed option trades, win rate, and realized PnL",
+        _deployment_trackrecord_handler,
     ),
     "show_builder": MuseTool(
         "show_builder", "Preview visual-builder guardrails as matching ideas plus backtest",

@@ -12,6 +12,13 @@ Every shipped item below has a regression test in the suite.
 * Strategy feedback (`bot/strategy.py`: `parse_strategy`, `evaluate_strategy`, `POST /strategy`) and the visual builder (`bot/builder.py`, `GET /builder`) backtest guardrails over stored snapshots and bars through `replay_week` with a custom `signal_fn`.
 * Feeds use a 10s timeout with a 60s GET cache, multi-symbol refresh runs concurrently, `SCAN_BROAD=1` widens the universe, and ideas rank top-15 with quote-aware quality adjustments that leave quoteless fixtures scoring as before.
 
+## Strategy deployments: premium-selling agent (2026-11-01)
+
+* `STRATEGY_REGISTRY` in `bot/deployments.py` registers four deployable premium-selling strategies: cash-secured put, covered call, put credit spread, and call credit spread. `StrategyDeployment` records persist in the store and in `deployments.json` in the bundle.
+* `run_deployments` runs inside every scheduled session. Each run applies feedback from closed trades, manages open short options (50% profit target, 2x credit stop, close-DTE exit, expiry settlement with assignment journaling), then opens new sales ranked by annualized return on collateral.
+* `bot/capital.py` keeps the capital ledger (deployed collateral, idle capital, utilization against a 70% target, 25% cap per position), and `bot/optionbook.py` rebuilds the contract book from tagged journal fills for per-strategy track records. Feedback resizes deployments between 0.5 and 1.25 and auto-pauses after three losing closes down 5% of the capital cap.
+* Surfaces: chat deploy commands including plain English (`deploy sell puts on SPY paper capital 40000`), MCP tools (`list_strategies`, `deploy_strategy`, `list_deployments`, `run_deployments`, `get_deployment_trackrecord`), and HTTP routes (`GET/POST /deployments`, `POST /deployments/run`). Live deployments submit only through the armed `submit_live` path when a venue is supplied. Covered by `tests/test_deployments.py`.
+
 ## Bring-your-own model key (2026-11-01)
 
 * `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default OpenAI) and `USER_MODEL_ID` (default gpt-4o-mini) routes the analyst and reviewer roles to any OpenAI-compatible chat API. The operator's key pays their bill, so no day budget is needed; receipts journal at zero cost. Grounding, voice, and image roles stay on the built-in key. See `read_user_model` and `select_backend` in `bot/models.py`.

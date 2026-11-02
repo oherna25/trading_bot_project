@@ -5,7 +5,7 @@ from datetime import date, datetime
 from typing import NewType, Optional
 from urllib.parse import unquote
 
-from bot.shapes import Bar, ChainSnapshot, DashboardSettings, Holding, OperatorProfile, PaperAccount
+from bot.shapes import Bar, ChainSnapshot, DashboardSettings, Holding, OperatorProfile, PaperAccount, StrategyDeployment
 
 SnapshotId = NewType("SnapshotId", str)
 
@@ -57,6 +57,7 @@ class SnapshotStore:
         self._earnings: dict[str, str] = {}
         self._alert_rules: dict[str, dict] = {}
         self._paper_accounts: dict[str, PaperAccount] = {}
+        self._deployments: dict[str, StrategyDeployment] = {}
 
     def _stamp(self, snapshot_id: str) -> datetime:
         return self._snapshots[snapshot_id].timestamp_utc
@@ -259,6 +260,19 @@ class SnapshotStore:
     def all_paper_accounts(self) -> dict[str, PaperAccount]:
         return dict(self._paper_accounts)
 
+    def save_deployment(self, deployment: StrategyDeployment) -> StrategyDeployment:
+        self._deployments[deployment.id] = deployment
+        return deployment
+
+    def read_deployment(self, deployment_id: str) -> Optional[StrategyDeployment]:
+        return self._deployments.get(str(deployment_id).strip())
+
+    def list_deployments(self) -> list[StrategyDeployment]:
+        return [self._deployments[key] for key in sorted(self._deployments)]
+
+    def remove_deployment(self, deployment_id: str) -> bool:
+        return self._deployments.pop(str(deployment_id).strip(), None) is not None
+
     def restore(self, other: SnapshotStore) -> None:
         self._snapshots = dict(other._snapshots)
         self._bars = {underlying: list(bars) for underlying, bars in other._bars.items()}
@@ -270,6 +284,7 @@ class SnapshotStore:
         self._earnings = dict(other._earnings)
         self._alert_rules = {rule_id: dict(rule) for rule_id, rule in other._alert_rules.items()}
         self._paper_accounts = dict(other._paper_accounts)
+        self._deployments = dict(other._deployments)
         self._rebuild_indexes()
 
     def merge_from(self, other: SnapshotStore) -> None:

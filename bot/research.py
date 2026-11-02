@@ -381,6 +381,10 @@ def route_chat(
         from bot.customalerts import set_rule_response
 
         return set_rule_response(text, store, journal, now)
+    if re.search(r"\bdeploy(ment|ments|ed)?\b|\bstrategies\b|\bpause deployment\b|\bresume deployment\b|\brun deployments\b|\bstrategy track record\b|\bdeployment track record\b", lowered):
+        from bot.deployments import deployments_response
+
+        return deployments_response(text, store, journal, now)
     if re.search(r"\bwheels?\b", lowered):
         return wheel_response(text, underlying, store, journal, now)
     if re.search(r"\bbuilder\b", lowered):

@@ -836,6 +836,42 @@ def route_http(
         return HttpResponse.json(
             200, {"ok": True, "reply": evaluate_strategy(parse_strategy(text, underlying, store), store, journal, now)}
         )
+    if method == "GET" and clean == "/deployments":
+        from bot.deployments import deployments_text
+
+        return HttpResponse.json(200, {"ok": True, "reply": deployments_text(store, journal)})
+    if method == "POST" and clean == "/deployments":
+        from bot.deployments import create_deployment
+
+        if not isinstance(payload, dict):
+            return _fail(400, "deployment needs a JSON object with strategy_id and symbols")
+        try:
+            raw_symbols = payload.get("symbols", payload.get("symbol", "SPY"))
+            if isinstance(raw_symbols, (list, tuple)):
+                symbols = [str(item) for item in raw_symbols]
+            else:
+                symbols = [item for item in str(raw_symbols).replace(",", " ").split() if item]
+            deployment = create_deployment(
+                store,
+                str(payload.get("strategy_id", payload.get("strategy", "")) or ""),
+                symbols,
+                mode=str(payload.get("mode", "paper") or "paper"),
+                capital_cap=float(payload.get("capital", payload.get("capital_cap", 50000.0)) or 50000.0),
+            )
+        except ValueError as exc:
+            return _fail(400, str(exc))
+        journal.append(
+            now, "deployment_created",
+            {"deployment_id": deployment.id, "strategy_id": deployment.strategy_id, "symbols": list(deployment.symbols), "mode": deployment.mode, "capital_cap": deployment.capital_cap},
+        )
+        return HttpResponse.json(
+            200,
+            {"ok": True, "reply": f"deployment {deployment.id} created: {deployment.strategy_id} on {','.join(deployment.symbols)} {deployment.mode} capital {deployment.capital_cap:.0f}"},
+        )
+    if method == "POST" and clean == "/deployments/run":
+        from bot.deployments import run_deployments
+
+        return HttpResponse.json(200, {"ok": True, "reply": run_deployments(store, journal, now) or "deployments: nothing opened or closed"})
     if method == "GET" and clean == "/earnings":
         from bot.earnings import earnings_html
 

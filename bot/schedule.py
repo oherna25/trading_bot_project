@@ -142,6 +142,11 @@ def run_session_core(
                 failures.append(error)
     if replies:
         journal.append(moment, "session_saved", {"underlyings": symbols, "store_dir": store_dir})
+    from bot.deployments import run_deployments
+
+    deployment_text = run_deployments(store, journal, moment)
+    if deployment_text:
+        replies.append(deployment_text)
     from bot.tradecards import drain_reason_queue
 
     drain_reason_queue(max_jobs=32)

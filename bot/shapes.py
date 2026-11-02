@@ -282,6 +282,71 @@ class PremiumCandidate:
 
 
 @dataclass(frozen=True)
+class StrategyDeployment:
+    id: str
+    strategy_id: str
+    symbols: tuple[str, ...]
+    mode: str = "paper"
+    capital_cap: float = 50000.0
+    target_utilization: float = 0.7
+    status: str = "active"
+    profit_target_pct: float = 0.5
+    close_dte: int = 5
+    max_per_symbol: int = 3
+    sizing_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class SellLeg:
+    side: str
+    call_or_put: str
+    strike: float
+
+
+@dataclass(frozen=True)
+class SellCandidate:
+    symbol: str
+    strategy_id: str
+    action: str
+    legs: tuple[SellLeg, ...]
+    expiry: str
+    dte: int
+    credit: float
+    collateral_per_contract: float
+    annualized_return: float
+    delta: Optional[float] = None
+    snapshot_id: str = ""
+    spot: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class OpenOptionPosition:
+    key: str
+    deployment_id: str
+    strategy_id: str
+    symbol: str
+    action: str
+    legs: tuple[SellLeg, ...]
+    expiry: str
+    contracts: float
+    entry_credit: float
+    collateral_per_contract: float
+    opened_date: str
+    snapshot_id: str = ""
+    venue: str = "paper"
+
+
+@dataclass(frozen=True)
+class CapitalLedger:
+    capital_cap: float
+    deployed_collateral: float
+    idle_capital: float
+    utilization: float
+    target_utilization: float
+    available_for_new: float
+
+
+@dataclass(frozen=True)
 class PortfolioView:
     open_positions: int = 0
     open_symbols: tuple[str, ...] = ()

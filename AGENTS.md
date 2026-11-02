@@ -50,6 +50,7 @@ market APIs -> feeds -> store -> exposure -> research -> risk -> paper venue
 | HTTP/MCP | `bot/muse.py` (facade) | `TOOL_REGISTRY`, `route_http`, `serve`, `Harness` |
 | Muse libs | `bot/muse_tools.py`, `muse_chat.py`, `muse_session.py`, `muse_http.py` | Tool handlers, chat routing, sessions, HTTP routes |
 | Ideas/cards | `bot/ideas.py`, `bot/tradecards.py`, `bot/wheel.py` | `rank_ideas`, `query_trade_cards`, `screen_premium` |
+| Deployments | `bot/deployments.py`, `bot/optionbook.py`, `bot/capital.py` | `STRATEGY_REGISTRY`, `create_deployment`, `run_deployments` (scheduled premium selling with lifecycle, capital ledger, feedback) |
 | Replay | `bot/replay.py` | `replay_week`, `paper_evidence_from_journal` |
 | Persist/job | `bot/persist.py`, `bot/schedule.py` | `save_bundle`, `load_bundle`, `run_scheduled_session` |
 | Models | `bot/models.py`, `bot/tiers.py`, `bot/localmodels.py` | `MODEL_REGISTRY`, `select_model_tier`, `run_local` |
@@ -77,12 +78,15 @@ Program entry points: `run_app.py` (brief once, then serve HTTP),
   need `options_ok` in the profile.
 - Every model call journals a `ModelReceipt` and honors the day budget.
   Missing keys, budget, or weights select the deterministic fallback.
+- Deployments (`STRATEGY_REGISTRY`) run inside every scheduled session.
+  Paper is the default mode. Live deployments only submit through the
+  armed `submit_live` path when a venue is supplied to the runner.
 
 ## Tests
 
 - Mirror module names: `tests/test_<module>.py`.
 - Focused run: `.venv/bin/python -m pytest tests/test_risk.py -q`.
-- Full suite is about 860 tests in about 20 seconds.
+- Full suite is about 940 tests in about 10 seconds.
 
 ## Docs map
 

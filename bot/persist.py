@@ -17,6 +17,7 @@ from bot.shapes import (
     OptionContract,
     PaperAccount,
     RiskState,
+    StrategyDeployment,
 )
 from bot.store import SnapshotStore
 
@@ -30,6 +31,7 @@ SETTINGS_FILE = "settings.json"
 EARNINGS_FILE = "earnings.json"
 ALERT_RULES_FILE = "alert_rules.json"
 PAPER_ACCOUNTS_FILE = "paper_accounts.json"
+DEPLOYMENTS_FILE = "deployments.json"
 
 
 def _freeze(value: Any) -> Any:
@@ -252,6 +254,38 @@ def _thaw_paper_account(raw: dict[str, Any]) -> PaperAccount:
     )
 
 
+def _freeze_deployment(deployment: StrategyDeployment) -> dict[str, Any]:
+    return {
+        "id": deployment.id,
+        "strategy_id": deployment.strategy_id,
+        "symbols": list(deployment.symbols),
+        "mode": deployment.mode,
+        "capital_cap": deployment.capital_cap,
+        "target_utilization": deployment.target_utilization,
+        "status": deployment.status,
+        "profit_target_pct": deployment.profit_target_pct,
+        "close_dte": deployment.close_dte,
+        "max_per_symbol": deployment.max_per_symbol,
+        "sizing_scale": deployment.sizing_scale,
+    }
+
+
+def _thaw_deployment(raw: dict[str, Any]) -> StrategyDeployment:
+    return StrategyDeployment(
+        id=str(raw.get("id", "")),
+        strategy_id=str(raw.get("strategy_id", "")),
+        symbols=tuple(str(item).strip().upper() for item in (raw.get("symbols") or []) if str(item).strip()),
+        mode=str(raw.get("mode", "paper")),
+        capital_cap=float(raw.get("capital_cap", 50000.0)),
+        target_utilization=float(raw.get("target_utilization", 0.7)),
+        status=str(raw.get("status", "active")),
+        profit_target_pct=float(raw.get("profit_target_pct", 0.5)),
+        close_dte=int(raw.get("close_dte", 5)),
+        max_per_symbol=int(raw.get("max_per_symbol", 3)),
+        sizing_scale=float(raw.get("sizing_scale", 1.0)),
+    )
+
+
 def _write_json(path: str, payload: Any) -> None:
     tmp_path = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     with open(tmp_path, "w", encoding="utf-8") as handle:
@@ -333,6 +367,10 @@ def save_bundle(
         os.path.join(store_dir, PAPER_ACCOUNTS_FILE),
         [_freeze_paper_account(account) for account in store.all_paper_accounts().values()],
     )
+    _write_json(
+        os.path.join(store_dir, DEPLOYMENTS_FILE),
+        [_freeze_deployment(deployment) for deployment in store.list_deployments()],
+    )
     return bundle_mtimes(store_dir)
 
 
@@ -398,12 +436,19 @@ def load_bundle(store_dir: str) -> tuple[SnapshotStore, Journal]:
             for item in raw_accounts:
                 if isinstance(item, dict):
                     store.save_paper_account(_thaw_paper_account(item))
+    deployments_path = os.path.join(store_dir, DEPLOYMENTS_FILE)
+    if os.path.exists(deployments_path):
+        raw_deployments = _read_json(deployments_path)
+        if isinstance(raw_deployments, list):
+            for item in raw_deployments:
+                if isinstance(item, dict) and item.get("id"):
+                    store.save_deployment(_thaw_deployment(item))
     return store, journal
 
 
 BUNDLE_FILES = (
     SNAPSHOTS_FILE, BARS_FILE, JOURNAL_FILE, PROFILE_FILE, IV_FILE, HOLDINGS_FILE,
-    SETTINGS_FILE, EARNINGS_FILE, ALERT_RULES_FILE, PAPER_ACCOUNTS_FILE,
+    SETTINGS_FILE, EARNINGS_FILE, ALERT_RULES_FILE, PAPER_ACCOUNTS_FILE, DEPLOYMENTS_FILE,
 )
 
 
