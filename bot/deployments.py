@@ -713,6 +713,78 @@ def deployments_text(store: SnapshotStore, journal: Journal) -> str:
     return "\n".join(lines)
 
 
+def deployments_html(store: SnapshotStore, journal: Journal, now: datetime) -> str:
+    import html as html_module
+
+    from bot.theme import page
+
+    settings = store.read_settings()
+    deployments = store.list_deployments()
+    if not deployments:
+        body = (
+            "<p>no deployments yet. Create one in chat: "
+            "<code>deploy cash_secured_put on SPY paper capital 50000</code></p>"
+            f"<h2>Strategies</h2><p>{html_module.escape(list_strategies_text()).replace(chr(10), '<br>')}</p>"
+        )
+        return page(
+            "deployments", "strategy deployments", "premium-selling agent, paper by default",
+            body, settings.default_underlying, "deployments", settings, "/deployments/page",
+        )
+    stats_parts: list[str] = []
+    sections: list[str] = []
+    total_deployed = 0.0
+    total_realized = 0.0
+    total_open = 0
+    for deployment in deployments:
+        positions = open_option_positions(journal, deployment.id)
+        ledger = ledger_for(deployment, positions)
+        closed = closed_option_trades(journal, deployment.id)
+        realized = sum(float(item["pnl"]) for item in closed)
+        total_deployed += ledger.deployed_collateral
+        total_realized += realized
+        total_open += len(positions)
+        pct = max(0.0, min(100.0, ledger.utilization * 100.0))
+        rows = [
+            "<table><thead><tr><th>Contract</th><th>Expiry</th><th>Contracts</th>"
+            "<th>Credit</th><th>Collateral</th></tr></thead><tbody>"
+        ]
+        for item in positions:
+            legs = "/".join(f"{leg.side} {leg.call_or_put} {leg.strike:g}" for leg in item.legs)
+            rows.append(
+                f"<tr><td>{html_module.escape(item.symbol)} {html_module.escape(legs)}</td>"
+                f"<td>{html_module.escape(item.expiry)}</td><td>{item.contracts:g}</td>"
+                f"<td>{item.entry_credit:.2f}</td>"
+                f"<td>${item.contracts * item.collateral_per_contract:,.0f}</td></tr>"
+            )
+        rows.append("</tbody></table>")
+        table = "".join(rows) if positions else "<p>no open positions</p>"
+        sections.append(
+            f"<h2>{html_module.escape(deployment.id)} {html_module.escape(deployment.strategy_id)}</h2>"
+            f"<p>{html_module.escape(deployment.mode)} · {html_module.escape(deployment.status)} · "
+            f"symbols {html_module.escape(','.join(deployment.symbols))} · capital ${deployment.capital_cap:,.0f} · "
+            f"deployed ${ledger.deployed_collateral:,.0f} · utilization {ledger.utilization:.0%} of "
+            f"{ledger.target_utilization:.0%} target · closed {len(closed)} · realized ${realized:+,.0f} · "
+            f"sizing scale {deployment.sizing_scale:.2f}</p>"
+            f"<div style=\"background:#21262d;border-radius:6px;height:14px;max-width:560px\">"
+            f"<div style=\"background:#3fb950;height:14px;border-radius:6px;width:{pct:.0f}%\"></div></div>"
+            f"{table}"
+        )
+    stats_parts.append(
+        "<div class=\"stats\">"
+        f"<div class=\"stat\"><b>{len(deployments)}</b><span>deployments</span></div>"
+        f"<div class=\"stat\"><b>{total_open}</b><span>open short positions</span></div>"
+        f"<div class=\"stat\"><b>${total_deployed:,.0f}</b><span>collateral deployed</span></div>"
+        f"<div class=\"stat\"><b>${total_realized:+,.0f}</b><span>realized PnL</span></div>"
+        "</div>"
+    )
+    body = "".join(stats_parts + sections)
+    return page(
+        "deployments", "strategy deployments",
+        "the premium-selling agent: feedback, lifecycle management, then new sales, every session",
+        body, settings.default_underlying, "deployments", settings, "/deployments/page",
+    )
+
+
 def strategy_trackrecord_text(journal: Journal, deployment_id: str | None = None) -> str:
     closed = closed_option_trades(journal, deployment_id)
     scope = f"deployment {deployment_id}" if deployment_id else "all deployments"

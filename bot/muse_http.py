@@ -836,6 +836,10 @@ def route_http(
         return HttpResponse.json(
             200, {"ok": True, "reply": evaluate_strategy(parse_strategy(text, underlying, store), store, journal, now)}
         )
+    if method == "GET" and clean == "/deployments/page":
+        from bot.deployments import deployments_html
+
+        return HttpResponse.html(200, deployments_html(store, journal, now))
     if method == "GET" and clean == "/deployments":
         from bot.deployments import deployments_text
 

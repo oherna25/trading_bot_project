@@ -197,6 +197,18 @@ def test_feedback_pauses_after_three_losing_closes():
     assert any(entry.kind == "strategy_feedback" for entry in journal.entries())
 
 
+def test_deployments_html_shows_utilization_and_positions():
+    from bot.deployments import deployments_html
+
+    store, journal = _put_store()
+    create_deployment(store, "cash_secured_put", ["SPY"], capital_cap=50000.0)
+    run_deployments(store, journal, NOW)
+    body = deployments_html(store, journal, NOW)
+    assert "strategy deployments" in body
+    assert "collateral deployed" in body
+    assert "sell put 95" in body
+
+
 def test_plain_english_deploy_maps_to_put_selling():
     store, journal = _put_store()
     reply = deployments_response("deploy sell puts on SPY paper capital 40000", store, journal, NOW)

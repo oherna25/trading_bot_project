@@ -1,8 +1,45 @@
-# TradingWingManBot
+<h1 align="center">TradingWingManBot</h1>
 
-A research-first options trading system. It ingests free-tier market data, computes its own GEX/VEX/DEX/CHARM/VANNA exposure from stored snapshots, answers research questions in chat, and journals every signal, intent, and fill. Paper trading works out of the box. Live ordering stays off until you arm it on the `/live` page with a signed action, and only cards at or above your confidence threshold can reach the broker.
+<p align="center"><strong>An autonomous premium-selling options agent with a research desk attached.</strong><br>
+It reads the chain, computes its own dealer exposure, picks contracts, sizes against a capital ledger, sells premium on paper every session, manages the shorts to exit or expiry, and journals every step.</p>
 
-What you get: a one-screen demo with regime read, trade cards, replay, and shock test; a dashboard and positioning board across every stored underlying; gamma-by-strike charts; defined-risk trade ideas and premium screens; honest next-bar replay scored against buy-and-hold; a visual strategy builder that backtests your guardrails; data-backed feedback on a strategy you state in plain English; Discord and Telegram alerts. See the [app tour](#app-tour).
+<p align="center">
+<img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
+<img alt="944 tests passing" src="https://img.shields.io/badge/tests-944%20passing-brightgreen">
+<img alt="Fully offline test suite" src="https://img.shields.io/badge/tests-fully%20offline-blueviolet">
+<img alt="Paper trading by default" src="https://img.shields.io/badge/trading-paper%20first-green">
+<img alt="Live ordering off by default" src="https://img.shields.io/badge/live-off%20until%20signed-red">
+</p>
+
+![Demo page: Spark audit, regime read, and the judge-first one-screen summary](docs/screenshots/demo.png)
+
+<p align="center"><em>The demo page. Muse Spark proposes a direction, the home-grown exposure engine grades it, and every claim lands in the journal. Below: the agent at work.</em></p>
+
+![Strategy deployments: two deployments, three open short positions, collateral and utilization](docs/screenshots/deployments.png)
+
+<p align="center"><em>The premium-selling agent. Two live paper deployments, $31K of collateral working at target utilization, one closed winner at +$76. See <a href="#app-tour">the full tour</a>.</em></p>
+
+## For hackathon judges: the 60-second path
+
+| Step | Open | What to look for |
+|---|---|---|
+| 1 | `/demo` | Spark proposes, the engine disposes. Regime, walls, flip, top card, replay, shock test, chat box, one screen. |
+| 2 | `/deployments/page` | The agent's book: open short puts and credit spreads, collateral per contract, utilization bars, realized PnL. |
+| 3 | `/cards?underlying=SPY` | Defined-risk trade cards with payoff diagrams and one-click paper execution through the same risk gate as live. |
+| 4 | `/live` | Live ordering is off. Arming needs a signature, paper evidence, and a checklist. The kill switch is one click. |
+| 5 | Chat on `/demo` | Type `deploy sell puts on SPY paper capital 40000`, then `run deployments`. The agent sells premium sized by the capital ledger. |
+
+## At a glance
+
+| Layer | What it does | Proof |
+|---|---|---|
+| Research | Home-grown GEX/VEX/DEX/CHARM/VANNA from stored chains. No vendor exposure feed. Chat, briefs, debate, coach, shock tests. | [Demo](#app-tour), [chart](docs/screenshots/chart.png) |
+| Trading | Defined-risk cards and ideas from one screener, so chat, JSON, and HTML never disagree. | [Cards](docs/screenshots/cards.png) |
+| Agent | Four registered premium-selling strategies, deployed against a capital cap, managed daily: profit target, stop, close-DTE, expiry settlement, assignment. | [Deployments](docs/screenshots/deployments.png) |
+| Safety | Every intent passes one risk review. Paper first, live behind a signed action, kill switch always wins. | [Live gate](docs/screenshots/live.png) |
+| Audit | Every signal, intent, fill, model call, and settlement is journaled and replayable. Feedback from closed trades resizes or pauses a deployment. | [Card debate](docs/screenshots/card-debate.png) |
+
+## Quick start
 
 Run the suite with no keys and no network:
 
@@ -161,25 +198,28 @@ The bot reads `.env` from the working directory automatically; real environment 
 
 ## App tour
 
-Live pages served from a stored bundle with `run_app.py`. The shots below come from one such bundle, so every number is real stored state.
+Live pages served from a stored bundle with `run_app.py`. Every shot below comes from one bundle seeded for this tour, served locally, and captured from the running app, so the numbers agree across pages: the same SPY book shows $1M total GEX on the demo, the dashboard, and the board, and the deployments page shows the short puts the agent sold against that book.
 
-![Demo page: regime read, top trade card, wheel screen, replay vs buy-and-hold, shock buttons](docs/screenshots/demo.png)
-*`/demo` — one-screen summary. Regime read with walls and flip, the top trade card with a one-click paper-trade button, wheel screen, replay P&L against the SPY buy-and-hold benchmark, and shock-test shortcuts.*
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/deployments.png" alt="Strategy deployments page"><br><strong><code>/deployments/page</code>: the agent's book.</strong> Two deployments, three open shorts, collateral per contract, utilization against target, closed-trade PnL, and the sizing scale feedback set.</td>
+<td width="50%"><img src="docs/screenshots/cards.png" alt="Trade cards page"><br><strong><code>/cards?underlying=SPY</code>: trade cards.</strong> Payoff-at-expiry diagram, confidence meter, facts grid, entry trigger, targets, and sizing against your cap. One click files the trade on paper through the live risk gate.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/dashboard.png" alt="Dashboard page"><br><strong><code>/dashboard</code>: one-screen digest.</strong> Regime, spot, flip, and wall for every stored underlying, live alerts, holdings, and the Spark audit verdict.</td>
+<td><img src="docs/screenshots/board.png" alt="Dealer positioning board"><br><strong><code>/board</code>: dealer positioning.</strong> Total $GEX, spot vs flip, biggest wall, and feed freshness per symbol.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/chart.png" alt="Gamma by strike chart"><br><strong><code>/chart?underlying=SPY</code>: gamma by strike.</strong> Green call walls, red put walls, dotted spot line, computed from the stored chain. No vendor exposure feed anywhere in the stack.</td>
+<td><img src="docs/screenshots/card-debate.png" alt="Card with bull vs bear debate"><br><strong><code>/card?underlying=SPY&amp;index=0&amp;debate=1</code>: pinned card plus debate.</strong> A snapshot-pinned permalink with a bull case, a bear case, and a verdict, model-backed with keys and rules-based without.</td>
+</tr>
+<tr>
+<td><img src="docs/screenshots/builder.png" alt="Strategy builder"><br><strong><code>/builder</code>: visual strategy builder.</strong> Pick guardrails, preview matching ideas, and backtest them against SPY buy-and-hold on stored snapshots.</td>
+<td><img src="docs/screenshots/live.png" alt="Live ordering gate"><br><strong><code>/live</code>: the live gate, closed.</strong> Arming needs a signature, all three checklist items, and journaled paper evidence. The kill switch disarms in one click, and every gate miss journals instead of ordering.</td>
+</tr>
+</table>
 
-![Trade cards with payoff diagram, spot-vs-flip gauge, and key facts](docs/screenshots/cards.png)
-*`/cards?underlying=SPY` — every card carries direction/regime badges, a confidence meter, a **payoff-at-expiry diagram**, a **spot-vs-flip gauge**, and a facts grid (spread, strike, net, max loss, breakeven, wall, IV rank, earnings), plus the **contract** line, the **entry** trigger, **targets**, sizing against the operator cap, and the **reason**. "Take this trade (paper)" files it through the same gated paper venue as chat.*
-
-![Dashboard digest across all stored underlyings](docs/screenshots/dashboard.png)
-*`/dashboard` — digest table across every stored underlying: regime, spot, flip, and wall per symbol, plus active alerts, holdings, and the top card rendered with the same visuals as `/cards`.*
-
-![Dealer positioning board](docs/screenshots/board.png)
-*`/board` — dealer positioning across all 18 underlyings: total $GEX, spot vs flip distance, biggest wall, and feed/quote freshness per symbol.*
-
-![Gamma-by-strike chart](docs/screenshots/chart.png)
-*`/chart?underlying=SPY` — gamma by strike computed from the stored chain (green call walls, red put walls), dotted spot line, auto-refreshing.*
-
-![Card permalink with bull-vs-bear debate](docs/screenshots/card-debate.png)
-*`/card?underlying=SPY&index=0&debate=1` — snapshot-pinned permalink: the same card renders identically on revisit, with a bull-vs-bear debate (model-backed when keys are set, grounded rules otherwise) and a confidence verdict.*
+States worth knowing: with no profile saved, every card surface asks for profile setup instead of showing trades. With no model keys, Spark audit reads OFF and the deterministic engine still answers every page. With an expired short contract, the deployments runner settles it against spot and journals an assignment for in-the-money single legs.
 
 Cool aspects worth a click:
 
@@ -187,6 +227,7 @@ Cool aspects worth a click:
 - Trade cards are the same screener as chat ideas, so `/cards`, `/cards.json`, `/demo`, and chat never disagree.
 - Replay is honest: next-bar fills, daily halt reset, force-close at the last bar, and the strategy is scored against buy-and-hold on the same bars.
 - Shock repricing is Black-Scholes against a moved spot, with wall-break and flip-cross callouts.
+- Premium selling is a deployed agent, not a screen: pick a registered strategy and a capital cap, and every session manages open shorts to a profit target, stop, or expiry before selling new premium ranked by annualized return on collateral. Closed trades feed back into sizing, and a losing deployment pauses itself.
 - Live ordering stays disabled behind a signed action with a kill switch, now toggled on the `/live` page; only cards at or above your confidence threshold can reach the broker, and every gate miss journals instead of ordering.
 - Mobile holds up: responsive grids, scrollable tables, 44px touch targets, and no-zoom inputs across dashboard, board, and cards.
 
@@ -310,6 +351,7 @@ tail data/session.log
 | `/share?underlying=SPY[&snapshot=...][&index=0][&live_models=1]` | GET | none; shareable trade card page with art when live |
 | `/builder?underlying=SPY[&direction=...][&dte_min=...][&dte_max=...][&min_oi=...][&max_spread=...]` | GET | none; visual guardrail form plus matching-idea preview plus backtest |
 | `/strategy` | POST | `{"text": "my strategy: long SPY 7-30 DTE", "underlying": "SPY"}`; backtests the stated strategy over stored snapshots and bars as `{"ok", "reply"}` |
+| `/deployments/page` | GET | none; deployments dashboard page with open short positions, collateral, utilization bars, and realized PnL |
 | `/deployments` | GET | none; list deployments with deployed capital, utilization, and realized PnL as `{"ok", "reply"}` |
 | `/deployments` | POST | `{"strategy_id": "cash_secured_put", "symbols": ["SPY"], "mode": "paper", "capital": 50000}`; creates a persisted deployment the scheduled session runs daily |
 | `/deployments/run` | POST | none; runs all active deployments now (manage open shorts, then open new sales) |
