@@ -2,7 +2,7 @@
 
 ## Title
 
-Options desk with a Muse Spark audit block
+TradingWingManBot: a premium-selling options agent, graded by its own engine
 
 ## Track and statement
 
@@ -12,6 +12,12 @@ I trade options from free tier feeds and journal everything. A model thesis
 alone never told me when it disagreed with my own walls and flip. This entry
 fixes that. Spark proposes. The engine grades the claim. Both land in the
 journal.
+
+The second half of the entry is the agent that acts on the graded research.
+Pick a registered premium-selling strategy and a capital cap, and every
+scheduled session manages open short options to a profit target, stop, or
+expiry settlement, then sells new premium sized by a collateral ledger.
+Closed trades feed back into sizing, and a losing deployment pauses itself.
 
 ## What Meta does here
 
@@ -31,21 +37,37 @@ Spark is not decoration. It sits in the main brief path.
   out of the audit path.
 - Local path runs `muse-glimmer-3b` and `muse-spark-open-8b` weights through
   `bot/localmodels.py` when GGUF paths are set. No key needed for that tier.
+- Deployments stay deterministic on purpose. Models write theses, reviews,
+  and reasons around the agent; the selling, sizing, and exit rules in
+  `bot/deployments.py` are local code that a model cannot override.
 
 Without a key the app still runs. The audit reports `OFF` and the
 deterministic engine answers. That is by design.
 
 ## New work in the event window
 
-Built Oct 27 to Nov 4. The Nov 1 slice is the Meta center.
+Everything in this repo was built Oct 27 to Nov 4, 2026, starting from
+commit `22b5a9e` on Oct 27. The graded slice is the Nov 1 work:
 
-- `bot/spark.py`, `get_spark_audit` in `bot/muse_tools.py`, spark route and
-  `live_brief` block in `bot/research.py`, `tests/test_spark.py`.
-- `PROVENANCE.md` and this file.
+- Spark audit (`8b9512f`): `bot/spark.py`, `get_spark_audit` in
+  `bot/muse_tools.py`, spark route and `live_brief` block in
+  `bot/research.py`, `tests/test_spark.py`.
+- Visual cards (`8a1f07d`): badges, confidence meter, payoff diagram, and
+  spot-vs-flip gauge over the existing cards engine.
+- Premium-selling deployments (`21dd691`): `STRATEGY_REGISTRY` in
+  `bot/deployments.py` (cash-secured put, covered call, put and call credit
+  spreads), the collateral ledger in `bot/capital.py`, the contract book in
+  `bot/optionbook.py`, persisted `StrategyDeployment`s, the scheduled-session
+  runner, lifecycle management with expiry settlement and assignment, and
+  deterministic feedback that resizes or pauses a deployment. Covered by
+  `tests/test_deployments.py`.
+- Documentation (`f9b12d3` onward): `GET /deployments/page`, the README
+  visual tour with nine screenshots captured from the running app, this
+  file, and `PROVENANCE.md`.
 
-The engine underneath, exposure math, feeds, store, risk gates, replay, came
-first in the same window and is supporting context. See `PROVENANCE.md` for
-the split.
+The engine underneath (exposure math, feeds, store, risk gates, replay) was
+built Oct 27 to Oct 31, in the same window. See `PROVENANCE.md` for the
+path-by-path split.
 
 ## How to run
 
@@ -67,28 +89,91 @@ in the brief.
 
 ## Demo video
 
-Link: TODO add the 3 minute link before Nov 4, 9:00 PM ET.
+Link: ACTION FOR THE REPRESENTATIVE. Upload `docs/submission-video/submission.mp4`
+to YouTube or Loom and paste the public link here before Nov 4, 9:00 PM ET.
+The file is rendered and compliant at 115 seconds; only the upload and this
+line remain. Do not submit with this action line still in place.
 
-Plan for the recording. One case, SPY, live models on. Show the brief, then
-the spark audit block, then the journal tail with `spark_claim` and
-`spark_verdict`. Show one mismatch on purpose so judges see `CONTRADICTION`
-hold. Show the offline run second so they see `OFF` still works. Only ship
-what is in this repo. That keeps the video honest.
+Rendered artifact (115s, 1920x1080, narrated, burned-in captions):
+`docs/submission-video/submission.mp4`, silent cut `submission-silent.mp4`,
+contact sheet `docs/submission-video/contact.jpg`.
+Regenerate with all features on: `.venv/bin/python scripts/make_submission_video.py`
+(write-only project: add `--write-only`; deterministic OFF cut: add `--offline`).
+Generation runs a live grounded Spark audit first (`live_models=True, grounding=True`)
+and refuses to render if no model receipt was journaled. It persists the bundle
+journal, so `spark_claim` + `spark_verdict` + `model_receipt` are on record.
+Composition source: `build_submission_brief` in `bot/video.py`.
+Scenes: hook 6s · SPY gamma 12s · Spark audit duel 16s (this run: MATCH, model short
+confidence 0.78 vs engine short) · top card 14s · safety gates 11s · replay vs
+buy-and-hold 13s · shock -2% 11s · MCP tools 12s (50 tools, one registry, live
+`tools/call` reply in-scene) · wheel screen 13s (broad scan, 5 ranked candidates
+led by NBIS SELL_PUT 4.52%) · outro 7s. Live ordering is the one feature that stays
+off — by design; the safety scene shows the gate that enforces that.
+
+Narration: timed script in `docs/submission-video/narration.txt` (one spoken line per scene,
+in `VideoScene.narration`). `narration-muse.txt` is the same script drafted live by
+`muse-spark-1.3` through `bot.models.run_analyst`. Muse cannot voice it: `MODEL_REGISTRY`
+has no text-to-speech role — `muse-voice-transcribe-1.0` is speech-to-text only.
+The shipped `submission.mp4` voices the Muse draft with the macOS system voice
+(muxed via `--narration-audio`); record `narration.txt` yourself and re-mux for a human track.
+
+Plan for the recording (3:00, one case, SPY, live models on).
+0:00 Open `/demo`: hero regime pill, spot vs flip, Spark audit panel. Open
+with the disclosure: everything in this repo was built Oct 27 to Nov 4.
+0:25 Click "Ask the desk" → `spark audit`: MATCH/CONTRADICTION verdict pill,
+model vs engine duel, journal tail with `spark_claim` + `spark_verdict`.
+1:00 Show one mismatch on purpose so `CONTRADICTION` holds; take the top
+card as a paper trade; show the gated fill in the journal.
+1:35 The agent: in chat, `deploy sell puts on SPY paper capital 40000`, then
+`run deployments`. Open `/deployments/page` and show the short put, its
+collateral, and the utilization bar. Advance the book and show a position
+closing at its profit target, with realized PnL per strategy.
+2:15 Replay vs buy-and-hold, then a -2% shock repricing broken walls.
+2:35 MCP: `tools/list` then `tools/call get_gex_brief` over `POST /mcp`.
+2:50 Offline run: audit reads `OFF`, deterministic engine still answers.
+Only ship what is in this repo. That keeps the video honest.
 
 ## Why this fits the rubric
 
 Impact: a retail trader sees when the model and the tape disagree before
-sizing. That check runs on every brief, not in a side tab.
+sizing, and a premium seller stops hand-managing every short contract. The
+audit check runs on every brief, and the deployment agent runs on every
+session. Both address work the operator used to do by hand, daily.
 
 Use of Meta tooling: Spark writes the thesis, Wonder writes the risk note,
-local Spark Open covers the no key case. The check itself is local code, so
-the model cannot move the gate.
+local Spark Open and Glimmer cover the no key case on device. The checks
+themselves are local code, so no model can move a gate, size a position, or
+place an order.
 
 Depth: one pass exposure calc, bisect indexed store, gated paper venue with
-halt drills, no lookahead replay. Journal or it did not happen.
+halt drills, no lookahead replay, a collateral ledger, and a contract book
+rebuilt from journaled fills. 944 offline tests. Journal or it did not
+happen.
 
-Demo: one command, one ticker, one audit block. The verdict is a single word
-a judge can read from the back row.
+Demo: one ticker, one audit verdict a judge can read from the back row, then
+one chat command that deploys a selling strategy and a book page that proves
+it acted.
+
+## Local models: the next advantage
+
+Local Glimmer and Spark Open already run on device through a persistent
+`llama-server`, at zero API cost with journaled receipts. Ranked next uses,
+none of which a single cloud model matches on cost or privacy:
+
+1. Dual audit. Local Spark Open proposes first, hosted Spark challenges, the
+   engine grades both, and disagreement journals. Two independent claims per
+   brief for the price of one cloud call.
+2. Deployment diary. A local narration per deployment per session. Runs for
+   every deployment every day because there is no per-call bill, and
+   holdings never leave the machine.
+3. Continuous triage. The local alert judge already runs offline; extend it
+   to open deployment positions on every refresh tick, a cadence no cloud
+   budget survives.
+4. Strategy mining. A local model proposes guardrail variants from closed
+   trades each night; replay scores them; only verified variants reach the
+   operator. Private journal data stays on the device.
+5. A fine-tuned Glimmer that writes card reasons in the operator's style,
+   trained on journaled reasons. That is an open-weights entry of its own.
 
 ## Rules checklist
 

@@ -5,47 +5,52 @@ This file draws the line between event work and everything else. Judges read thi
 ## Event window
 
 Building period is Oct 27 to Nov 4, 2026. This repo started Oct 27 with commit
-`22b5a9e` and grew through Oct 31. The Meta central work on Nov 1 is the
-submission slice.
+`22b5a9e` and grew through Nov 1. Nothing in this repo predates the event
+window. The graded slice is the Nov 1 work.
 
 Check it with `git log --reverse --format='%h %ad %s' --date=short | head -5`.
 
 ## What is new for this submission
 
-These paths are the hackathon slice. Everything else is supporting context.
+The graded slice, all committed Nov 1, 2026:
 
-- `bot/spark.py` is new. Spark proposes a direction and confidence. Local code
-  checks the claim against computed GEX and journals both sides.
-- `bot/muse_tools.py` adds one tool, `get_spark_audit`. It calls the same audit
-  path as chat.
-- `bot/research.py` adds one chat route for spark audit and appends the audit
-  block to `live_brief` when live models are on. Offline output is unchanged.
-- `tests/test_spark.py` covers the pure check and the offline audit path.
-- `PROVENANCE.md` and `submission.md` are new docs for this entry.
+- Spark audit (`8b9512f`). `bot/spark.py` is new. Spark proposes a direction
+  and confidence. Local code checks the claim against computed GEX and
+  journals both sides. `bot/muse_tools.py` adds `get_spark_audit`, and
+  `bot/research.py` adds the chat route and the `live_brief` audit block.
+  `tests/test_spark.py` covers the pure check and the offline audit path.
+- Visual cards (`8a1f07d`). Trade cards carry badges, a confidence meter, a
+  payoff-at-expiry diagram, and a spot-vs-flip gauge (`bot/tradecards.py`,
+  `bot/dashboard.py`, `bot/theme.py`). Presentation over the cards engine; it
+  makes no model claim and changes no gate.
+- Premium-selling deployments (`21dd691`). `bot/deployments.py` registers
+  four deployable selling strategies behind `STRATEGY_REGISTRY`;
+  `bot/capital.py` keeps the collateral ledger; `bot/optionbook.py` rebuilds
+  the contract book from tagged fills. `StrategyDeployment` persists through
+  `bot/shapes.py`, `bot/store.py`, and `bot/persist.py` (`deployments.json`).
+  Scheduled sessions run deployments through `bot/schedule.py`; chat, tools,
+  and HTTP surfaces ship in `bot/research.py`, `bot/muse_tools.py`, and
+  `bot/muse_http.py`. `tests/test_deployments.py` covers sizing, collateral,
+  idempotency, lifecycle exits, expiry settlement, assignment, and feedback.
+- Documentation and screenshots (`f9b12d3` onward). `PROVENANCE.md`,
+  `submission.md`, the README tour, `GET /deployments/page`, and the nine
+  screenshots in `docs/screenshots/`, captured from the running app.
 
-Run `git status --short` before you archive the repo. Commit the slice above so
-the history shows it.
+## What was built Oct 27 to Oct 31, in window
 
-Nov 1 UI work sits outside the graded slice. Commit `8a1f07d` gives trade
-cards badges, a confidence meter, a payoff-at-expiry diagram, and a
-spot-vs-flip gauge (`bot/tradecards.py`, `bot/dashboard.py`, `bot/theme.py`,
-plus README tour text and screenshots). It is presentation over the existing
-cards engine. It makes no model claim and changes no gate.
+The supporting engine was also built during the event, before the Nov 1
+slice. It ingests chains and bars, computes GEX, VEX, DEX, charm, vanna,
+ranks ideas, paper trades under risk gates, replays weeks, and journals
+every step. Files like `bot/exposure.py`, `bot/feeds.py`, `bot/store.py`,
+`bot/risk.py`, and `bot/replay.py` carry that engine. It is in-window work;
+it is listed separately only because the Nov 1 slice is what this submission
+asks judges to grade first.
 
-## What existed before Nov 1
-
-The options engine predates the Meta slice. It ingests chains and bars,
-computes GEX, VEX, DEX, charm, vanna, ranks ideas, paper trades under risk
-gates, replays weeks, and journals every step. Files like `bot/exposure.py`,
-`bot/feeds.py`, `bot/store.py`, `bot/risk.py`, and `bot/replay.py` carry that
-engine. They are not claimed as new model work. They are the base the audit
-checks against.
-
-Model plumbing also existed. `bot/models.py` already called Muse Spark for the
-analyst role and Muse Wonder for review, with a day budget and a deterministic
-fallback. `bot/localmodels.py` already ran Muse Glimmer and Muse Spark Open
-weights locally. The Nov 1 change makes that plumbing visible and graded
-instead of hidden behind a flag.
+Model plumbing was built in the same Oct 27 to Oct 31 span. `bot/models.py`
+calls Muse Spark for the analyst role and Muse Wonder for review, with a
+day budget and a deterministic fallback. `bot/localmodels.py` runs Muse
+Glimmer and Muse Spark Open weights locally. The Nov 1 audit makes that
+plumbing visible and graded instead of hidden behind a flag.
 
 ## Data and keys
 

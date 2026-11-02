@@ -39,6 +39,73 @@ It reads the chain, computes its own dealer exposure, picks contracts, sizes aga
 | Safety | Every intent passes one risk review. Paper first, live behind a signed action, kill switch always wins. | [Live gate](docs/screenshots/live.png) |
 | Audit | Every signal, intent, fill, model call, and settlement is journaled and replayable. Feedback from closed trades resizes or pauses a deployment. | [Card debate](docs/screenshots/card-debate.png) |
 
+## Why I built this
+
+I trade options from free-tier feeds and journal everything. Two problems kept costing me time. A model thesis never told me when it disagreed with my own walls and flip, so I could not tell a confident model from a wrong one. And a premium screen is not a strategy: it hands you a list, then you still pick the contract, size it against the cash it ties up, watch it for two weeks, and close it yourself.
+
+TradingWingManBot fixes both. Spark proposes a direction and the exposure engine grades the claim before anything sizes. The premium screen became a deployed agent: you name a strategy and a capital cap once, and the system sells, manages, settles, and reports on its own book every session.
+
+## How this differs from a generic trading chatbot
+
+- **The model is graded, not trusted.** Spark must call `get_gex_profile`, state `DIRECTION` and `CONFIDENCE`, and local code returns `MATCH`, `CONTRADICTION`, `UNVERIFIED`, or `OFF`. Free prose never counts as a signal.
+- **Selling is a lifecycle, not a list.** A deployed put is opened against reserved collateral, marked from the stored chain, closed at a profit target or stop or inside its close window, settled at expiry, and journaled as assigned when it finishes in the money.
+- **Capital is a ledger, not a vibe.** Every deployment tracks deployed collateral, idle capital, and utilization against a target. New sales stop at the target, and one position never takes more than a quarter of the cap.
+- **History changes behavior.** Closed trades feed back into the next run. Losing deployments shrink their sizing toward half, winning ones grow toward 1.25x, and a deployment down 5% of its cap across three or more closes pauses itself.
+- **One risk gate, every path.** Chat trades, card clicks, scheduled sessions, deployments, and live sends all pass the same `review_intent`. There is no side door for the agent.
+- **Offline is a real mode.** No keys, no network: canned vendor-shaped fixtures drive every page and the deterministic engine answers. The full test suite runs the same way.
+
+## Start with one deployment
+
+Save a profile first, in chat: `profile: risk_tolerance=moderate, portfolio_size=100000, knowledge=intermediate, options_ok=yes`. Then:
+
+1. `deploy sell puts on SPY paper capital 40000` creates deployment `d1` running `cash_secured_put`. Ask `strategies` to see all four registered strategies.
+2. `run deployments` (or wait for the scheduled session). The runner closes anything at target first, then sells the best annualized return on collateral that fits the ledger. Watch the fill land in the journal.
+3. Open `/deployments/page`. Your short put is there with strike, expiry, credit, and the $9,500 of collateral it holds.
+4. Ask `list deployments` tomorrow. The position is marked from the new chain. At 50% of credit captured it closes on its own and the realized PnL joins the track record.
+5. Ask `strategy track record`. Wins, losses, and realized PnL are reported per strategy, because every fill carries its deployment tag.
+
+## What Meta adds
+
+| Model | Role in this app | Where | Without it |
+|---|---|---|---|
+| Muse Spark 1.3 | Analyst thesis with a forced `get_gex_profile` tool call, grounded notes, card reasons, chat routing, shock news | `bot/research_analyst.py`, `bot/metareason.py` | Deterministic flip rule, journaled as a fallback |
+| Muse Wonder 1.0 | Advisory risk review before live promotion, journal coach | `bot/research_analyst.py`, `bot/coach.py` | Rules coach over the same journal counts |
+| Muse Spark Open / Glimmer (local) | On-device analyst rescue, alert judging, narration and draft tasks at zero API cost | `bot/localmodels.py`, `bot/tiers.py` | Tier falls through to hosted or rules |
+| Muse Voice / Transcribe | Spoken holdings, voice commands, two-step voice kill switch | `bot/voice.py` | Text chat only |
+| SAM 3.1 + Spark | Document and chart screenshot reading against engine walls | `bot/docread.py`, `bot/chartread.py` | Pages and text surfaces only |
+| Muse Image | Shareable card art | `bot/cards.py` | Caption without art |
+
+The pattern is constant: the model proposes in a bounded, journaled shape, and local deterministic code decides what counts. A slow, missing, or contradictory model response cannot move a risk gate, size a position, or place an order.
+
+## Local models: where this goes further
+
+The local tier already runs Muse Glimmer and Muse Spark Open on this machine through one persistent `llama-server` per weights file, with zero-cost journaled receipts. That supports five uses a single cloud model cannot match on cost, privacy, or latency:
+
+| Use | Why local wins | Status |
+|---|---|---|
+| Dual audit: local Spark Open proposes first, hosted Spark challenges, engine grades both | Two independent model claims per brief at near-zero marginal cost, disagreement journaled | Next step: second claim slot in `bot/spark.py` |
+| Daily deployment diary: local model narrates each deployment's marks, closes, and settlements | Runs every session for every deployment with no per-call bill, and holdings never leave the machine | Next step: narrate task in `run_deployments` |
+| Continuous alert and position triage on every refresh tick | A cloud call per tick is too expensive to run all day; a local judge is already wired for alerts | Partly built: alert judge in `bot/alerts.py` |
+| Nightly strategy mining: local model proposes guardrail variants from closed trades, replay scores them | Private journal data stays on device, and only backtest-verified variants reach a human for approval | Next step: variant proposer over `bot/replay.py` |
+| On-device fine-tune of Glimmer on journaled card reasons | A house model that writes reasons in the operator's style, eligible for the open-weights track on its own | Roadmap |
+
+## Validation
+
+| Evidence | Scope and limits |
+|---|---|
+| 944 tests, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. |
+| HTTP drive on a scratch bundle | Create, list, and run deployments plus chat and MCP calls against the real server. The canned chain has no Greeks, so it proves routing and persistence, not candidate selection. |
+| Seeded screenshot bundle | Multi-symbol chains with Greeks drive the tour pages. Numbers are real stored state for that bundle, not market data. |
+| Live venue tests | Fake venue under an armed flag proves the submit path and tagging. No real order has been placed by the test suite, by design. |
+
+## Data boundaries and limitations
+
+Demo and test data are canned vendor-shaped fixtures or seeded snapshots. Sandbox chains are delayed about 15 minutes and carry no Greeks, so a brief can read flat when the truth is unknown; the GEX brief reports Greek coverage, the other exposure briefs do not yet. Live ordering requires Tradier credentials, a signed arming action, and a supplied venue, and stays off by default. Earnings are calendar dates only; there is no filings or transcript ingestion yet. The scheduled session has no exchange holiday calendar. This is research and paper-trading software, not financial advice, and no part of it guarantees a return.
+
+## Provenance
+
+Everything in this repo was built during the Oct 27 to Nov 4, 2026 event window, starting from commit `22b5a9e` on Oct 27. The graded slice is the Nov 1 work: the Spark audit (`8b9512f`), visual cards (`8a1f07d`), the premium-selling deployments agent (`21dd691`), and this documentation (`f9b12d3` onward). `PROVENANCE.md` draws the line path by path, and `submission.md` is the entry as submitted.
+
 ## Quick start
 
 Run the suite with no keys and no network:
