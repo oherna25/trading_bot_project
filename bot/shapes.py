@@ -339,6 +339,15 @@ class SellCandidate:
 
 
 @dataclass(frozen=True)
+class AgentProposal:
+    action: str
+    candidate_index: int
+    rationale: str
+    backend: str
+    model_id: str
+
+
+@dataclass(frozen=True)
 class OpenOptionPosition:
     key: str
     deployment_id: str

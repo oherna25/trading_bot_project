@@ -42,6 +42,16 @@ Spark is not decoration. It sits in the main brief path.
 - Deployments stay deterministic on purpose. Models write theses, reviews,
   and reasons around the agent; the selling, sizing, and exit rules in
   `bot/deployments.py` are local code that a model cannot override.
+- Baseten Muse Spark Open (`meta-models/muse-spark-open-1026`) is live, not
+  dormant. With `BASETEN_API_KEY` set it writes card reasons and, when a
+  deployment symbol has more than one filtered candidate, proposes one
+  candidate index or a skip in `bot/agent.py`. Local code parses and
+  range-checks the JSON, journals `agent_proposal` or
+  `agent_proposal_rejected`, and falls back to annualized-return order on
+  any miss. The `run_agent_cycle` tool and `agent cycle` chat command run
+  the bounded observe, propose, act, verify loop with `agent_step` and
+  `agent_run` journal entries. The model never sets size, collateral, or
+  risk limits, and every open still passes `review_intent`.
 
 Without a key the app still runs. The audit reports `OFF` and the
 deterministic engine answers. That is by design.
@@ -149,7 +159,7 @@ place an order.
 
 Depth: one pass exposure calc, bisect indexed store, gated paper venue with
 halt drills, no lookahead replay, a collateral ledger, and a contract book
-rebuilt from journaled fills. 952 offline tests. Journal or it did not
+rebuilt from journaled fills. 963 offline tests. Journal or it did not
 happen.
 
 Demo: one ticker, one audit verdict a judge can read from the back row, then

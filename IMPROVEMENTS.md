@@ -4,6 +4,13 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Agentic use-case and Baseten (2026-11-03)
+
+* Baseten is wired in. `bot/metareason.py` selects Baseten Muse Spark Open (`meta-models/muse-spark-open-1026`) after a user model and before the Meta key for card reasons; `bot/tradecards.py` treats `baseten` as a live reason backend.
+* Graded candidate proposal. New `AgentProposal` in `bot/shapes.py` and `bot/agent.py: propose_order`: with `BASETEN_API_KEY` set and more than one deterministic candidate, `bot/baseten.py: generate_pick` asks Spark Open for one index or a skip. Local code validates index and rationale, journals `agent_proposal`/`agent_proposal_rejected`/`agent_fallback`, and falls back to annualized-return order. Sizing, collateral, profile, and `review_intent` stay deterministic.
+* Bounded agent cycle. `run_agent_cycle` (MCP tool, `agent cycle` chat) runs observe, propose+act, verify as journaled `agent_step` phases plus one `agent_run` summary over the deployment book and track record.
+* Covered by `tests/test_agent.py` plus pick/reason tests in `tests/test_baseten.py` and `tests/test_metareason.py`, including a deployment that opens the Baseten pick (not the top annualized candidate) through the paper risk gate.
+
 ## Grade fixes (2026-11-03)
 
 * Earnings radar fetches for itself. `refresh_earnings` in `bot/earnings.py` pulls print dates via `cached_earnings` for symbols with no upcoming stored date and persists them; `earnings_text` and the `/earnings` page call it, while `earnings_rows` stays pure (pinned by test). The old radar only read dates cached as a side effect of trade-card requests, so it stayed dark with a valid FINNHUB_API_KEY. The empty state now names the next dated print instead of telling the operator to set a key that is already set. Live proof: QCOM 2026-11-04, RKLB 2026-11-09, NBIS 2026-11-12, NVDA 2026-11-17.

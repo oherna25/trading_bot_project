@@ -381,6 +381,10 @@ def route_chat(
         from bot.customalerts import set_rule_response
 
         return set_rule_response(text, store, journal, now)
+    if re.search(r"\bagent cycle\b|\brun agent\b", lowered):
+        from bot.agent import run_agent_cycle
+
+        return run_agent_cycle(store, journal, now, underlying)
     if re.search(r"\bdeploy(ment|ments|ed)?\b|\bstrategies\b|\bpause deployment\b|\bresume deployment\b|\brun deployments\b|\bstrategy track record\b|\bdeployment track record\b", lowered):
         from bot.deployments import deployments_response
 

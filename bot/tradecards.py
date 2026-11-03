@@ -298,7 +298,7 @@ def build_trade_cards(
             "iv_rank": idea.iv_rank,
         }
         reason_source = "fallback"
-        if backend in ("meta", "user"):
+        if backend in ("meta", "user", "baseten"):
             cache_key = _reason_cache_key(stats, http_post)
             cached = _reason_cache.get(cache_key)
             if cached is not None:
@@ -403,7 +403,7 @@ def query_trade_cards(
         raise ValueError(need_snapshot_text(underlying, store))
     iv_history = histories_for(store, used)
     cache_key: Optional[str] = None
-    if http_post is None and select_reason_backend(journal, now, env)[0] not in ("meta", "user"):
+    if http_post is None and select_reason_backend(journal, now, env)[0] not in ("meta", "user", "baseten"):
         cache_key = trade_cards_cache_key(text, inputs, profile, iv_history, store.all_earnings(), now)
         hit = _card_cache.get(cache_key)
         if hit is not None:

@@ -21,6 +21,12 @@ REASON_SYSTEM_PROMPT = (
     "Write one sentence stating why this options trade is a good trade. "
     "Reply with that sentence only."
 )
+AGENT_SYSTEM_PROMPT = (
+    "You rank premium-selling candidates already filtered by deterministic rules. "
+    "Pick one candidate index, or -1 to skip today. Prefer defined risk, nearer "
+    "delta to 0.20, higher annualized return, and nearer expiry only as a tiebreak. "
+    'Reply with JSON only: {"index": 0, "rationale": "one sentence"}.'
+)
 
 
 def _read_baseten_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -89,6 +95,68 @@ def _chat_reason(body: Any) -> str:
 def _predict_reason(body: Any) -> str:
     reason = body.get("reason", "") if isinstance(body, dict) else ""
     return reason.strip() if isinstance(reason, str) else ""
+
+
+def reason_model_id(env: Mapping[str, str] | None = None) -> str:
+    return _read_baseten_env(env).get(MODEL_ID_ENV, "") or REASON_MODEL_DEFAULT
+
+
+def _parse_pick(body: Any) -> tuple[int, str]:
+    if isinstance(body, dict) and "index" in body:
+        rationale = body.get("rationale") or body.get("reason") or ""
+        return int(body["index"]), str(rationale).strip()  # type: ignore[arg-type]
+    content = _chat_reason(body)
+    start, end = content.find("{"), content.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("agent returned no JSON")
+    parsed = json.loads(content[start : end + 1])
+    if not isinstance(parsed, dict) or "index" not in parsed:
+        raise ValueError("agent returned bad JSON")
+    return int(parsed["index"]), str(parsed.get("rationale") or "").strip()
+
+
+def generate_pick(
+    candidates: list[dict[str, Any]],
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
+    timeout: float = REASON_TIMEOUT_SECONDS,
+) -> tuple[int, str, float, str]:
+    values = _read_baseten_env(env)
+    key = values.get(API_KEY_ENV, "")
+    model_id = values.get(MODEL_ID_ENV, "") or REASON_MODEL_DEFAULT
+    if not key:
+        raise ValueError(f"missing {API_KEY_ENV}")
+    if not candidates:
+        raise ValueError("no candidates to pick from")
+    post = http_post or _urllib_post
+    started = time.monotonic()
+    if is_model_slug(model_id):
+        payload: dict[str, Any] = {
+            "model": model_id,
+            "messages": [
+                {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps({"candidates": candidates})},
+            ],
+            "max_tokens": REASON_MAX_TOKENS,
+        }
+        body = post(
+            predict_url(model_id),
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            payload,
+            timeout,
+        )
+    else:
+        body = post(
+            predict_url(model_id),
+            {"Authorization": f"Api-Key {key}", "Content-Type": "application/json"},
+            {"candidates": candidates},
+            timeout,
+        )
+    latency_ms = (time.monotonic() - started) * 1000.0
+    index, rationale = _parse_pick(body)
+    if not rationale:
+        raise ValueError("empty agent rationale")
+    return index, rationale, latency_ms, model_id
 
 
 def generate_reason(

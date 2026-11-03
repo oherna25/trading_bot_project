@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from typing import Any, Mapping
 
+from bot import baseten
 from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
 from bot.models import MODEL_API_BASE_URL, MODEL_REGISTRY, HttpPost, chat_spec, effective_user_model, run_analyst
@@ -37,6 +38,9 @@ def select_reason_backend(
         return "user", ""
     if error:
         return "fallback", error
+    baseten_backend, _ = baseten.select_reason_backend(journal, now, env)
+    if baseten_backend == "baseten":
+        return "baseten", ""
     values = _read_meta_env(env)
     if not values.get(API_KEY_ENV):
         return "fallback", f"missing {API_KEY_ENV}"
@@ -50,6 +54,8 @@ def generate_reason(
     timeout: float = REASON_TIMEOUT_SECONDS,
 ) -> tuple[str, float]:
     user, _, _ = effective_user_model(env)
+    if user is None and baseten._read_baseten_env(env).get(baseten.API_KEY_ENV):
+        return baseten.generate_reason(stats, env, http_post, timeout)
     if user is not None:
         spec, key, base_url = chat_spec("analyst", env), user.api_key, user.base_url
     else:

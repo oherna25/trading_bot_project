@@ -27,6 +27,20 @@ def test_select_reason_backend_meta_when_key_set():
     assert (backend, reason) == ("meta", "")
 
 
+def test_select_reason_backend_prefers_baseten_over_meta():
+    env = {"META_MODEL_API_KEY": "key-1", "BASETEN_API_KEY": "key-2"}
+    assert select_reason_backend(Journal(), NOW, env) == ("baseten", "")
+
+
+def test_generate_reason_uses_baseten_when_key_set():
+    def stub(url, headers, payload, timeout):
+        assert url.endswith("/chat/completions")
+        return {"choices": [{"message": {"content": " Baseten reason. "}}]}
+
+    reason, _ = generate_reason({"symbol": "SPY"}, {"BASETEN_API_KEY": "key-2"}, stub)
+    assert reason == "Baseten reason."
+
+
 def test_generate_reason_posts_chat_with_api_key():
     seen = {}
 

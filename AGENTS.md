@@ -59,7 +59,9 @@ Single-purpose surfaces: `charts`, `alerts`, `customalerts`, `dashboard`,
 `debate`, `coach`, `commands`, `voice`, `cards`, `news`, `holdings`, `shock`,
 `diff`, `video`, `profile`, `slash`, `venue`, `config`, `journal`,
 `metareason`, `morning`, `earnings`, `explain`, `onboarding`, `trackrecord`,
-`theme`, `ledger`. `baseten` is dormant.
+`theme`, `ledger`. `agent` plus `baseten` run the graded candidate
+proposal: Baseten Muse Spark Open picks or skips among deterministic
+deployment candidates, local code validates, sizes, and gates.
 
 Program entry points: `run_app.py` (brief once, then serve HTTP),
 `run_session.py` (one scheduled session). Library server: `bot.muse.serve`.

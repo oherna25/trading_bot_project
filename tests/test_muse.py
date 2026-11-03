@@ -151,7 +151,7 @@ def test_registry_tools_answer(monkeypatch):
         "evaluate_strategy", "show_builder",
         "take_live_trade", "get_live_status",
         "list_strategies", "deploy_strategy", "list_deployments",
-        "run_deployments", "get_deployment_trackrecord",
+        "run_deployments", "get_deployment_trackrecord", "run_agent_cycle",
     }
     store = _seeded_store()
     journal = Journal()
@@ -264,7 +264,7 @@ def test_route_mcp_tools_list_names_registry():
         "evaluate_strategy", "show_builder",
         "take_live_trade", "get_live_status",
         "list_strategies", "deploy_strategy", "list_deployments",
-        "run_deployments", "get_deployment_trackrecord",
+        "run_deployments", "get_deployment_trackrecord", "run_agent_cycle",
     }
 
 

@@ -848,6 +848,15 @@ def _run_deployments_handler(
     return run_deployments(store, journal, now) or "deployments: nothing opened or closed"
 
 
+def _run_agent_cycle_handler(
+    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
+) -> str:
+    del args, config
+    from bot.agent import run_agent_cycle
+
+    return run_agent_cycle(store, journal, now, underlying)
+
+
 def _deployment_trackrecord_handler(
     args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
 ) -> str:
@@ -1008,6 +1017,11 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_deployment_trackrecord": MuseTool(
         "get_deployment_trackrecord", "Per-strategy closed option trades, win rate, and realized PnL",
         _deployment_trackrecord_handler,
+    ),
+    "run_agent_cycle": MuseTool(
+        "run_agent_cycle",
+        "Bounded agent cycle: observe deployments, Baseten Spark Open proposes a candidate pick or skip, deterministic engine validates/sizes/gates, then verify from the journal book",
+        _run_agent_cycle_handler,
     ),
     "show_builder": MuseTool(
         "show_builder", "Preview visual-builder guardrails as matching ideas plus backtest",

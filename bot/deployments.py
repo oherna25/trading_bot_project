@@ -5,8 +5,10 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any, Callable, Optional, Sequence
 
+from bot.agent import propose_order
 from bot.capital import ledger_for
 from bot.journal import Journal
+from bot.models import HttpPost
 from bot.optionbook import closed_option_trades, open_option_positions, position_key
 from bot.profile import suggest_params
 from bot.risk import IntentRejectedError, build_intent, new_paper_account, record_paper_state, roll_paper_account, submit_paper
@@ -651,6 +653,8 @@ def run_deployments(
     journal: Journal,
     now: datetime,
     venue: Any = None,
+    env: Any = None,
+    http_post: HttpPost | None = None,
 ) -> str:
     deployments = store.list_deployments()
     if not deployments:
@@ -677,7 +681,7 @@ def run_deployments(
             except Exception as exc:
                 journal.append(now, "strategy_skipped", {"deployment_id": deployment.id, "reason": type(exc).__name__, "symbol": symbol})
                 continue
-            candidates.sort(key=lambda item: -item.annualized_return)
+            candidates, proposal = propose_order(candidates, deployment, journal, now, env, http_post)
             for candidate in candidates:
                 open_for_symbol = [
                     item for item in open_option_positions(journal, deployment.id) if item.symbol == symbol
@@ -687,7 +691,8 @@ def run_deployments(
                 note = open_candidate(deployment, candidate, store, journal, now, venue=venue)
                 if note:
                     opened += 1
-                    lines.append(f"deployment {deployment.id}: {note}")
+                    suffix = f" [agent {proposal.backend}: {proposal.rationale}]" if proposal is not None else ""
+                    lines.append(f"deployment {deployment.id}: {note}{suffix}")
                     break
     journal.append(now, "deployment_run", {"deployments": len(deployments), "opened": opened, "managed": closed_notes})
     return "\n".join(lines)

@@ -5,6 +5,7 @@ import pytest
 from bot.baseten import (
     INFERENCE_CHAT_URL,
     REASON_MODEL_DEFAULT,
+    generate_pick,
     generate_reason,
     predict_url,
     select_reason_backend,
@@ -115,6 +116,26 @@ def test_generate_reason_slug_empty_content_raises():
         generate_reason({"symbol": "SPY"}, dict(SLUG_ENV), lambda *args: {})
     with pytest.raises(ValueError):
         generate_reason({"symbol": "SPY"}, dict(SLUG_ENV), lambda *args: [])
+
+
+def test_generate_pick_slug_posts_candidates_and_parses_json():
+    seen = {}
+
+    def stub(url, headers, payload, timeout):
+        seen.update(url=url, headers=headers, payload=payload)
+        return {"choices": [{"message": {"content": '{"index": 1, "rationale": " nearer delta "}'}}]}
+
+    index, rationale, latency_ms, model_id = generate_pick([{"index": 0}, {"index": 1}], dict(SLUG_ENV), stub)
+    assert (index, rationale, model_id) == (1, "nearer delta", SLUG)
+    assert seen["url"] == INFERENCE_CHAT_URL
+    assert seen["payload"]["model"] == SLUG
+    assert "candidates" in seen["payload"]["messages"][1]["content"]
+    assert isinstance(latency_ms, float)
+
+
+def test_generate_pick_missing_key_raises():
+    with pytest.raises(ValueError, match="BASETEN_API_KEY"):
+        generate_pick([{"index": 0}], {}, lambda *args: {})
 
 
 def test_generate_reason_missing_key_raises_without_calling_http():
