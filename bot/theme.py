@@ -7,6 +7,7 @@ from bot.shapes import DashboardSettings
 
 BRAND = "MarketWingMan"
 ACCENT_NAME = "signal blue"
+ICON_URL = "/icon.png"
 
 
 def stylesheet() -> str:
@@ -42,6 +43,7 @@ def stylesheet() -> str:
         "header.top nav a:hover{color:var(--text);background:var(--chip)}"
         "header.top nav a[aria-current]{font-weight:700;color:#fff;background:linear-gradient(135deg,var(--accent),var(--accent2));box-shadow:0 6px 18px var(--glow)}"
         "header.top nav a.brand{color:var(--text);font-weight:800;letter-spacing:-.01em;padding-left:.4rem}"
+        "header.top nav a.brand img{width:26px;height:26px;border-radius:7px;vertical-align:-7px;margin-right:.45rem}"
         "header.top form{margin-left:auto;display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}"
         ".hero{border:1px solid var(--border2);border-radius:20px;padding:1.4rem 1.4rem 1.2rem;margin:0 0 1.2rem;"
         "background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,var(--panel)),var(--panel) 55%,color-mix(in srgb,var(--accent2) 12%,var(--panel)));"
@@ -190,7 +192,10 @@ def nav_header(underlying: str, current: str, settings: DashboardSettings, next_
         f'<input type="hidden" name="next" value="{html.escape(next_path, quote=True)}">'
         f'<button type="submit" aria-label="switch to {other} mode">{other} mode</button></form>'
     )
-    brand = f"<a class=\"brand\" href=\"/dashboard?underlying={escaped}\">{BRAND}</a>"
+    brand = (
+        f"<a class=\"brand\" href=\"/dashboard?underlying={escaped}\">"
+        f"<img src=\"{ICON_URL}\" alt=\"\" width=\"26\" height=\"26\">{BRAND}</a>"
+    )
     return f"<header class=\"top\"><nav>{brand}{''.join(links)}</nav>{toggle}</header>"
 
 
@@ -216,6 +221,8 @@ def page(
         "<head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         "<meta name=\"description\" content=\"MarketWingMan: Muse Spark proposes, the exposure engine grades it. Paper-first options research with a journaled audit trail.\">"
+        f"<link rel=\"icon\" type=\"image/png\" href=\"{ICON_URL}\">"
+        f"<link rel=\"apple-touch-icon\" href=\"{ICON_URL}\">"
         f"{refresh_meta(settings)}"
         f"<title>{html.escape(title)} | {BRAND}</title><style>{stylesheet()}</style></head><body>"
         "<a class=\"skip\" href=\"#main\">skip to content</a>"

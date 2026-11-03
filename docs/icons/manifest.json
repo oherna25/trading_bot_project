@@ -1,0 +1,15 @@
+{
+  "generated_utc": "2026-11-03T21:04:09.205860+00:00",
+  "concepts": [
+    {
+      "slug": "marketwingman-icon",
+      "title": "Wing Chart (project icon)",
+      "prompt": "a stylized bird wing whose layered feathers become ascending candlestick bars, the wing sweeping up to the right as a rising market chart, App icon, square, one centered bold symbol with generous padding, dark navy background #070B14, signal blue #5B8CFF to violet #8B5CF6 gradient, one amber #F5B83D accent, flat vector, minimal, high contrast, recognizable at 16 pixels, no text, no letters, no numbers, no watermark, no frame",
+      "status": "ok",
+      "file": "docs/icons/marketwingman-icon.png",
+      "bytes": 1649244,
+      "art_hash": "3f97c39596085812d07bec122db1295039886091f05e8a89e1c66048b54ebb3d",
+      "model": "muse-image-1.0"
+    }
+  ]
+}

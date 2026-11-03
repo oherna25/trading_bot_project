@@ -8,6 +8,7 @@ import json
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping, Optional
 from urllib.parse import parse_qs
 
@@ -41,7 +42,9 @@ from bot.muse_tools import (TOOL_REGISTRY, save_profile_answers, save_settings_m
 
 HEALTH_PATH = "/healthz"
 HEALTH_DETAIL_PATH = "/health"
-OPEN_PATHS = frozenset({HEALTH_PATH, HEALTH_DETAIL_PATH, "/openapi.json"})
+ICON_PATH = "/icon.png"
+ICON_FILE = Path(__file__).resolve().parent.parent / "docs" / "icons" / "marketwingman-icon.png"
+OPEN_PATHS = frozenset({HEALTH_PATH, HEALTH_DETAIL_PATH, "/openapi.json", ICON_PATH, "/favicon.ico"})
 
 
 class FormData(dict):
@@ -586,6 +589,15 @@ def route_http(
     if method == "HEAD":
         method = "GET"
     clean = path.split("?")[0]
+    if method == "GET" and clean in (ICON_PATH, "/favicon.ico"):
+        hit = _cached_response("icon", if_none_match)
+        if hit is not None:
+            return hit
+        try:
+            icon_body = ICON_FILE.read_bytes()
+        except OSError:
+            return HttpResponse.json(404, {"error": "icon not found"})
+        return _store_response("icon", icon_body, "image/png", if_none_match)
     if method == "GET" and clean == HEALTH_PATH:
         return HttpResponse.json(200, {"ok": True})
     if method == "GET" and clean == HEALTH_DETAIL_PATH:
@@ -1136,6 +1148,7 @@ def _cards_error_html(message: str) -> str:
     return (
         "<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<link rel=\"icon\" type=\"image/png\" href=\"{ICON_PATH}\">"
         f"<title>needs attention | {BRAND}</title><style>{stylesheet()}</style></head>"
         "<body><div class=\"wrap\"><section class=\"hero\">"
         "<span class=\"eyebrow\">MarketWingMan</span><h1>One step missing</h1>"

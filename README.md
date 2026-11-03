@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/icons/marketwingman-icon.png" alt="MarketWingMan icon: a wing whose feathers become ascending candlesticks" width="160"></p>
+
 <h1 align="center">MarketWingMan</h1>
 
 <p align="center"><strong>An autonomous premium-selling options agent with a research desk attached.</strong><br>

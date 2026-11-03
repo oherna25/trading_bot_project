@@ -66,6 +66,29 @@ def test_openapi_title_uses_brand():
     assert openapi_spec()["info"]["title"] == BRAND
 
 
+def test_icon_route_serves_project_icon():
+    from pathlib import Path
+
+    expected = (
+        Path(__file__).resolve().parent.parent / "docs" / "icons" / "marketwingman-icon.png"
+    ).read_bytes()
+    for path in ("/icon.png", "/favicon.ico"):
+        response = route_http("GET", path, {}, _seeded_store(), Journal(), CONFIG, NOW)
+        assert response.status == 200
+        assert response.content_type == "image/png"
+        assert response.body == expected
+        assert response.body.startswith(b"\x89PNG")
+
+
+def test_page_carries_icon_favicon_and_brand_mark():
+    response = route_http("GET", "/demo?underlying=TEST", {}, _seeded_store(),
+                          Journal(), CONFIG, NOW)
+    assert response.status == 200
+    body = response.body.decode("utf-8")
+    assert '<link rel="icon" type="image/png" href="/icon.png">' in body
+    assert '<img src="/icon.png" alt="" width="26" height="26">MarketWingMan</a>' in body
+
+
 def test_earnings_rows_uses_stored_dates_only():
     from bot.earnings import earnings_rows
 

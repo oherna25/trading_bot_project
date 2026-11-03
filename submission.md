@@ -2,6 +2,8 @@
 
 ## Title
 
+<img src="docs/icons/marketwingman-icon.png" alt="MarketWingMan icon" width="120">
+
 MarketWingMan: a premium-selling options agent, graded by its own engine
 
 ## Track and statement

@@ -190,7 +190,7 @@ def test_http_share_page_and_errors():
     response = route_http("GET", "/share?underlying=TEST&index=0", {}, _seeded_store(),
                           Journal(), CONFIG, NOW)
     assert response.status == 200
-    assert "<img" not in response.body.decode("utf-8")
+    assert '<img alt="trade card art"' not in response.body.decode("utf-8")
     assert "needs live models" in response.body.decode("utf-8")
     store = SnapshotStore()
     response = route_http("GET", "/share?underlying=TEST&index=0", {}, store, Journal(),
