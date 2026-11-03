@@ -286,3 +286,71 @@ def test_route_http_get_video_storyboard_returns_override():
     plain = route_http("GET", "/video?underlying=TEST", {}, _seeded_store(), Journal(), CONFIG, NOW)
     assert plain.status == 200
     assert "storyboard-override" not in plain.body.decode("utf-8")
+
+
+def test_submission_brief_scenes_fit_three_minutes():
+    from bot.video import SUBMISSION_SCENES, build_submission_brief
+
+    brief = build_submission_brief("TEST", _seeded_store(), Journal(), NOW)
+    assert [s.scene_id for s in brief.scenes] == [sid for sid, _ in SUBMISSION_SCENES]
+    assert brief.total_seconds <= 180
+    assert brief.scenes[0].start_seconds == 0
+    for prev, nxt in zip(brief.scenes, brief.scenes[1:]):
+        assert nxt.start_seconds == prev.start_seconds + prev.duration_seconds
+
+
+def test_submission_spark_scene_shows_all_verdict_states_offline():
+    from bot.video import build_submission_brief
+
+    brief = build_submission_brief("TEST", _seeded_store(), Journal(), NOW)
+    spark = next(s for s in brief.scenes if s.scene_id == "spark-audit")
+    assert "MATCH" in spark.body_html and "CONTRADICTION" in spark.body_html
+    assert "THIS RUN: OFF" in spark.body_html
+    assert "spark_claim" in spark.body_html
+
+
+def test_submission_spark_scene_shows_live_verdict_when_journaled():
+    from bot.video import build_submission_brief
+
+    journal = Journal()
+    journal.append(NOW, "spark_claim", {"direction": "short", "confidence": 0.83, "model_id": "muse-spark-1.3"})
+    journal.append(NOW, "spark_verdict", {"status": "MATCH", "expected": "short"})
+    brief = build_submission_brief("TEST", _seeded_store(), journal, NOW)
+    spark = next(s for s in brief.scenes if s.scene_id == "spark-audit")
+    assert "THIS RUN: MATCH" in spark.body_html
+    assert "confidence 0.83" in spark.body_html
+
+
+def test_submission_composition_root_contract():
+    from bot.video import build_submission_brief, submission_composition_html
+
+    page = submission_composition_html(build_submission_brief("TEST", _seeded_store(), Journal(), NOW))
+    assert 'data-no-timeline' in page
+    assert 'data-width="1920"' in page and 'data-height="1080"' in page
+    assert 'data-duration="115"' in page
+
+
+def test_submission_mcp_and_wheel_scenes_show_real_surfaces():
+    from bot.video import build_submission_brief
+
+    brief = build_submission_brief("TEST", _seeded_store(), Journal(), NOW)
+    mcp = next(s for s in brief.scenes if s.scene_id == "mcp")
+    assert "tools/list" in mcp.body_html and "tools/call" in mcp.body_html
+    assert "one registry" in mcp.body_html
+    assert "total exposure" in mcp.body_html
+    wheel = next(s for s in brief.scenes if s.scene_id == "wheel")
+    assert "wheel ideas" in wheel.body_html
+    assert "IV rank" in wheel.body_html
+
+
+def test_submission_narration_script_is_timed_and_written(tmp_path):
+    from bot.video import build_submission_brief, narration_script, write_submission_project
+
+    brief = build_submission_brief("TEST", _seeded_store(), Journal(), NOW)
+    script = narration_script(brief)
+    for scene in brief.scenes:
+        assert scene.narration
+        assert f"{scene.scene_id}: {scene.narration}" in script
+    assert "text-to-speech" in script
+    write_submission_project(str(tmp_path), brief)
+    assert (tmp_path / "narration.txt").read_text(encoding="utf-8") == script

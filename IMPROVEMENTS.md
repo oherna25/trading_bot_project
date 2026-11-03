@@ -4,6 +4,21 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Grade fixes (2026-11-03)
+
+* Earnings radar fetches for itself. `refresh_earnings` in `bot/earnings.py` pulls print dates via `cached_earnings` for symbols with no upcoming stored date and persists them; `earnings_text` and the `/earnings` page call it, while `earnings_rows` stays pure (pinned by test). The old radar only read dates cached as a side effect of trade-card requests, so it stayed dark with a valid FINNHUB_API_KEY. The empty state now names the next dated print instead of telling the operator to set a key that is already set. Live proof: QCOM 2026-11-04, RKLB 2026-11-09, NBIS 2026-11-12, NVDA 2026-11-17.
+* Tradier chains span DTE bands. `_select_expiries` in `bot/feeds.py` picks the first expiry at or past 0, 7, and 21 DTE instead of the nearest two; SPY went from 0-1 DTE only to 0/7/24 DTE live. The deployment band (7-30 DTE) could never form a spread before this.
+* Deployment fills stay out of the stock books. Fills tagged `option_position` are now skipped by `trackrecord._paper_fills`, `open_trade_size`, `paper_state_from_journal`, `_fill_books` (paper PnL), and `commands.open_book`. The first live deployment otherwise read as 5,760 SPY shares short at the 0.96 spread credit and a -$4M mark. Regression test in `tests/test_deployments.py`.
+* Track record splits realized from unrealized (`pnl_breakdown` in `bot/trackrecord.py`): text and page now show closed-trade win rate, realized, unrealized on N open, and equity as their sum. The split matches `equity_curve` to the cent on the live journal.
+* `explain_position` prose rewritten: one regime clause with spot-vs-flip side, total GEX labeled, biggest walls, then separate wheel and debate sentences. The old paragraph repeated the regime in a colon clause and stapled the debate verdict to the wheel line.
+* First live deployment: `d1` put_credit_spread on SPY paper, 30x 745/740 exp 2026-11-10, credit 0.96, $12,120 collateral. It closes on the existing lifecycle rules; the stock track record's zero closed trades is unchanged by design (signal positions were not mass-closed to manufacture a win rate).
+
+## Muse Image options (2026-11-03)
+
+* `ImageOptions` in `bot/shapes.py` tunes one-off generation: `n`, `size` aspect hint, `response_format`, `output_format`, `reasoning_strength`, `enable_image_search`, `enable_web_search`, `enable_shell`, `user`. `generate_image` validates at the boundary and keeps the old `{model, prompt, n:1}` payload when options are None.
+* `edit_image` posts JSON to `/images/edits` with one to ten `image_url` or `file_id` entries for retouch and compose. `refine_image` posts to `/responses` with `previous_response_id` chaining or `input_text` plus `input_image` parts, mapping tune knobs onto the `image_generation` tool. `parse_responses_image` reads the `image_generation_call` result plus response and call ids.
+* `bot/cards.py` threads options through brief, signal, and milestone art with cost from `image_cost_usd`. New helpers: `render_infographic_art` with grounded defaults, `retouch_art` for edits, `refine_art` for continuations. Journal kinds: `infographic_card`, `retouch_card`, `refine_card`, plus `*_skipped` misses. Cache key includes options. `share_html` needed no change.
+
 ## Live toggle and confidence-gated broker sends (2026-11-01)
 
 * `/live` arms and disarms live ordering through the unchanged `enable_live` gate (signature, full checklist, journaled paper evidence, clean halt/kill state) and the `kill_switch`. Misses journal `live_blocked` with the reason. See `enable_live_ui` and `kill_live_ui` in `bot/live_trade.py`.

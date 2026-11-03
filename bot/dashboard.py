@@ -296,8 +296,11 @@ def dashboard_html(
         f"<div class=\"stat\"><b>{len(store.read_holdings())}</b><span>holdings</span></div>"
         "</div>"
     )
+    from bot.spark import spark_panel_html
+
     body = (
         f"{stats}"
+        f"{spark_panel_html(store, journal, underlying)}"
         f"<h2>Digest</h2>{_board_table(rows)}{_alerts_list(alerts, now)}"
         f"<h2>Top card</h2>{_top_card_html(underlying, store, journal, now)}"
         f"<h2>Holdings</h2>{_holdings_html(store)}"

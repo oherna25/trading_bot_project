@@ -1131,11 +1131,15 @@ def route_http(
 
 
 def _cards_error_html(message: str) -> str:
-    from bot.theme import BRAND
+    from bot.theme import BRAND, stylesheet
 
     return (
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<!doctype html><html lang=\"en\" data-theme=\"dark\"><head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        f"<title>trade cards | {BRAND}</title></head>"
-        f"<body><h1>trade cards</h1><p>{html.escape(message, quote=True)}</p></body></html>"
+        f"<title>needs attention | {BRAND}</title><style>{stylesheet()}</style></head>"
+        "<body><div class=\"wrap\"><section class=\"hero\">"
+        "<span class=\"eyebrow\">MarketwingmanBot</span><h1>One step missing</h1>"
+        f"<p>{html.escape(message, quote=True)}</p>"
+        "<div class=\"hero-row\"><a class=\"btn solid\" href=\"/demo\">Open the demo</a>"
+        "<a class=\"btn\" href=\"/dashboard\">Dashboard</a></div></section></div></body></html>"
     )

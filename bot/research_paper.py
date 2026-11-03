@@ -44,6 +44,8 @@ def open_trade_size(journal: Journal, symbol: str) -> float:
             continue
         if entry.payload.get("venue", "paper") == "replay":
             continue
+        if entry.payload.get("option_position"):
+            continue
         size = entry.payload.get("size")
         if size is None:
             continue
@@ -56,6 +58,8 @@ def paper_state_from_journal(journal: Journal, symbol: str, mark: float, now: da
     day_pnl = 0.0
     for entry in journal.entries():
         if entry.kind != "fill" or entry.payload.get("venue", "paper") == "replay":
+            continue
+        if entry.payload.get("option_position"):
             continue
         fill_symbol = entry.payload.get("symbol")
         price = entry.payload.get("price")
@@ -191,6 +195,8 @@ def _fill_books(journal: Journal) -> tuple[dict[str, float], dict[str, float], d
     replay_cost: dict[str, float] = {}
     for entry in journal.entries():
         if entry.kind != "fill":
+            continue
+        if entry.payload.get("option_position"):
             continue
         symbol = entry.payload.get("symbol")
         price = entry.payload.get("price")

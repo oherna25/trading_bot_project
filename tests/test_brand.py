@@ -230,3 +230,41 @@ def test_earnings_survive_a_bundle_round_trip(tmp_path):
     save_bundle(str(tmp_path), store, Journal())
     fresh, _ = load_bundle(str(tmp_path))
     assert fresh.read_earnings("TEST") == date.fromisoformat(day)
+
+
+def test_earnings_radar_fetches_and_persists_missing_dates(monkeypatch):
+    from bot.earnings import earnings_text
+
+    monkeypatch.setattr(
+        "bot.ideas.cached_earnings",
+        lambda symbols, ref: {"TEST": NOW.date() + timedelta(days=4)},
+    )
+    store = _seeded_store()
+    text = earnings_text(store, NOW)
+    assert "TEST prints" in text and "4 days out" in text
+    assert store.read_earnings("TEST") == NOW.date() + timedelta(days=4)
+
+
+def test_earnings_radar_skips_fetch_when_dates_stored(monkeypatch):
+    from bot.earnings import earnings_text
+
+    def explode(symbols, ref):
+        raise AssertionError("stored dates must not refetch")
+
+    monkeypatch.setattr("bot.ideas.cached_earnings", explode)
+    store = _seeded_store()
+    store.save_earnings("TEST", (NOW.date() + timedelta(days=5)).isoformat())
+    assert "TEST prints" in earnings_text(store, NOW)
+
+
+def test_earnings_radar_names_next_print_beyond_window(monkeypatch):
+    from bot.earnings import earnings_text
+
+    monkeypatch.setattr(
+        "bot.ideas.cached_earnings",
+        lambda symbols, ref: {"TEST": NOW.date() + timedelta(days=40)},
+    )
+    text = earnings_text(_seeded_store(), NOW)
+    assert "no prints in the next 14 days" in text
+    assert "next print TEST" in text
+    assert "FINNHUB_API_KEY" not in text

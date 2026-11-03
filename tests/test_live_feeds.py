@@ -706,3 +706,22 @@ def test_urllib_get_retries_transient_then_succeeds(monkeypatch):
     monkeypatch.setattr(feeds.time, "sleep", lambda *_: None)
     assert feeds._urllib_get("https://example.test/x", None, None, 1.0) == {"ok": True}
     assert attempts["n"] == 3
+
+
+def test_tradier_expiry_selection_spans_dte_bands():
+    from datetime import date
+
+    from bot.feeds import _select_expiries
+
+    expiries = ["2026-11-03", "2026-11-04", "2026-11-05", "2026-11-12", "2026-11-25", "2026-12-24"]
+    picked = _select_expiries(expiries, date(2026, 11, 3))
+    assert picked == ["2026-11-03", "2026-11-12", "2026-11-25"]
+
+
+def test_tradier_expiry_selection_keeps_single_and_bad_dates():
+    from datetime import date
+
+    from bot.feeds import _select_expiries
+
+    assert _select_expiries(["2026-11-20"], date(2026, 11, 3)) == ["2026-11-20"]
+    assert _select_expiries(["bogus", "also-bad"], date(2026, 11, 3)) == ["bogus", "also-bad"]

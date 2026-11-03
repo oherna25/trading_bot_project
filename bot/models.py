@@ -14,13 +14,15 @@ from bot.config import read_dotenv as _read_dotenv
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.ledger import reserve_budget, settle_journal_receipts
-from bot.shapes import ChainSnapshot, ModelReceipt, UserModelConfig
+from bot.shapes import ChainSnapshot, ImageOptions, ModelReceipt, UserModelConfig
 
 MODEL_API_BASE_URL = "https://api.meta.ai/v1"
 MODEL_TIMEOUT_SECONDS = 60.0
 MODEL_MAX_TOKENS = 1200
 MODEL_MAX_ROUNDS = 2
 MODEL_REASONING_EFFORT = "low"
+IMAGE_EDIT_ENDPOINT = "/images/edits"
+IMAGE_RESPONSES_ENDPOINT = "/responses"
 
 USER_MODEL_KEY_ENV = "USER_MODEL_API_KEY"
 USER_MODEL_BASE_URL_ENV = "USER_MODEL_BASE_URL"
@@ -344,11 +346,70 @@ def transcribe_audio(
     return body, (time.monotonic() - started) * 1000.0
 
 
+def image_cost_usd(spec: ModelSpec, options: ImageOptions | None = None) -> float:
+    count = options.n if options is not None else 1
+    return spec.price_in * count
+
+
+def _validate_image_options(options: ImageOptions) -> None:
+    if options.n < 1 or options.n > 10:
+        raise ValueError(f"invalid n {options.n} (needs 1-10)")
+    if options.size is not None and options.size != "auto":
+        parts = options.size.lower().split("x")
+        if len(parts) != 2 or not all(part.isdigit() for part in parts):
+            raise ValueError(f"invalid size {options.size!r} (needs WxH or auto)")
+        width, height = int(parts[0]), int(parts[1])
+        if width <= 0 or height <= 0:
+            raise ValueError(f"invalid size {options.size!r} (needs WxH or auto)")
+        ratio = max(width, height) / min(width, height)
+        if ratio > 16:
+            raise ValueError(f"invalid size {options.size!r} (aspect beyond 16:1)")
+    if options.response_format is not None and options.response_format not in ("b64_json", "url"):
+        raise ValueError(f"invalid response_format {options.response_format!r}")
+    if options.output_format is not None and options.output_format not in ("webp", "png", "jpeg"):
+        raise ValueError(f"invalid output_format {options.output_format!r}")
+    if options.reasoning_strength is not None and options.reasoning_strength not in ("high", "low"):
+        raise ValueError(f"invalid reasoning_strength {options.reasoning_strength!r}")
+
+
+def _image_payload(model_id: str, prompt: str, options: ImageOptions | None) -> dict[str, Any]:
+    if not prompt.strip():
+        raise ValueError("image prompt must be a non-empty string")
+    payload: dict[str, Any] = {"model": model_id, "prompt": prompt, "n": 1}
+    if options is None:
+        return payload
+    _validate_image_options(options)
+    payload["n"] = options.n
+    if options.size is not None and options.size != "auto":
+        payload["size"] = options.size
+    if options.response_format is not None:
+        payload["response_format"] = options.response_format
+    if options.output_format is not None:
+        payload["output_format"] = options.output_format
+    if options.reasoning_strength is not None:
+        payload["reasoning_strength"] = options.reasoning_strength
+    tool_enablement = {
+        name: value
+        for name, value in (
+            ("enable_image_search", options.enable_image_search),
+            ("enable_web_search", options.enable_web_search),
+            ("enable_shell", options.enable_shell),
+        )
+        if value is not None
+    }
+    if tool_enablement:
+        payload["tool_enablement"] = tool_enablement
+    if options.user is not None:
+        payload["user"] = options.user
+    return payload
+
+
 def generate_image(
     spec: ModelSpec,
     api_key: str,
     prompt: str,
     http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
     timeout: float = MODEL_TIMEOUT_SECONDS,
 ) -> tuple[Any, float]:
     post = http_post or _urllib_post
@@ -356,10 +417,152 @@ def generate_image(
     body = post(
         MODEL_API_BASE_URL + spec.endpoint,
         {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        {"model": spec.model_id, "prompt": prompt, "n": 1},
+        _image_payload(spec.model_id, prompt, options),
         timeout,
     )
     return body, (time.monotonic() - started) * 1000.0
+
+
+def _normalize_edit_images(images: Any) -> list[dict[str, Any]]:
+    if not isinstance(images, (list, tuple)) or not 1 <= len(images) <= 10:
+        raise ValueError("edit needs 1-10 input images")
+    normalized: list[dict[str, Any]] = []
+    for item in images:
+        if isinstance(item, str):
+            if not item.strip():
+                raise ValueError("edit image_url must be a non-empty string")
+            normalized.append({"image_url": item})
+        elif isinstance(item, Mapping):
+            has_url = "image_url" in item and item["image_url"]
+            has_file = "file_id" in item and item["file_id"]
+            if bool(has_url) == bool(has_file):
+                raise ValueError("each edit image needs exactly one of image_url or file_id")
+            normalized.append(dict(item))
+        else:
+            raise ValueError("each edit image must be a URL string or mapping")
+    return normalized
+
+
+def edit_image(
+    spec: ModelSpec,
+    api_key: str,
+    prompt: str,
+    images: list[str] | list[dict[str, Any]] | tuple[Any, ...],
+    http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
+    timeout: float = MODEL_TIMEOUT_SECONDS,
+) -> tuple[Any, float]:
+    if not prompt.strip():
+        raise ValueError("image prompt must be a non-empty string")
+    if options is not None:
+        _validate_image_options(options)
+    payload = _image_payload(spec.model_id, prompt, options)
+    payload["images"] = _normalize_edit_images(images)
+    post = http_post or _urllib_post
+    started = time.monotonic()
+    body = post(
+        MODEL_API_BASE_URL + IMAGE_EDIT_ENDPOINT,
+        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload,
+        timeout,
+    )
+    return body, (time.monotonic() - started) * 1000.0
+
+
+def _responses_image_tool(options: ImageOptions | None) -> list[dict[str, Any]]:
+    if options is None:
+        return []
+    tool: dict[str, Any] = {"type": "image_generation"}
+    if options.enable_image_search is not None:
+        tool["enable_image_search"] = options.enable_image_search
+    if options.enable_web_search is not None:
+        tool["enable_web_search"] = options.enable_web_search
+    if options.enable_shell is not None:
+        tool["enable_shell"] = options.enable_shell
+    if options.reasoning_strength is not None:
+        tool["reasoning_strength"] = options.reasoning_strength
+    if options.size is not None and options.size != "auto":
+        tool["size"] = options.size
+    if options.output_format is not None:
+        tool["output_format"] = options.output_format
+    if len(tool) == 1:
+        return []
+    return [tool]
+
+
+def refine_image(
+    spec: ModelSpec,
+    api_key: str,
+    prompt: str,
+    previous_response_id: str | None = None,
+    reference_images: list[str] | None = None,
+    http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
+    store: bool = True,
+    timeout: float = MODEL_TIMEOUT_SECONDS,
+) -> tuple[Any, float]:
+    if not prompt.strip():
+        raise ValueError("image prompt must be a non-empty string")
+    if options is not None:
+        _validate_image_options(options)
+    if previous_response_id is not None and not previous_response_id.strip():
+        raise ValueError("previous_response_id must be a non-empty string")
+    payload: dict[str, Any] = {"model": spec.model_id, "store": store}
+    if previous_response_id is not None and store:
+        payload["previous_response_id"] = previous_response_id
+        payload["input"] = prompt
+    elif reference_images:
+        content: list[dict[str, Any]] = []
+        for url in reference_images:
+            content.append({"type": "input_text", "text": "reference image:"})
+            content.append({"type": "input_image", "image_url": url})
+        content.append({"type": "input_text", "text": prompt})
+        payload["input"] = [{"role": "user", "content": content}]
+    else:
+        payload["input"] = prompt
+    tools = _responses_image_tool(options)
+    if tools:
+        payload["tools"] = tools
+    post = http_post or _urllib_post
+    started = time.monotonic()
+    body = post(
+        MODEL_API_BASE_URL + IMAGE_RESPONSES_ENDPOINT,
+        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        payload,
+        timeout,
+    )
+    return body, (time.monotonic() - started) * 1000.0
+
+
+def parse_responses_image(body: Any) -> dict[str, Any | None]:
+    result: dict[str, Any | None] = {
+        "b64": None,
+        "response_id": None,
+        "call_id": None,
+        "reasoning": None,
+    }
+    if not isinstance(body, dict):
+        return result
+    if isinstance(body.get("id"), str):
+        result["response_id"] = body["id"]
+    for item in body.get("output", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "image_generation_call" and result["b64"] is None:
+            if isinstance(item.get("result"), str):
+                result["b64"] = item["result"]
+            if isinstance(item.get("id"), str):
+                result["call_id"] = item["id"]
+        if item.get("type") == "reasoning" and result["reasoning"] is None:
+            summaries = item.get("summary", []) or []
+            texts = [
+                part.get("text", "") or part.get("summary_text", "")
+                for part in summaries
+                if isinstance(part, dict) and (part.get("text") or part.get("summary_text"))
+            ]
+            if texts:
+                result["reasoning"] = " ".join(texts)
+    return result
 
 
 def run_responses(

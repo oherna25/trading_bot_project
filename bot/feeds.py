@@ -27,7 +27,11 @@ ALPHA_VANTAGE_URL = "https://www.alphavantage.co/query"
 
 HTTP_TIMEOUT_SECONDS = 10.0
 BAR_DAYS = 5
-TRADIER_MAX_EXPIRIES = 2
+TRADIER_MAX_EXPIRIES = 3
+# Expiries are picked by days-to-expiry targets, not by position: the
+# nearest two expiries of a daily name are 0-1 DTE, which left the
+# 7-30 DTE deployment band and month-timeframe cards with no chain.
+TRADIER_EXPIRY_DTE_TARGETS = (0, 7, 21)
 FEED_CACHE_TTL_SECONDS = 60.0
 _FEED_CACHE: dict[str, tuple[float, object]] = {}
 
@@ -260,6 +264,26 @@ def _tradier_expiry(entry: Any) -> str | None:
     return str(entry) if entry is not None else None
 
 
+def _select_expiries(expiries: list[str], today) -> list[str]:
+    picked: list[str] = []
+    parsed: list[tuple[int, str]] = []
+    for expiry in expiries:
+        try:
+            day = datetime.fromisoformat(str(expiry)[:10]).date()
+        except ValueError:
+            continue
+        parsed.append(((day - today).days, expiry))
+    if not parsed:
+        return list(expiries[:TRADIER_MAX_EXPIRIES])
+    parsed.sort(key=lambda item: item[0])
+    for target in TRADIER_EXPIRY_DTE_TARGETS:
+        for dte, expiry in parsed:
+            if dte >= target and expiry not in picked:
+                picked.append(expiry)
+                break
+    return picked[:TRADIER_MAX_EXPIRIES]
+
+
 def _tradier_sandbox(ctx: FeedContext) -> dict[str, Any]:
     headers = {"Authorization": f"Bearer {_credential_or_offline(ctx, 'TRADIER_ACCESS_TOKEN')}", "Accept": "application/json"}
     base = _tradier_base()
@@ -274,7 +298,7 @@ def _tradier_sandbox(ctx: FeedContext) -> dict[str, Any]:
     raw_expiries = _as_list(node.get("date") or node.get("expiration"))
     expiries = [e for e in (_tradier_expiry(entry) for entry in raw_expiries) if e]
     contracts: list[dict[str, Any]] = []
-    for expiry in expiries[:TRADIER_MAX_EXPIRIES]:
+    for expiry in _select_expiries(expiries, _now_utc().date()):
         chain_payload = ctx.http_get(
             f"{base}/markets/options/chains",
             headers=headers,

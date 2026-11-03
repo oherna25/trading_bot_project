@@ -70,3 +70,14 @@ def test_format_spark_block_marks_prose_unverified():
     assert verdict.status == CONTRADICTION
     block = format_spark_block(None, verdict, "long")
     assert "CONTRADICTION" in block
+
+
+def test_spark_panel_html_off_state_is_visual_and_readonly():
+    from bot.spark import spark_panel_html
+
+    journal = Journal()
+    html = spark_panel_html(_seeded_store(), journal, "SPY")
+    assert "spark-panel" in html
+    assert "SPARK AUDIT" in html and "OFF" in html
+    assert "Spark (live models)" in html and "Engine disposes" in html
+    assert journal.entries() == []

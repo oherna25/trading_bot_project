@@ -1,0 +1,11 @@
+# Drafted by muse-spark-1.3 via bot.models.run_analyst (analyst role). No Muse TTS endpoint exists; record this or use an external voice.
+[  0s-  6s] hook: This desk shows the AI call next to the options walls. It records which one was right.
+[  6s- 18s] engine: The engine builds gamma, vega, delta, charm, and vanna from stored chains. No outside exposure feed is used.
+[ 18s- 34s] spark-audit: Spark suggests a direction. The engine marks it as match, contradiction, unverified, or off.
+[ 34s- 48s] top-card: The top card shows size, max loss, and breakeven. You see risk before any order button.
+[ 48s- 59s] safety: Every order goes through the same risk check. Live trading is off by default, and the kill switch overrides everything.
+[ 59s- 72s] replay: Replay compares the strategy to buy-and-hold on the same bars. Fills use the next bar, with no lookahead.
+[ 72s- 83s] shock: A minus two percent shock reprices walls and positions. That happens before any sizing.
+[ 83s- 95s] mcp: Fifty tools sit in one registry over HTTP. Chat, slash commands, and outside clients use the same handlers.
+[ 95s-108s] wheel: The wheel screen ranks cash-secured puts and covered calls by premium. Filters cover delta, open interest, IV rank, and earnings.
+[108s-115s] outro: Spark proposes. The engine grades it. Open the demo, run an audit, and check the journal.

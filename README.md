@@ -5,7 +5,7 @@ It reads the chain, computes its own dealer exposure, picks contracts, sizes aga
 
 <p align="center">
 <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
-<img alt="944 tests passing" src="https://img.shields.io/badge/tests-944%20passing-brightgreen">
+<img alt="944 tests passing" src="https://img.shields.io/badge/tests-952%20passing-brightgreen">
 <img alt="Fully offline test suite" src="https://img.shields.io/badge/tests-fully%20offline-blueviolet">
 <img alt="Paper trading by default" src="https://img.shields.io/badge/trading-paper%20first-green">
 <img alt="Live ordering off by default" src="https://img.shields.io/badge/live-off%20until%20signed-red">
@@ -73,7 +73,7 @@ Save a profile first, in chat: `profile: risk_tolerance=moderate, portfolio_size
 | Muse Spark Open / Glimmer (local) | On-device analyst rescue, alert judging, narration and draft tasks at zero API cost | `bot/localmodels.py`, `bot/tiers.py` | Tier falls through to hosted or rules |
 | Muse Voice / Transcribe | Spoken holdings, voice commands, two-step voice kill switch | `bot/voice.py` | Text chat only |
 | SAM 3.1 + Spark | Document and chart screenshot reading against engine walls | `bot/docread.py`, `bot/chartread.py` | Pages and text surfaces only |
-| Muse Image | Shareable card art | `bot/cards.py` | Caption without art |
+| Muse Image | Card art, infographics, edits, refine | `bot/models.py`, `bot/cards.py` | Caption without art |
 
 The pattern is constant: the model proposes in a bounded, journaled shape, and local deterministic code decides what counts. A slow, missing, or contradictory model response cannot move a risk gate, size a position, or place an order.
 
@@ -93,7 +93,7 @@ The local tier already runs Muse Glimmer and Muse Spark Open on this machine thr
 
 | Evidence | Scope and limits |
 |---|---|
-| 944 tests, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. |
+| 952 tests, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. |
 | HTTP drive on a scratch bundle | Create, list, and run deployments plus chat and MCP calls against the real server. The canned chain has no Greeks, so it proves routing and persistence, not candidate selection. |
 | Seeded screenshot bundle | Multi-symbol chains with Greeks drive the tour pages. Numbers are real stored state for that bundle, not market data. |
 | Live venue tests | Fake venue under an armed flag proves the submit path and tagging. No real order has been placed by the test suite, by design. |
@@ -187,7 +187,7 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/localmodels.py` | Local Glimmer/Spark Open backend: one persistent `llama-server` per weights file, prompts in POST body, zero-cost receipts |
 | `bot/tiers.py` | Cost-aware tier router: draft/deep/premium task classes over local/Spark/Wonder plus fallback |
 | `bot/voice.py` | Ogg-to-WAV conversion plus 16kHz WAV transcription into chat commands, `voice_transcript` journaling, spoken holdings, two-step voice kill |
-| `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling, shareable signal art with cache, milestone art |
+| `bot/cards.py` | Regime card art with engine numbers, `brief_card` journaling, shareable signal art with cache, milestone art, grounded infographics, edit and refine helpers |
 | `bot/chartread.py` | Spark multimodal chart screenshot reader grounded in engine walls and flip |
 | `bot/docread.py` | SAM 3.1 region segmentation plus Spark document reading with region hints |
 | `bot/news.py` | Shock repricing plus a cited Responses web-search driver |
@@ -222,9 +222,11 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `yfinance` | bars | none | Unkeyed backup |
 | `alpha_vantage` | bars | `ALPHA_VANTAGE_API_KEY` | Last-resort daily bars with ~100-day depth; at most one call per symbol per day (journal-guarded) |
 
-Fallback order is fixed tables: chains try Tradier then Market Data; bars try Alpaca, Finnhub, Yahoo, then Alpha Vantage. Quota-capped feeds skip when the journal shows a fetch for that symbol today, so Alpha Vantage costs at most one call per symbol per day no matter how often sessions tick. `bot/ledger.py` additionally reserves quota before each feed call through atomic claim files, so concurrent sessions never double-spend a daily cap. Ingest latency and per-source lineage journal under each fetch, and `/feeds` plus the `feeds` key on `/health` turn that lineage into a health view: last success, latency, and quota use per source. Seed one symbol by hand with `ingest_bars("alpha_vantage", store, journal)`. An empty bar result counts as feed failure and falls through to the next source. `live_brief` journals each failure with the error class name only, raises `FeedUnavailableError` when every chain feed fails, and treats bars as best effort (without a bar or a flip, direction falls back to the regime sign and the brief says so).
+Tradier chains select expiries by days-to-expiry bands (first expiry at or past 0, 7, and 21 DTE in `_select_expiries`), so daily names carry the 7-30 DTE contracts the deployment band and month-timeframe cards need instead of only the nearest two expiries. Fallback order is fixed tables: chains try Tradier then Market Data; bars try Alpaca, Finnhub, Yahoo, then Alpha Vantage. Quota-capped feeds skip when the journal shows a fetch for that symbol today, so Alpha Vantage costs at most one call per symbol per day no matter how often sessions tick. `bot/ledger.py` additionally reserves quota before each feed call through atomic claim files, so concurrent sessions never double-spend a daily cap. Ingest latency and per-source lineage journal under each fetch, and `/feeds` plus the `feeds` key on `/health` turn that lineage into a health view: last success, latency, and quota use per source. Seed one symbol by hand with `ingest_bars("alpha_vantage", store, journal)`. An empty bar result counts as feed failure and falls through to the next source. `live_brief` journals each failure with the error class name only, raises `FeedUnavailableError` when every chain feed fails, and treats bars as best effort (without a bar or a flip, direction falls back to the regime sign and the brief says so).
 
 Without arguments, `ingest_chain`/`ingest_bars` use canned vendor-shaped fixtures, so the whole suite and every offline flow run with no keys and no network.
+
+The earnings radar (`get_earnings_radar`, `GET /earnings`) refreshes itself: `refresh_earnings` in `bot/earnings.py` fetches Finnhub print dates for stored symbols with no upcoming date and persists them in `earnings.json`, so the radar lights up with a key set instead of waiting for a trade-card request to cache dates as a side effect. Without a key it reports the stored dates and says so.
 
 ## Configuration
 
@@ -625,7 +627,7 @@ Deliberately not integrated: a volume filter needs a contract field that does no
 
 Deployable strategies live in `bot/deployments.py` behind `STRATEGY_REGISTRY`: `cash_secured_put`, `covered_call`, `put_credit_spread`, and `call_credit_spread`. A deployment is a persisted `StrategyDeployment` (strategy, symbols, paper or live mode, capital cap, 70% target utilization, status, profit target, close DTE) stored in the store and in `deployments.json` in the bundle. Create one in chat with `deploy cash_secured_put on SPY,QQQ paper capital 50000` or in plain English with `deploy sell puts on SPY paper capital 40000`. The same actions exist as tools (`list_strategies`, `deploy_strategy`, `list_deployments`, `run_deployments`, `get_deployment_trackrecord`) and HTTP routes (`GET/POST /deployments`, `POST /deployments/run`).
 
-Every scheduled session runs `run_deployments` after the brief. Each run first applies feedback from closed trades, then manages open short options, then opens new sales. Management closes at 50% of credit captured, at 2x credit lost, or inside the close DTE window, and settles expired contracts against spot with an `assignment` journal entry for in-the-money single legs. New sales rank by annualized premium return on collateral, size from the capital ledger in `bot/capital.py` (one position uses at most 25% of the capital cap, and new sales stop at the target utilization), and are idempotent per contract per day and while the contract is open. Covered calls only sell against held 100-share lots. All fills carry deployment, strategy, contract, and collateral tags, so `bot/optionbook.py` can rebuild the contract book from the journal and report a per-strategy track record. Feedback is deterministic: realized losses shrink the sizing scale toward 0.5, gains raise it toward 1.25, and three or more closed trades down 5% of the capital cap auto-pause the deployment. Live deployments use the existing armed `submit_live` path only when a venue is supplied to the runner, and stay journal-skipped otherwise. A saved profile with `options_ok` is required for every options intent, including deployment opens.
+Every scheduled session runs `run_deployments` after the brief. Each run first applies feedback from closed trades, then manages open short options, then opens new sales. Management closes at 50% of credit captured, at 2x credit lost, or inside the close DTE window, and settles expired contracts against spot with an `assignment` journal entry for in-the-money single legs. New sales rank by annualized premium return on collateral, size from the capital ledger in `bot/capital.py` (one position uses at most 25% of the capital cap, and new sales stop at the target utilization), and are idempotent per contract per day and while the contract is open. Covered calls only sell against held 100-share lots. All fills carry deployment, strategy, contract, and collateral tags, so `bot/optionbook.py` can rebuild the contract book from the journal and report a per-strategy track record. Deployment fills are tagged `option_position` and stay out of the stock paper book: the share track record, paper PnL, and portfolio commands skip them, and the strategy track record owns them. The share track record (`get_trackrecord`, `GET /trackrecord`) splits realized PnL from unrealized marks on open positions, so equity never reads as a win rate. First live deployment (2026-11-03): `put_credit_spread` on SPY paper, 30 SPY 745/740 put spreads expiring 2026-11-10 at 0.96 credit, $12,120 collateral against a $50,000 cap. Feedback is deterministic: realized losses shrink the sizing scale toward 0.5, gains raise it toward 1.25, and three or more closed trades down 5% of the capital cap auto-pause the deployment. Live deployments use the existing armed `submit_live` path only when a venue is supplied to the runner, and stay journal-skipped otherwise. A saved profile with `options_ok` is required for every options intent, including deployment opens.
 
 ### IV backfill
 
@@ -695,6 +697,8 @@ Chatting `"shock SPY -2% why"` (or the `shock_news` tool) runs the usual shock r
 ### Shareable cards
 
 Chatting `"share card 0"` (or the `share_card` tool, or `GET /share?underlying=SPY&index=0`) returns a shareable caption per trade card: spread line, wall plus regime plus spot-versus-flip stats, the one-line reason, and the art hash. With live models the Image model renders a no-text cover per card (cached in memory by prompt hash, journaled as `signal_card`); without them the caption notes art needs live models. `GET /share` renders the same card as a page with embedded art when `&live_models=1`.
+
+Image calls live in `bot/models.py` and prompts live in `bot/cards.py`. `ImageOptions` in `bot/shapes.py` carries `n`, `size`, `response_format`, `output_format`, `reasoning_strength`, the three `enable_*` toggles, and `user`. `generate_image` sends a one-off generation. `edit_image` sends `images/edits` with one to ten `image_url` or `file_id` entries. `refine_image` sends `responses` with `previous_response_id` chaining or `input_text` plus `input_image` parts. `parse_responses_image` reads the `image_generation_call` result. Cost is flat $0.01 per image through `image_cost_usd`. Every call journals a `ModelReceipt` and a card entry, and every miss journals `*_skipped` so offline stays intact. `render_infographic_art` uses grounded defaults with search and shell on. `retouch_art` edits from reference images. `refine_art` continues a prior response.
 
 ### Alert narration
 

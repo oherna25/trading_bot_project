@@ -253,3 +253,17 @@ def test_deployments_text_reports_utilization():
     text = deployments_text(store, journal)
     assert "utilization 19%" in text
     assert "deployed 9500" in text
+
+
+def test_deployment_fill_stays_out_of_stock_books():
+    from bot.research_paper import open_trade_size, paper_pnl_text
+    from bot.trackrecord import closed_trades, trackrecord_text
+
+    store, journal = _put_store()
+    create_deployment(store, "cash_secured_put", ["SPY"], capital_cap=50000.0)
+    run_deployments(store, journal, NOW)
+    assert open_option_positions(journal)
+    assert open_trade_size(journal, "SPY") == 0.0
+    assert closed_trades(journal) == []
+    assert "no paper fills" in trackrecord_text(journal, store)
+    assert "size 0" not in paper_pnl_text(journal, store)

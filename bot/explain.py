@@ -46,10 +46,12 @@ def explain_position(symbol: str, store: SnapshotStore, journal: Journal, now: d
         wall_bit = "; ".join(f"{strike:g} {compact_dollars(value)}" for strike, value in walls)
     else:
         wall_bit = "no walls"
-    brief_bit = (
-        f"brief reads {regime} with spot {spot_text} vs flip {flip_text} "
-        f"and {compact_dollars(profile.total_exposure)} total"
-    )
+    if profile.flip_point is not None and spot is not None:
+        side = "above" if spot >= profile.flip_point else "below"
+        flip_bit = f"spot {spot_text} vs flip {flip_text} ({side} the flip)"
+    else:
+        flip_bit = f"spot {spot_text} vs flip {flip_text}"
+    brief_bit = f"{flip_bit}, total GEX {compact_dollars(profile.total_exposure)}"
     try:
         from bot.wheel import wheel_response
 
@@ -63,11 +65,11 @@ def explain_position(symbol: str, store: SnapshotStore, journal: Journal, now: d
                 top = " ".join(line.split()[1:])
                 break
         if top:
-            wheel_bit = f"wheel top {top}"
+            wheel_bit = f"wheel top: {top}"
         elif "none found" in wheel_text:
-            wheel_bit = "wheel finds no premium ideas"
+            wheel_bit = "wheel: no premium ideas qualify right now"
         else:
-            wheel_bit = " ".join(wheel_text.split())
+            wheel_bit = "wheel: " + " ".join(wheel_text.split())
     if store.read_profile() is None:
         debate_bit = "debate needs a profile"
     else:
@@ -77,25 +79,31 @@ def explain_position(symbol: str, store: SnapshotStore, journal: Journal, now: d
 
             _, cards = demo_cards(clean, store, journal, now)
             if not cards:
-                debate_bit = "debate finds no card"
+                debate_bit = "debate: no card to argue over"
             else:
                 debate_text = debate_card(cards[0], journal, now)
                 verdict = debate_text.splitlines()[-1] if debate_text else "verdict unknown"
-                debate_bit = f"debate says {verdict}"
+                debate_bit = f"debate on the top {clean} card: {verdict}"
         except ValueError as exc:
             debate_bit = str(exc).replace("\n", " ")
     sentences = []
     if holdings:
         position_bit = ", ".join(describe_holding(h) for h in holdings)
         verb = "sit" if len(holdings) > 1 else "sits"
-        sentences.append(f"Your {position_bit} {verb} in {regime}: {brief_bit}; walls {wall_bit}.")
+        sentences.append(
+            f"Your {position_bit} {verb} in a {regime} regime ({brief_bit}); "
+            f"biggest walls at {wall_bit}."
+        )
     if net != 0:
         side = "long" if net > 0 else "short"
         paper_bit = f"Paper book: {abs(net):g} {clean} shares {side}"
         if holdings:
             sentences.append(f"{paper_bit}, alongside your saved holding.")
         else:
-            sentences.append(f"{paper_bit}, sitting in {regime}: {brief_bit}; walls {wall_bit}.")
+            sentences.append(
+                f"{paper_bit} in a {regime} regime ({brief_bit}); "
+                f"biggest walls at {wall_bit}."
+            )
     sentences.append(f"{_lead(wheel_bit)}. {_lead(debate_bit)}.")
     paragraph = " ".join(sentences)
     paragraph = " ".join(paragraph.split())

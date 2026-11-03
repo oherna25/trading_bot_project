@@ -147,12 +147,44 @@ place an order.
 
 Depth: one pass exposure calc, bisect indexed store, gated paper venue with
 halt drills, no lookahead replay, a collateral ledger, and a contract book
-rebuilt from journaled fills. 944 offline tests. Journal or it did not
+rebuilt from journaled fills. 952 offline tests. Journal or it did not
 happen.
 
 Demo: one ticker, one audit verdict a judge can read from the back row, then
 one chat command that deploys a selling strategy and a book page that proves
 it acted.
+
+## Live evidence (2026-11-03, from the running server)
+
+- Deployment `d1` is live on paper: `put_credit_spread` on SPY, opened by
+  `run_deployments` — 30 SPY 745/740 put spreads expiring 2026-11-10,
+  credit 0.96, $12,120 collateral against the $50,000 cap. It closes on
+  the journaled lifecycle rules (50% profit target, 2x credit stop,
+  close at 5 DTE, expiry settlement); closed trades land in
+  `get_deployment_trackrecord`. Check it with `list_deployments`.
+- The earnings radar lights up on its own now: QCOM 2026-11-04,
+  RKLB 2026-11-09, NBIS 2026-11-12, NVDA 2026-11-17, each with regime,
+  spot, and nearest wall. It fetches and persists print dates instead of
+  waiting for a trade-card request to cache them as a side effect.
+- The track record page splits realized from unrealized: win rate counts
+  closed trades only, and equity is labeled realized + unrealized marks
+  on open positions. Deployment option fills no longer pollute the stock
+  paper book (they were counted as thousands of shares at the spread
+  credit before this fix).
+- The Tradier chain now spans DTE bands (nearest, >=7, >=21 DTE) instead
+  of the nearest two expiries, so SPY carries 7-30 DTE contracts and the
+  deployment band can actually form. Before this, SPY chains were 0-1
+  DTE only and no spread could ever open.
+
+## Human actions before submitting (not code)
+
+1. Claim the $150 model credits per person by Nov 4, 9:00 PM ET.
+2. Upload `docs/submission-video/submission.mp4` to YouTube or Loom and
+   replace the demo-video action line above with the public link.
+3. If the submission includes a live link: set `MUSE_AUTH_TOKEN` in
+   `.env`, restart `run_app.py`, and put the server behind Tailscale
+   Funnel (the server currently binds 0.0.0.0 without a token and prints
+   that warning at startup). Otherwise remove the live link.
 
 ## Local models: the next advantage
 

@@ -284,7 +284,7 @@ def test_dashboard_route_returns_all_sections():
     assert "reason:" in body
     assert "/card?underlying=TEST&amp;snapshot=" in body
     assert 'http-equiv="refresh" content="60"' in body
-    assert "background:#0d1117" in body
+    assert "--bg:#070b14" in body
 
 
 def test_dashboard_route_empty_store_returns_400():

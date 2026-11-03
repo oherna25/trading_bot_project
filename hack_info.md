@@ -259,3 +259,10 @@ Top 5 projects per track advance. Judges watch video demos live and rank using t
 7.  Prepare public repo + 3-minute demo video.
 8.  Submit once per team via Representative by Nov 4, 9:00 PM ET.
 9.  Optionally post demo to X for Most Viral Project prize (by Nov 8 EOD).
+
+## submission notes
+1. The submission form takes one public GitHub repo URL, so a single monorepo is the safer choice. Cross-linking two repos from the main README is not guaranteed to be judged, since judges work from the one submitted repo and its setup instructions, so merge them into one repo.
+
+2. The organizer answers don't say which keys judges must supply. What's confirmed is that the project has to run from the public repo's setup instructions, that judges may test with their own keys, and that API keys must never be committed. Explain in the README exactly which variables are needed for each mode (for example, `.env.example` lists `META_MODEL_API_KEY` and `BASETEN_API_KEY`, and which one is optional), and keep your replay mode in the README too. Baseten's hackathon key works only with `meta-models/muse-spark-open-1026`.
+
+3. Judges can run the project from the repo's setup instructions without signing up for outside accounts, and a local setup with seed data or a mock-data path is acceptable. So a fallback that runs without MongoDB or a Telegram bot is in line with that, as long as the README documents it and the video shows the working flow with live Meta model calls visible.

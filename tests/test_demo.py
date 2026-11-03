@@ -182,3 +182,12 @@ def test_demo_cards_pins_old_snapshot_bar():
     assert cards and all(card.snapshot_id == first_id for card in cards)
     bar = bar_at_or_before(store, "TEST", NOW - timedelta(days=1))
     assert bar is not None and bar.timestamp_utc == NOW - timedelta(days=1)
+
+
+def test_demo_page_has_hero_spark_panel_and_chat_box():
+    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
+    assert "Spark proposes. The engine grades it." in page
+    assert "SPARK AUDIT" in page
+    assert "Ask the desk" in page
+    assert 'id="chat-form"' in page
+    assert "Gamma by strike" in page

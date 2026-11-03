@@ -1,0 +1,14 @@
+narration script · submission-20261101T184639 · 115s total
+Voice: record these lines, or draft polished variants with Muse Spark / Muse Wonder chat.
+No Muse text-to-speech endpoint exists in MODEL_REGISTRY (muse-voice-transcribe-1.0 is speech-to-text only), so Muse cannot voice this track in-repo.
+
+[  0s-  6s] hook: Your AI says long. Your walls say otherwise. This desk shows you both, and journals who was right.
+[  6s- 18s] engine: The engine computes gamma, vega, delta, charm, and vanna exposure from stored option chains. No vendor exposure feed.
+[ 18s- 34s] spark-audit: Muse Spark proposes a direction. The deterministic engine grades it: match, contradiction, unverified, or off. Free prose never counts.
+[ 34s- 48s] top-card: The top trade card is sized and defined-risk, with max loss and breakeven before you ever see a buy button.
+[ 48s- 59s] safety: Every submit passes the same risk gate. Live ordering ships disabled, and the kill switch always wins.
+[ 59s- 72s] replay: Replay scores the strategy against buy-and-hold on the same bars, with next-bar fills and no lookahead.
+[ 72s- 83s] shock: A minus two percent shock reprices every wall and position before any sizing decision.
+[ 83s- 95s] mcp: Fifty tools, one registry, exposed over MCP-style HTTP. Chat, slash commands, and external clients all call the same handlers.
+[ 95s-108s] wheel: The wheel screen ranks cash-secured puts and covered calls by premium return, filtered by delta, open interest, IV rank, and earnings.
+[108s-115s] outro: Spark proposes. The engine grades it. Try the demo, ask for a spark audit, and check the journal.

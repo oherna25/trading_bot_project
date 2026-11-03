@@ -11,13 +11,24 @@ from bot.journal import Journal
 from bot.models import (
     MODEL_REGISTRY,
     HttpPost,
+    edit_image,
     generate_image,
+    image_cost_usd,
     model_api_key,
+    parse_responses_image,
     prompt_hash,
     receipt_payload,
+    refine_image,
     select_backend,
 )
-from bot.shapes import ChainSnapshot, DashboardSettings, GexProfile, ModelReceipt, Signal
+from bot.shapes import (
+    ChainSnapshot,
+    DashboardSettings,
+    GexProfile,
+    ImageOptions,
+    ModelReceipt,
+    Signal,
+)
 from bot.store import SnapshotStore, need_snapshot_text
 from bot.tradecards import PROFILE_REQUIRED, TradeCard
 
@@ -144,6 +155,29 @@ def milestone_text(day_pnl: float) -> str:
     return "flat today"
 
 
+def _art_cache_key(prompt: str, options: ImageOptions | None) -> str:
+    if options is None:
+        return prompt_hash(prompt)
+    return prompt_hash(f"{prompt}|{options!r}")
+
+
+def _receipt_for_artist(
+    spec: Any,
+    prompt: str,
+    options: ImageOptions | None,
+    latency_ms: float,
+) -> ModelReceipt:
+    return ModelReceipt(
+        model_id=spec.model_id,
+        role_name="artist",
+        prompt_hash=_art_cache_key(prompt, options),
+        tokens_in=0,
+        tokens_out=0,
+        cost_usd=image_cost_usd(spec, options),
+        latency_ms=latency_ms,
+    )
+
+
 def _art_from_body(body: Any) -> tuple[bytes | None, str | None]:
     if not isinstance(body, dict):
         return None, None
@@ -170,6 +204,7 @@ def render_brief_card(
     snapshot_id: str = "",
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
 ) -> dict[str, Any] | None:
     backend, reason = select_backend("artist", journal, now, env)
     if backend != "model":
@@ -179,7 +214,7 @@ def render_brief_card(
     regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
     prompt = card_prompt(regime, snapshot.underlying)
     try:
-        body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post)
+        body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post, options)
     except Exception as exc:
         journal.append(now, "card_skipped", {"reason": type(exc).__name__})
         return None
@@ -195,15 +230,7 @@ def render_brief_card(
         "trigger": signal.trigger,
     }
     art_hash = hashlib.sha256(art).hexdigest() if art is not None else ""
-    receipt = ModelReceipt(
-        model_id=spec.model_id,
-        role_name="artist",
-        prompt_hash=prompt_hash(prompt),
-        tokens_in=0,
-        tokens_out=0,
-        cost_usd=spec.price_in,
-        latency_ms=latency_ms,
-    )
+    receipt = _receipt_for_artist(spec, prompt, options, latency_ms)
     journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
     journal.append(
         now,
@@ -229,8 +256,9 @@ def _render_art(
     snapshot_id: str = "",
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
 ) -> dict[str, Any] | None:
-    key = prompt_hash(prompt)
+    key = _art_cache_key(prompt, options)
     hit = _share_cache.get(key)
     if hit is not None:
         journal.append(
@@ -245,7 +273,7 @@ def _render_art(
         return None
     spec = MODEL_REGISTRY["artist"]
     try:
-        body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post)
+        body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post, options)
     except Exception as exc:
         journal.append(now, f"{kind}_skipped", {"reason": type(exc).__name__})
         return None
@@ -259,15 +287,7 @@ def _render_art(
         art_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
     else:
         art_hash = ""
-    receipt = ModelReceipt(
-        model_id=spec.model_id,
-        role_name="artist",
-        prompt_hash=key,
-        tokens_in=0,
-        tokens_out=0,
-        cost_usd=spec.price_in,
-        latency_ms=latency_ms,
-    )
+    receipt = _receipt_for_artist(spec, prompt, options, latency_ms)
     journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
     journal.append(
         now, kind,
@@ -290,10 +310,11 @@ def render_signal_art(
     now: datetime,
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
 ) -> dict[str, Any] | None:
     return _render_art(
         share_prompt(card), "signal_card", share_numbers(card),
-        journal, now, card.snapshot_id, env, http_post,
+        journal, now, card.snapshot_id, env, http_post, options,
     )
 
 
@@ -303,12 +324,119 @@ def render_milestone_art(
     now: datetime,
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
 ) -> dict[str, Any] | None:
     prompt = (
         f"celebratory trading milestone card background, {title}, "
         "clean gradient, no text, no numbers, no letters, no watermark"
     )
-    return _render_art(prompt, "milestone_card", {"title": title}, journal, now, "", env, http_post)
+    return _render_art(prompt, "milestone_card", {"title": title}, journal, now, "", env, http_post, options)
+
+
+def grounded_infographic_options() -> ImageOptions:
+    return ImageOptions(
+        reasoning_strength="high",
+        enable_image_search=True,
+        enable_web_search=True,
+        enable_shell=True,
+    )
+
+
+def render_infographic_art(
+    prompt: str,
+    numbers: dict[str, Any],
+    journal: Journal,
+    now: datetime,
+    snapshot_id: str = "",
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
+) -> dict[str, Any] | None:
+    resolved = options if options is not None else grounded_infographic_options()
+    return _render_art(prompt, "infographic_card", numbers, journal, now, snapshot_id, env, http_post, resolved)
+
+
+def retouch_art(
+    prompt: str,
+    images: list[str] | list[dict[str, Any]],
+    numbers: dict[str, Any],
+    journal: Journal,
+    now: datetime,
+    snapshot_id: str = "",
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
+) -> dict[str, Any] | None:
+    backend, reason = select_backend("artist", journal, now, env)
+    if backend != "model":
+        journal.append(now, "retouch_skipped", {"reason": reason})
+        return None
+    spec = MODEL_REGISTRY["artist"]
+    try:
+        body, latency_ms = edit_image(spec, model_api_key(env), prompt, images, http_post, options)
+    except Exception as exc:
+        journal.append(now, "retouch_skipped", {"reason": type(exc).__name__})
+        return None
+    art, url = _art_from_body(body)
+    if art is None and url is None:
+        journal.append(now, "retouch_skipped", {"reason": "empty image result"})
+        return None
+    art_hash = hashlib.sha256(art).hexdigest() if art is not None else hashlib.sha256(str(url).encode()).hexdigest()
+    journal.append(now, "model_receipt", receipt_payload(_receipt_for_artist(spec, prompt, options, latency_ms), snapshot_id))
+    journal.append(
+        now, "retouch_card",
+        {"snapshot_id": snapshot_id, "numbers": numbers, "art_hash": art_hash,
+         "art_bytes": len(art) if art is not None else 0, "art_url": url},
+    )
+    return {"art": art, "url": url, "numbers": numbers, "art_hash": art_hash}
+
+
+def refine_art(
+    prompt: str,
+    numbers: dict[str, Any],
+    journal: Journal,
+    now: datetime,
+    previous_response_id: str | None = None,
+    reference_images: list[str] | None = None,
+    snapshot_id: str = "",
+    env: Mapping[str, str] | None = None,
+    http_post: HttpPost | None = None,
+    options: ImageOptions | None = None,
+) -> dict[str, Any] | None:
+    backend, reason = select_backend("artist", journal, now, env)
+    if backend != "model":
+        journal.append(now, "refine_skipped", {"reason": reason})
+        return None
+    spec = MODEL_REGISTRY["artist"]
+    try:
+        body, latency_ms = refine_image(
+            spec, model_api_key(env), prompt, previous_response_id,
+            reference_images, http_post, options,
+        )
+    except Exception as exc:
+        journal.append(now, "refine_skipped", {"reason": type(exc).__name__})
+        return None
+    parsed = parse_responses_image(body)
+    b64 = parsed.get("b64")
+    art: bytes | None = None
+    if isinstance(b64, str) and b64:
+        try:
+            art = base64.b64decode(b64)
+        except ValueError:
+            art = None
+    if art is None:
+        journal.append(now, "refine_skipped", {"reason": "empty image result"})
+        return None
+    art_hash = hashlib.sha256(art).hexdigest()
+    journal.append(now, "model_receipt", receipt_payload(_receipt_for_artist(spec, prompt, options, latency_ms), snapshot_id))
+    journal.append(
+        now, "refine_card",
+        {"snapshot_id": snapshot_id, "numbers": numbers, "art_hash": art_hash,
+         "art_bytes": len(art), "response_id": parsed.get("response_id"),
+         "call_id": parsed.get("call_id")},
+    )
+    return {"art": art, "url": None, "numbers": numbers, "art_hash": art_hash,
+            "response_id": parsed.get("response_id"), "call_id": parsed.get("call_id")}
 
 
 def share_card(

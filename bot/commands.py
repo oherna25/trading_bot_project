@@ -133,6 +133,8 @@ def open_book(journal: Journal) -> list[dict[str, Any]]:
     for entry in journal.entries():
         if entry.kind != "fill" or entry.payload.get("venue", "paper") == "replay":
             continue
+        if entry.payload.get("option_position"):
+            continue
         symbol = entry.payload.get("symbol")
         price = entry.payload.get("price")
         size = entry.payload.get("size")

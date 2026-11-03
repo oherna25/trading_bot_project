@@ -291,3 +291,22 @@ def test_registries_pin_new_tools_without_new_model():
     assert "explain_position" in TOOL_REGISTRY
     assert "onboarding_step" in TOOL_REGISTRY
     assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "transcriber", "artist", "grounding"}
+
+
+def test_explain_position_prose_has_no_duplicated_regime_clause():
+    from bot.explain import explain_position
+    from bot.holdings import save_holdings_shapes
+
+    store = _seeded_store(_moderate())
+    journal = Journal()
+    save_holdings_shapes([{"symbol": "TEST", "kind": "stock", "side": "long", "qty": 50}],
+                         store, journal, NOW)
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "size": 1000.0, "price": 100.0})
+    reply = explain_position("TEST", store, journal, NOW)
+    lowered = reply.lower()
+    assert "brief reads" not in lowered
+    assert "sitting in" not in lowered
+    assert lowered.count("gamma regime") == 1
+    assert "total gex" in lowered
+    assert "biggest walls at" in lowered
+    assert "wheel:" in lowered or "wheel top:" in lowered

@@ -20,6 +20,7 @@ def _paper_fills(journal: Journal) -> list[tuple[datetime, dict[str, Any]]]:
         (entry.timestamp_utc, dict(entry.payload))
         for entry in journal.entries()
         if entry.kind == "fill" and entry.payload.get("venue", "paper") != "replay"
+        and not entry.payload.get("option_position")
     ]
     fills.sort(key=lambda item: item[0])
     return fills
@@ -112,6 +113,59 @@ def closed_trades(journal: Journal) -> list[dict[str, Any]]:
                     {"qty": remainder, "price": float(price), "time": stamp, "fill": fill}
                 )
     return trades
+
+
+def _open_lots(journal: Journal) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    longs: dict[str, list[dict[str, Any]]] = {}
+    shorts: dict[str, list[dict[str, Any]]] = {}
+    for _stamp, fill in _paper_fills(journal):
+        symbol = str(fill.get("symbol", ""))
+        price, size = fill.get("price"), fill.get("size")
+        if not symbol or price is None or size is None:
+            continue
+        qty = abs(float(size))
+        if qty <= 0:
+            continue
+        side = str(fill.get("side", "buy"))
+        book = shorts.get(symbol, []) if side == "buy" else longs.get(symbol, [])
+        closed_qty = 0.0
+        while book and closed_qty < qty:
+            take = min(book[0]["qty"], qty - closed_qty)
+            closed_qty += take
+            book[0]["qty"] -= take
+            if book[0]["qty"] <= 0:
+                book.pop(0)
+        remainder = qty - closed_qty
+        if remainder > 0:
+            target = longs if side == "buy" else shorts
+            target.setdefault(symbol, []).append({"qty": remainder, "price": float(price)})
+    return longs, shorts
+
+
+def pnl_breakdown(
+    journal: Journal, store: SnapshotStore
+) -> tuple[float, float, int, float]:
+    """(realized, unrealized, open_positions, equity) at latest marks.
+
+    Equity alone reads as profit; splitting it keeps a page full of
+    open marks from masquerading as a win rate.
+    """
+    trades = closed_trades(journal)
+    realized = sum(float(trade.get("pnl", 0.0)) for trade in trades)
+    longs, shorts = _open_lots(journal)
+    unrealized = 0.0
+    open_positions = 0
+    for is_long, book in ((True, longs), (False, shorts)):
+        for symbol, lots in book.items():
+            net = sum(lot["qty"] for lot in lots)
+            if net <= 0:
+                continue
+            open_positions += 1
+            avg = sum(lot["qty"] * lot["price"] for lot in lots) / net
+            latest = store.read_latest_bar(symbol)
+            mark = latest.close if latest is not None else avg
+            unrealized += (mark - avg) * net if is_long else (avg - mark) * net
+    return realized, unrealized, open_positions, realized + unrealized
 
 
 def win_rate(trades: list[dict[str, Any]]) -> float:
@@ -292,12 +346,11 @@ def trackrecord_text(journal: Journal, store: SnapshotStore) -> str:
     trades = closed_trades(journal)
     wins = sum(1 for trade in trades if float(trade.get("pnl", 0.0)) > 0)
     rate = win_rate(trades)
-    total = sum(float(trade.get("pnl", 0.0)) for trade in trades)
-    points = equity_curve(journal, store)
-    equity = points[-1][1] if points else 0.0
+    total, unrealized, open_positions, equity = pnl_breakdown(journal, store)
     lines = [
         f"track record: {len(trades)} closed trades, win rate {rate:.0%} ({wins}/{len(trades)}), "
-        f"realized {signed_dollars(total)}, equity {signed_dollars(equity)}",
+        f"realized {signed_dollars(total)}, unrealized {signed_dollars(unrealized)} "
+        f"on {open_positions} open, equity {signed_dollars(equity)}",
     ]
     if not trades:
         lines.append("closed trades: none yet (positions still open)")
@@ -328,9 +381,8 @@ def trackrecord_html(
     trades = closed_trades(journal)
     wins = sum(1 for trade in trades if float(trade.get("pnl", 0.0)) > 0)
     rate = win_rate(trades)
-    total = sum(float(trade.get("pnl", 0.0)) for trade in trades)
+    total, unrealized, open_positions, equity = pnl_breakdown(journal, store)
     points = equity_curve(journal, store)
-    equity = points[-1][1] if points else 0.0
     if not fills:
         body = (
             "<p>track record: no paper fills journaled. "
@@ -343,9 +395,14 @@ def trackrecord_html(
             f"<div class=\"stat\"><b>{rate:.0%}</b><span>win rate ({wins}/{len(trades)})</span></div>"
             f"<div class=\"stat\"><b>{html.escape(signed_dollars(total))}</b>"
             "<span>realized</span></div>"
+            f"<div class=\"stat\"><b>{html.escape(signed_dollars(unrealized))}</b>"
+            f"<span>unrealized ({open_positions} open)</span></div>"
             f"<div class=\"stat\"><b>{html.escape(signed_dollars(equity))}</b>"
-            "<span>equity</span></div>"
+            "<span>equity (realized + unrealized)</span></div>"
             "</div>"
+            "<p>Win rate and realized PnL count closed trades only. Equity adds "
+            "unrealized marks on open positions at the latest stored bars, so it "
+            "moves with the tape and is not a win rate.</p>"
         )
         if trades:
             rows = [

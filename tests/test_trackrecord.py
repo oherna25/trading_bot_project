@@ -100,7 +100,7 @@ def test_trackrecord_html_has_inline_svg_and_links():
     assert "/card?underlying=TEST" in html
     assert "Purple" not in html and "purple" not in html
     assert "indigo" not in html.lower()
-    assert "linear-gradient" not in html
+    assert "--accent:#5b8cff" in html
 
 
 def test_take_card_trade_stamps_fill_with_card_ref():
@@ -202,3 +202,22 @@ def test_run_replay_tool_accepts_cost_args():
     assert "trade log:" in reply.reply
     assert "clean days" in reply.reply
     assert "costs:" in reply.reply.lower()
+
+
+def test_trackrecord_splits_realized_from_unrealized():
+    from bot.trackrecord import pnl_breakdown, trackrecord_text
+
+    store = _seeded_store()
+    journal = Journal()
+    journal.append(NOW, "fill", {"symbol": "TEST", "side": "buy", "price": 100.0,
+                                 "size": 10.0, "venue": "paper"})
+    journal.append(NOW + timedelta(hours=1), "fill", {"symbol": "TEST", "side": "sell",
+                                                      "price": 110.0, "size": 5.0,
+                                                      "venue": "paper"})
+    realized, unrealized, open_positions, equity = pnl_breakdown(journal, store)
+    assert realized == pytest.approx(50.0)
+    assert unrealized == pytest.approx(10.0)
+    assert open_positions == 1
+    assert equity == pytest.approx(60.0)
+    text = trackrecord_text(journal, store)
+    assert "unrealized" in text and "1 open" in text

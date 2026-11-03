@@ -30,6 +30,37 @@ def _nearest_wall(symbol: str, store: SnapshotStore) -> tuple[float | None, floa
     return strike, profile.per_strike_exposure[strike]
 
 
+def refresh_earnings(store: SnapshotStore, now: datetime, journal=None) -> dict[str, Any]:
+    """Fetch print dates for stored symbols and persist them.
+
+    The radar used to read only dates cached as a side effect of asking
+    for trade cards, so it stayed dark with a valid FINNHUB_API_KEY
+    until cards happened to run. Fetching here makes the radar light
+    up on its own. Offline or keyless runs keep the stored dates:
+    ``cached_earnings`` returns ``{}`` without a key and swallows
+    fetch failures. Only symbols with no upcoming stored date are
+    fetched, so a populated store costs no calls.
+    """
+    from bot.ideas import cached_earnings
+
+    symbols = sorted(set(store.list_underlyings()) | {h.symbol for h in store.read_holdings()})
+    if not symbols:
+        return {}
+    stored = store.all_earnings()
+    missing = [s for s in symbols if stored.get(s) is None or stored[s] < now.date()]
+    if not missing:
+        return dict(stored)
+    fetched = cached_earnings(missing, now)
+    saved = 0
+    for symbol, day in fetched.items():
+        if stored.get(symbol) != day:
+            store.save_earnings(symbol, day.isoformat())
+            saved += 1
+    if journal is not None and saved:
+        journal.append(now, "earnings_refreshed", {"symbols": sorted(fetched), "saved": saved})
+    return store.all_earnings()
+
+
 def earnings_rows(store: SnapshotStore, now: datetime) -> list[dict[str, Any]]:
     ref = now.date()
     dates = store.all_earnings()
@@ -84,11 +115,21 @@ def _row_line(row: dict[str, Any]) -> str:
 
 
 def earnings_text(store: SnapshotStore, now: datetime) -> str:
+    refresh_earnings(store, now)
     rows = earnings_rows(store, now)
     if not rows:
+        upcoming = sorted(
+            (day, symbol) for symbol, day in store.all_earnings().items() if day >= now.date()
+        )
+        if upcoming:
+            day, symbol = upcoming[0]
+            return (
+                f"earnings radar: no prints in the next {EARNINGS_WINDOW_DAYS} days -- "
+                f"next print {symbol} {day.isoformat()} ({(day - now.date()).days} days out)"
+            )
         return (
-            f"earnings radar: no prints in the next {EARNINGS_WINDOW_DAYS} days -- "
-            "next: set FINNHUB_API_KEY and ask for trade cards to cache print dates"
+            f"earnings radar: no prints in the next {EARNINGS_WINDOW_DAYS} days and no "
+            "dated prints stored -- next: set FINNHUB_API_KEY so the radar can fetch print dates"
         )
     head = f"earnings radar ({len(rows)} in {EARNINGS_WINDOW_DAYS} days):"
     return "\n".join([head] + [_row_line(row) for row in rows])
@@ -98,6 +139,7 @@ def earnings_html(store: SnapshotStore, now: datetime, underlying: str) -> str:
     from bot.theme import page
 
     settings = store.read_settings()
+    refresh_earnings(store, now)
     rows = earnings_rows(store, now)
     if not rows:
         body = f"<p>{html.escape(earnings_text(store, now))}</p>"

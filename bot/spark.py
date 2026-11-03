@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Mapping, Optional
 
+import html
+
 from bot.exposure import compute_gex
 from bot.ideas import resolve_direction
 from bot.journal import Journal
@@ -76,6 +78,67 @@ def format_spark_block(
         "note: free prose is unverified, only direction vs engine counts",
     ]
     return "\n".join(lines)
+
+
+def latest_spark_audit(journal: Journal) -> tuple[str, str, str, float | None]:
+    status, expected, model_dir, confidence = OFF, "", "", None
+    for entry in journal.entries():
+        if entry.kind == "spark_claim":
+            model_dir = str(entry.payload.get("direction", "") or "")
+            raw = entry.payload.get("confidence")
+            confidence = float(raw) if isinstance(raw, (int, float)) else None
+        elif entry.kind == "spark_verdict":
+            status = str(entry.payload.get("status", "") or OFF)
+            expected = str(entry.payload.get("expected", "") or expected)
+    return status, expected, model_dir, confidence
+
+
+def spark_panel_html(store: SnapshotStore, journal: Journal, underlying: str) -> str:
+    found = store.read_latest(underlying)
+    if found is None:
+        return ""
+    snapshot_id, snapshot = found
+    bar = store.read_latest_bar(underlying)
+    spot = bar.close if bar is not None else None
+    profile = compute_gex(snapshot, snapshot_id, spot=spot)
+    engine = resolve_direction(bar, profile.flip_point, profile.total_exposure)
+    status, _expected, model_dir, confidence = latest_spark_audit(journal)
+    cls = {"MATCH": "match", "CONTRADICTION": "contradiction"}.get(status, "off")
+    if status == OFF or not model_dir:
+        verdict = '<span class="pill verdict off">SPARK AUDIT · OFF</span>'
+        model_side = "<span>Spark (live models)</span><b>not run yet</b><p class=\"sub\">Turn live models on and ask for a spark audit. The deterministic engine still answers offline.</p>"
+        note = "Offline by design: no key, no problem. The engine grades every claim when Spark is on."
+    else:
+        verdict = f'<span class="pill verdict {cls}">SPARK AUDIT · {html.escape(status)}</span>'
+        conf = f" · confidence {confidence:.2f}" if confidence is not None else ""
+        model_side = (
+            f"<span>Muse Spark proposes</span><b>{html.escape(model_dir)}</b>"
+            f"<p class=\"sub\">muse-spark-1.3{html.escape(conf)}</p>"
+        )
+        note = (
+            "Spark proposed. The engine graded it. Both landed in the journal — free prose never counts, only direction vs engine."
+            if status == "MATCH"
+            else "Disagreement is the product: the model and the tape differ, so sizing waits. Both sides are journaled."
+        )
+    engine_side = (
+        f"<span>Engine disposes</span><b>{html.escape(engine)}</b>"
+        f"<p class=\"sub\">spot {spot:.2f} vs flip {profile.flip_point:.1f}</p>"
+        if spot is not None and profile.flip_point is not None
+        else f"<span>Engine disposes</span><b>{html.escape(engine)}</b><p class=\"sub\">from total GEX {profile.total_exposure:,.0f}</p>"
+    )
+    return (
+        "<section class=\"panel spark-panel\" aria-label=\"Muse Spark audit\">"
+        "<span class=\"eyebrow\">Meta · Muse Spark audit</span>"
+        f"<h2 style=\"margin-top:.4rem\">Spark proposes. The engine grades it. {verdict}</h2>"
+        f"<div class=\"duel\"><div class=\"side\">{model_side}</div>"
+        "<div class=\"vs\">VS</div>"
+        f"<div class=\"side\">{engine_side}</div></div>"
+        f"<p class=\"sub\">{html.escape(note)}</p>"
+        "<p><a class=\"btn\" href=\"/action?tool=get_spark_audit&amp;underlying="
+        f"{html.escape(underlying, quote=True)}\">Run spark audit</a> "
+        "<span class=\"sub\">journals spark_claim + spark_verdict</span></p>"
+        "</section>"
+    )
 
 
 def spark_audit_response(
