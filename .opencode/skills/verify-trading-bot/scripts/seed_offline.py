@@ -16,16 +16,17 @@ import sys
 HERE = os.path.abspath(__file__)
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(HERE)))))
 sys.path.insert(0, ROOT)
-from bot.feeds import default_context, ingest_bars, ingest_chain
-from bot.journal import Journal
-from bot.persist import save_bundle
-from bot.store import SnapshotStore
 
 
 def main(argv: list[str]) -> None:
     if len(argv) < 2:
         print("usage: seed_offline.py <scratch-store-dir> [UNDERLYING]", file=sys.stderr)
         raise SystemExit(2)
+    from bot.feeds import default_context, ingest_bars, ingest_chain
+    from bot.journal import Journal
+    from bot.persist import save_bundle
+    from bot.store import SnapshotStore
+
     store_dir = argv[1]
     symbol = (argv[2] if len(argv) > 2 else "SPY").strip().upper() or "SPY"
     store = SnapshotStore()
