@@ -1138,7 +1138,7 @@ def _cards_error_html(message: str) -> str:
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
         f"<title>needs attention | {BRAND}</title><style>{stylesheet()}</style></head>"
         "<body><div class=\"wrap\"><section class=\"hero\">"
-        "<span class=\"eyebrow\">MarketwingmanBot</span><h1>One step missing</h1>"
+        "<span class=\"eyebrow\">MarketWingMan</span><h1>One step missing</h1>"
         f"<p>{html.escape(message, quote=True)}</p>"
         "<div class=\"hero-row\"><a class=\"btn solid\" href=\"/demo\">Open the demo</a>"
         "<a class=\"btn\" href=\"/dashboard\">Dashboard</a></div></section></div></body></html>"

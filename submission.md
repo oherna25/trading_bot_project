@@ -2,7 +2,7 @@
 
 ## Title
 
-TradingWingManBot: a premium-selling options agent, graded by its own engine
+MarketWingMan: a premium-selling options agent, graded by its own engine
 
 ## Track and statement
 

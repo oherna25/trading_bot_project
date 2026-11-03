@@ -44,7 +44,7 @@ def _seeded_store(with_profile=True) -> SnapshotStore:
 def test_brand_constant_is_equalizer():
     from bot.theme import BRAND
 
-    assert BRAND == "MarketwingmanBot"
+    assert BRAND == "MarketWingMan"
 
 
 def test_brand_marks_page_title_nav_and_demo_heading():

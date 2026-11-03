@@ -1,4 +1,4 @@
-# AGENTS.md — Trading Bot
+# AGENTS.md — MarketWingMan
 
 Research-first options trading system. It ingests chains and bars from
 free-tier market APIs, computes its own GEX/VEX/DEX exposure from stored

@@ -391,7 +391,7 @@ def build_submission_brief(
         "hook": (
             "<p class=\"big\">Your AI says long.<br>Your walls say otherwise.</p>"
             "<p>Most tools show you one of those. This desk shows you both — and journals who was right.</p>"
-            + _caption("MarketwingmanBot — a paper-first options desk with a Muse Spark audit block.")
+            + _caption("MarketWingMan — a paper-first options desk with a Muse Spark audit block.")
         ),
         "engine": _gamma_body(symbol, store)
         + _caption("Home-grown GEX/VEX/DEX/CHARM/VANNA from stored chains. No vendor GEX feed."),
@@ -427,7 +427,7 @@ def build_submission_brief(
         "shock": "Shock test −2%",
         "mcp": "MCP tools over HTTP",
         "wheel": "Wheel premium screen",
-        "outro": "MarketwingmanBot",
+        "outro": "MarketWingMan",
     }
     narrations = {
         "hook": "Your AI says long. Your walls say otherwise. This desk shows you both, and journals who was right.",
@@ -500,7 +500,7 @@ def submission_composition_html(brief: VideoBrief, *, storyboard: bool = False) 
         f"<section id=\"{html.escape(scene.scene_id, quote=True)}\" class=\"clip\" "
         f"data-track-index=\"{lane}\" data-start=\"{scene.start_seconds}\" "
         f"data-duration=\"{scene.duration_seconds}\">"
-        f"<p class=\"kicker\">MarketwingmanBot · {scene.start_seconds}s</p>"
+        f"<p class=\"kicker\">MarketWingMan · {scene.start_seconds}s</p>"
         f"<h2>{html.escape(scene.title)}</h2>{scene.body_html}</section>"
         for lane, scene in enumerate(brief.scenes, start=1)
     )

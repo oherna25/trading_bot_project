@@ -1,4 +1,4 @@
-<h1 align="center">TradingWingManBot</h1>
+<h1 align="center">MarketWingMan</h1>
 
 <p align="center"><strong>An autonomous premium-selling options agent with a research desk attached.</strong><br>
 It reads the chain, computes its own dealer exposure, picks contracts, sizes against a capital ledger, sells premium on paper every session, manages the shorts to exit or expiry, and journals every step.</p>
@@ -43,7 +43,7 @@ It reads the chain, computes its own dealer exposure, picks contracts, sizes aga
 
 I trade options from free-tier feeds and journal everything. Two problems kept costing me time. A model thesis never told me when it disagreed with my own walls and flip, so I could not tell a confident model from a wrong one. And a premium screen is not a strategy: it hands you a list, then you still pick the contract, size it against the cash it ties up, watch it for two weeks, and close it yourself.
 
-TradingWingManBot fixes both. Spark proposes a direction and the exposure engine grades the claim before anything sizes. The premium screen became a deployed agent: you name a strategy and a capital cap once, and the system sells, manages, settles, and reports on its own book every session.
+MarketWingMan fixes both. Spark proposes a direction and the exposure engine grades the claim before anything sizes. The premium screen became a deployed agent: you name a strategy and a capital cap once, and the system sells, manages, settles, and reports on its own book every session.
 
 ## How this differs from a generic trading chatbot
 

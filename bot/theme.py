@@ -5,7 +5,7 @@ from urllib.parse import quote as _urlencode
 
 from bot.shapes import DashboardSettings
 
-BRAND = "MarketwingmanBot"
+BRAND = "MarketWingMan"
 ACCENT_NAME = "signal blue"
 
 
@@ -215,7 +215,7 @@ def page(
         f"<html lang=\"en\" data-theme=\"{html.escape(settings.theme, quote=True)}\">"
         "<head><meta charset=\"utf-8\">"
         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<meta name=\"description\" content=\"MarketwingmanBot: Muse Spark proposes, the exposure engine grades it. Paper-first options research with a journaled audit trail.\">"
+        "<meta name=\"description\" content=\"MarketWingMan: Muse Spark proposes, the exposure engine grades it. Paper-first options research with a journaled audit trail.\">"
         f"{refresh_meta(settings)}"
         f"<title>{html.escape(title)} | {BRAND}</title><style>{stylesheet()}</style></head><body>"
         "<a class=\"skip\" href=\"#main\">skip to content</a>"
@@ -224,7 +224,7 @@ def page(
         f"<p class=\"sub\">{html.escape(sub)}</p>"
         f"{nav_header(underlying, current, settings, next_path)}"
         f"<main id=\"main\">{body}</main>"
-        "<footer class=\"foot\"><span>MarketwingmanBot — research only, not investment advice. Paper trading is the default; live ordering stays off until armed on /live.</span>"
+        "<footer class=\"foot\"><span>MarketWingMan — research only, not investment advice. Paper trading is the default; live ordering stays off until armed on /live.</span>"
         "<span>Every signal, intent, fill, and model call is journaled.</span></footer>"
         "</div></body></html>"
     )
