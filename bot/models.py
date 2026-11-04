@@ -46,12 +46,16 @@ class ModelSpec:
     price_in: float
     price_out: float
     fallback: str
+    reasoning_effort: str = MODEL_REASONING_EFFORT
 
 
 MODEL_REGISTRY = {
     "analyst": ModelSpec("muse-spark-1.3", "/chat/completions", "mtok", 1.25, 4.25, "deterministic flip rule"),
     "grounding": ModelSpec("muse-spark-1.3", "/responses", "mtok", 1.25, 4.25, "skip grounding"),
-    "reviewer": ModelSpec("muse-wonder-1.0", "/chat/completions", "mtok", 4.00, 20.00, "skip review"),
+    "reviewer": ModelSpec(
+        "muse-wonder-1.0", "/chat/completions", "mtok", 4.00, 20.00, "skip review",
+        reasoning_effort="high",
+    ),
     "transcriber": ModelSpec("muse-voice-transcribe-1.0", "/asr/transcribe", "minute", 0.003, 0.0, "reject voice"),
     "artist": ModelSpec("muse-image-1.0", "/images/generations", "image", 0.01, 0.0, "skip card"),
 }
@@ -689,8 +693,9 @@ def run_analyst(
     prompt_text: str,
     http_post: HttpPost | None = None,
     timeout: float = MODEL_TIMEOUT_SECONDS,
-    reasoning_effort: str = MODEL_REASONING_EFFORT,
+    reasoning_effort: str | None = None,
     base_url: str = MODEL_API_BASE_URL,
+    role_name: str = "analyst",
 ) -> tuple[str, list[ModelReceipt]]:
     post = http_post or _urllib_post
     current = list(messages)
@@ -702,7 +707,7 @@ def run_analyst(
             "messages": current,
             "max_tokens": MODEL_MAX_TOKENS,
             "temperature": 0,
-            "reasoning_effort": reasoning_effort,
+            "reasoning_effort": reasoning_effort if reasoning_effort is not None else spec.reasoning_effort,
         }
         if tools:
             payload["tools"] = tools
@@ -718,7 +723,7 @@ def run_analyst(
         receipts.append(
             ModelReceipt(
                 model_id=spec.model_id,
-                role_name="analyst",
+                role_name=role_name,
                 prompt_hash=prompt_hash(prompt_text),
                 tokens_in=int(usage.get("prompt_tokens", 0) or 0),
                 tokens_out=int(usage.get("completion_tokens", 0) or 0),

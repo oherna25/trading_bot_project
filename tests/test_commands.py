@@ -190,7 +190,8 @@ def test_spark_assist_translates_unknown():
 
     def post(url, headers, payload, timeout):
         log.append(payload)
-        assert payload["model"] == "muse-spark-1.3"
+        assert payload["model"] == "muse-wonder-1.0"
+        assert payload["reasoning_effort"] == "high"
         return bodies[len(log) - 1]
 
     store, journal = _seeded_book()

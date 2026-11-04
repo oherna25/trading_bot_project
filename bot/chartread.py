@@ -13,9 +13,9 @@ from bot.models import (
     chat_spec,
     receipt_payload,
     run_analyst,
-    select_backend,
 )
 from bot.store import SnapshotStore
+from bot.tiers import select_model_tier
 
 CHART_MAX_BYTES = 5 * 1024 * 1024
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -94,8 +94,9 @@ def read_chart_image(
     if len(image) > CHART_MAX_BYTES:
         journal.append(now, "chart_skipped", {"reason": "image too large"})
         return "chart image rejected: image too large"
-    backend, reason = select_backend("analyst", journal, now, env)
-    if backend not in ("model", "user", "baseten"):
+    decision = select_model_tier("chart", journal, now, env)
+    if decision.tier not in ("model", "user", "baseten"):
+        reason = decision.reason or "hosted model unavailable"
         journal.append(now, "chart_skipped", {"reason": reason})
         return f"chart reading unavailable: {reason}"
     found = store.read_latest(underlying)
@@ -124,8 +125,8 @@ def read_chart_image(
     ]
     try:
         text, receipts = run_analyst(
-            chat_spec("analyst", env), chat_api_key("analyst", env), messages, [], {}, prompt, http_post,
-            base_url=chat_base_url("analyst", env),
+            chat_spec(decision.role, env), chat_api_key(decision.role, env), messages, [], {}, prompt,
+            http_post, base_url=chat_base_url(decision.role, env), role_name=decision.role,
         )
     except Exception as exc:
         journal.append(now, "chart_skipped", {"reason": type(exc).__name__})

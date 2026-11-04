@@ -35,10 +35,18 @@ def test_draft_without_anything_reports_hosted_reason():
     assert decision.reason == "missing META_MODEL_API_KEY"
 
 
-def test_deep_prefers_hosted_over_local(tmp_path):
+def test_premium_prefers_wonder_over_local(tmp_path):
     journal = Journal()
     decision = tiers.select_model_tier("analyst", journal, NOW, {**HOSTED, **_local_env(tmp_path)})
-    assert (decision.tier, decision.role) == ("model", "analyst")
+    assert (decision.tier, decision.role) == ("model", "reviewer")
+    assert decision.model_id == "muse-wonder-1.0"
+
+
+def test_portfolio_is_premium_wonder_first():
+    journal = Journal()
+    decision = tiers.select_model_tier("portfolio", journal, NOW, dict(HOSTED))
+    assert (decision.tier, decision.role) == ("model", "reviewer")
+    assert decision.model_id == "muse-wonder-1.0"
 
 
 def test_deep_uses_local_when_hosted_missing(tmp_path):
@@ -86,13 +94,15 @@ def test_tier_status_reports_spend_and_local(tmp_path):
     assert status["local_available"] is True
     assert status["local_model"] == "muse-glimmer-3b"
     assert status["tasks"]["coach"] == "premium"
+    assert status["tasks"]["analyst"] == "premium"
+    assert status["tasks"]["chart"] == "premium"
 
 
 def test_user_key_selects_user_tier_without_budget_or_local():
     journal = Journal()
     env = {"USER_MODEL_API_KEY": "u1", "USER_MODEL_ID": "anything-llm"}
     decision = tiers.select_model_tier("analyst", journal, NOW, env)
-    assert (decision.tier, decision.role) == ("user", "analyst")
+    assert (decision.tier, decision.role) == ("user", "reviewer")
     assert decision.model_id == "anything-llm"
 
 

@@ -445,6 +445,7 @@ def spark_translate(
             prompt,
             http_post,
             base_url=chat_base_url(decision.role, env),
+            role_name=decision.role,
         )
     except Exception:
         return {"action": "unknown"}

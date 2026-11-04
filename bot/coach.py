@@ -150,6 +150,7 @@ def coach_review(
                 prompt,
                 http_post,
                 base_url=chat_base_url(decision.role, env),
+                role_name=decision.role,
             )
             model_id = spec.model_id
         else:

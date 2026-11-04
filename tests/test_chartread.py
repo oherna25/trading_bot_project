@@ -69,7 +69,8 @@ def test_chart_reads_with_engine_context():
                              live_models=True, env=dict(ENV), http_post=_stub(seen))
     assert "100 wall" in reply
     payload = seen[0]
-    assert payload["model"] == "muse-spark-1.3"
+    assert payload["model"] == "muse-wonder-1.0"
+    assert payload["reasoning_effort"] == "high"
     parts = payload["messages"][1]["content"]
     assert parts[1]["type"] == "image_url"
     assert parts[1]["image_url"]["url"].startswith("data:image/png;base64,")

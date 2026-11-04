@@ -247,7 +247,7 @@ Prompts that work on the seeded data:
 The demo is complete without keys. Keys only change who writes the model text.
 
 - Set `BASETEN_API_KEY` in `.env` and restart. Muse Spark Open on `meta-models/muse-spark-open-1026` then serves the analyst and reviewer chat roles (briefs, chat routing, debate, coach, narrations, chart reads), picks or skips among filtered deployment candidates, journaled as `agent_proposal`, and writes card reasons. The demo chat box pre-checks its live-models toggle, so `spark audit` grades a live claim on the spot. Without it the deterministic annualized-return order runs.
-- Set `META_MODEL_API_KEY` together with `MODEL_DAY_BUDGET_USD` for the built-in Spark analyst and Wonder reviewer. Both are required. The key alone leaves the deterministic paths in place.
+- Set `META_MODEL_API_KEY` together with `MODEL_DAY_BUDGET_USD` for the built-in models: Spark (`muse-spark-1.3`) for draft and fallback work, and Wonder (`muse-wonder-1.0`) first for premium tasks (briefs, chart reads, portfolio commands, reviews, coaching) at high reasoning effort. Both are required. The key alone leaves the deterministic paths in place.
 - Feed keys (`TRADIER_ACCESS_TOKEN`, `MARKETDATA_API_KEY`, and the rest in `.env.example`) only matter for `run_app.py` against live feeds. The demo never calls a feed.
 
 ### Troubleshooting
@@ -326,7 +326,7 @@ Or from a clone without installing: `make demo` (uses the repo venv when present
 
 The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/) as Mermaid sources. AI agents start with [AGENTS.md](AGENTS.md).
 
-Meta model integration is implemented: a Muse Spark analyst behind the research loop, voice input, brief cards, a Muse Wonder advisory review, and the M5 standout set (local Glimmer/Spark Open analyst, cost-aware tier router, chart and document readers, shock news, voice holdings and kill, journal coach, alert narration, portfolio commands, shareable cards).
+Meta model integration is implemented: a cost-aware tier router puts Muse Wonder first for premium work (briefs, chart reads, portfolio commands, advisory review, journal coach) with Muse Spark behind it for draft and fallback work, plus voice input, brief cards, and the M5 standout set (local Glimmer/Spark Open analyst, chart and document readers, shock news, voice holdings and kill, alert narration, shareable cards).
 
 ## How it works
 
@@ -338,7 +338,7 @@ market APIs ──▶ feeds ──▶ store ──▶ exposure ──▶ researc
                   └──────────┴──────────┴─────────────┴───────────┴──▶ journal
 ```
 
-Meta Model API serves a Spark analyst behind research, plus voice input, card art, a Wonder advisory review, and the M5 tier-routed standout set (local analyst, coach, narration, portfolio commands, chart and document readers, shareable cards); every model call journals a ModelReceipt.
+Meta Model API serves the tier-routed research loop (Wonder first for premium tasks, Spark for draft and fallback), plus voice input, card art, a Wonder advisory review, and the M5 standout set (local analyst, coach, narration, portfolio commands, chart and document readers, shareable cards); every model call journals a ModelReceipt.
 
 1. **Feeds** (`bot/feeds.py`) pull options chains and daily bars from six sources through a registry table keyed by source name. Each adapter normalizes vendor JSON into `ChainSnapshot` or `Bar` records stamped with source name and latency.
 2. **Store** (`bot/store.py`) is an in-memory snapshot and bar store with bar dedupe, indexed latest-reads, per-underlying retention, and previous-snapshot lookup. `read_latest` serves the research loop.
@@ -884,7 +884,7 @@ print(route_chat("debate", "SPY", store, journal, config, now))
 
 ### Model tiers and local analyst
 
-Every model task runs through the tier router in `bot/tiers.py`. Draft tasks (reasoning, narration) try the local backend first, deep tasks (briefs, debates) try hosted Spark first, and premium tasks (reviews, coaching) try Wonder first, each falling through to the next tier and finally to a deterministic fallback. Chatting `"tier status"` (or `/tier`, or the `get_tier_status` tool) prints spend versus day budget, local backend state, and the tier order per task class. Every selection journals `tier_selected`.
+Every model task runs through the tier router in `bot/tiers.py`. Draft tasks (reasoning, narration) try the local backend first, deep tasks try hosted Spark first, and premium tasks (briefs, portfolio commands, chart reads, reviews, coaching) try `muse-wonder-1.0` first at high reasoning effort (the effort lives on the reviewer spec in `MODEL_REGISTRY`), each falling through to Spark, then local, and finally to a deterministic fallback. Chatting `"tier status"` (or `/tier`, or the `get_tier_status` tool) prints spend versus day budget, local backend state, and the tier order per task class. Every selection journals `tier_selected`.
 
 The local tier runs open weights on this machine: point `GLIMMER_GGUF_PATH` (preferred) or `SPARK_OPEN_GGUF_PATH` at a GGUF file and keep `llama-server` (`LLAMA_SERVER_BIN`) on `PATH`. The bot starts one server per weights file on 127.0.0.1, sends one request at a time with prompts in the POST body (never argv), and reuses the process across calls. Local calls journal zero-cost `model_receipt` rows, rescue failed Spark briefs, and power the alert judge. Without weights every tier behaves exactly as before.
 

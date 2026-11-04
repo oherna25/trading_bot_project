@@ -89,6 +89,7 @@ def _model_case(
             stats_text,
             http_post,
             base_url=chat_base_url(role, env),
+            role_name=role,
         )
     except Exception as exc:
         journal.append(now, "model_fallback", {"reason": type(exc).__name__, "debate": role})

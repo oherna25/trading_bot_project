@@ -4,6 +4,11 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Wonder-first premium tier (2026-11-04)
+
+* `muse-wonder-1.0` now leads the premium tier for the hardest chat work. `bot/tiers.py` classifies `analyst`, `portfolio`, and `chart` as premium (with `review`/`coach`), so the tier order reviewer (Wonder) -> analyst (Spark) -> local applies to briefs, portfolio commands, and chart reads. `bot/research_analyst.py: analyst_backend` now honors `TierDecision.role` (it previously always called the Spark analyst spec), and `bot/chartread.py` routes through `select_model_tier("chart")` instead of a direct Spark backend check.
+* Reasoning effort is a registry property: `ModelSpec.reasoning_effort` in `bot/models.py` is `high` for the reviewer/Wonder spec and `low` elsewhere, and `run_analyst` defaults to the spec effort (an explicit caller value still wins). Receipts now journal the real `role_name` at the tier-routed call sites. Draft tasks (narration, routing, card reasons) stay on Spark/local, debate keeps Spark bull vs Wonder bear, and grounding stays on Spark/Responses. Covered by updated tests in `tests/test_tiers.py`, `tests/test_models.py`, `tests/test_chartread.py`, and `tests/test_commands.py`.
+
 ## Docker full-app deploy (2026-11-04)
 
 * The whole app now deploys via Docker, not only the demo. `docker-compose.yml` adds an `app` service (full `run_app` server on `/data/trading-bot`, 900s refresh, optional in-app `SESSION_SCHEDULE`), a `demo` profile on its own volume, and a one-shot `session` service (`jobs` profile) sharing the app volume; the server reloads bundle writes on mtime change, so session output lands without a restart. Keys pass through an optional `.env` file; `LEDGER_DIR` is pinned to `/data/ledger` and `TZ` is exposed because session schedules fire on local time.

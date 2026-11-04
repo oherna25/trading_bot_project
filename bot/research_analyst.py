@@ -113,8 +113,9 @@ def spark_signal(
     env: Mapping[str, str] | None,
     http_post: HttpPost | None,
     grounding: bool = False,
+    role: str = "analyst",
 ) -> Signal:
-    spec = chat_spec("analyst", env)
+    spec = chat_spec(role, env)
     prompt = _analyst_prompt(text, snapshot, profile, bar)
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": ANALYST_SYSTEM},
@@ -122,7 +123,7 @@ def spark_signal(
     ]
     reply, receipts = run_analyst(
         spec,
-        chat_api_key("analyst", env),
+        chat_api_key(role, env),
         messages,
         [GEX_TOOL],
         {
@@ -132,7 +133,8 @@ def spark_signal(
         },
         prompt,
         http_post,
-        base_url=chat_base_url("analyst", env),
+        base_url=chat_base_url(role, env),
+        role_name=role,
     )
     for receipt in receipts:
         journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
@@ -245,8 +247,8 @@ def advisory_review(
             {},
             prompt,
             http_post,
-            reasoning_effort="high",
             base_url=chat_base_url("reviewer", env),
+            role_name="reviewer",
         )
     except Exception as exc:
         journal.append(now, "review_skipped", {"reason": type(exc).__name__})
@@ -321,7 +323,10 @@ def analyst_backend(
         journal.append(now, "model_fallback", {"reason": decision.reason})
         return analyst_tool(text, snapshot, profile, bar)
     try:
-        return spark_signal(text, snapshot_id, snapshot, profile, bar, journal, now, env, http_post, grounding)
+        return spark_signal(
+            text, snapshot_id, snapshot, profile, bar, journal, now, env, http_post, grounding,
+            role=decision.role,
+        )
     except Exception as exc:
         if local_available(env):
             try:

@@ -101,6 +101,9 @@ def _final_leg(content):
 
 def test_registry_pins_models_and_fallbacks():
     assert MODEL_REGISTRY["analyst"].model_id == "muse-spark-1.3"
+    assert MODEL_REGISTRY["analyst"].reasoning_effort == "low"
+    assert MODEL_REGISTRY["reviewer"].model_id == "muse-wonder-1.0"
+    assert MODEL_REGISTRY["reviewer"].reasoning_effort == "high"
     assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "transcriber", "artist", "grounding"}
     assert all(spec.fallback for spec in MODEL_REGISTRY.values())
 
@@ -333,8 +336,11 @@ def test_backend_runs_tool_loop_and_journals_receipts():
     assert signal.snapshot_id == snapshot_id
     receipts = [e for e in journal.entries() if e.kind == "model_receipt"]
     assert len(receipts) == 2
-    assert receipts[0].payload["model_id"] == "muse-spark-1.3"
-    assert receipts[0].payload["cost_usd"] == pytest.approx(100 / 1e6 * 1.25 + 20 / 1e6 * 4.25)
+    assert receipts[0].payload["model_id"] == "muse-wonder-1.0"
+    assert receipts[0].payload["role_name"] == "reviewer"
+    assert receipts[0].payload["cost_usd"] == pytest.approx(100 / 1e6 * 4.00 + 20 / 1e6 * 20.00)
+    assert http_post.log[0]["model"] == "muse-wonder-1.0"
+    assert http_post.log[0]["reasoning_effort"] == "high"
     assert len(receipts[0].payload["prompt_hash"]) == 64
     assert receipts[0].payload["snapshot_id"] == snapshot_id
     tool_messages = [m for m in http_post.log[1]["messages"] if m.get("role") == "tool"]
