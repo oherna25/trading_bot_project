@@ -136,7 +136,7 @@ def coach_review(
             text, receipt = run_local("coach", prompt, env, runner=local_runner)
             receipts = [receipt]
             model_id = receipt.model_id
-        elif decision.tier in ("model", "user"):
+        elif decision.tier in ("model", "user", "baseten"):
             spec = chat_spec(decision.role, env)
             text, receipts = run_analyst(
                 spec,

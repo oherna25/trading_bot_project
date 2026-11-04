@@ -64,7 +64,7 @@ def test_chat_brief_carries_profile_numbers():
     assert reply.error == ""
     assert "total exposure: -$104K" in reply.reply
     assert "strike 100.0:" not in reply.reply
-    assert "direction: short confidence: 0.50 (regime fallback)" in reply.reply
+    assert "direction: short confidence: 50% (regime fallback)" in reply.reply
 
 
 def test_trade_cards_text_returns_cards_with_reasons(monkeypatch):
@@ -139,7 +139,7 @@ def test_registry_tools_answer(monkeypatch):
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "get_spark_audit", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
-        "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
+        "get_profile", "get_dashboard", "get_alerts", "get_holdings",
         "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
         "read_document", "share_card", "get_narrated_alerts", "get_tier_status",
         "set_settings", "get_settings", "load_snapshot", "set_profile",
@@ -252,7 +252,7 @@ def test_route_mcp_tools_list_names_registry():
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
         "get_vex_brief", "get_dex_brief", "get_spark_audit", "journal_tail", "paper_pnl", "run_session", "get_iv_rank", "run_replay",
         "backfill_iv", "snapshot_diff", "shock_test", "set_holdings", "debate_card",
-        "get_profile", "get_dashboard", "get_alerts", "get_holdings", "get_video_brief",
+        "get_profile", "get_dashboard", "get_alerts", "get_holdings",
         "get_coach_review", "portfolio_command", "shock_news", "read_chart_image",
         "read_document", "share_card", "get_narrated_alerts", "get_tier_status",
         "set_settings", "get_settings", "load_snapshot", "set_profile",
@@ -517,6 +517,18 @@ def test_cards_cache_invalidates_on_new_snapshot():
     assert [entry.kind for entry in journal.entries()].count("ideas") == 2
 
 
+def test_cards_route_refreshes_when_a_reason_lands():
+    from bot.tradecards import _reason_cache_store
+
+    store, journal = _seeded_store(), Journal()
+    route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert [entry.kind for entry in journal.entries()].count("ideas") == 1
+    _reason_cache_store("probe", "reason")
+    route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
+    assert [entry.kind for entry in journal.entries()].count("ideas") == 2
+
+
 def test_board_route_caches_and_theme_change_invalidates():
     from bot.muse import FormData
 
@@ -529,6 +541,20 @@ def test_board_route_caches_and_theme_change_invalidates():
     route_http("POST", "/settings", FormData({"theme": "light"}), store, journal, CONFIG, NOW)
     third = route_http("GET", "/board", {}, store, journal, CONFIG, NOW)
     assert third.body != first.body
+
+
+def test_settings_form_takes_min_confidence_as_percent():
+    from bot.muse import FormData
+
+    store, journal = _seeded_store(), Journal()
+    saved = route_http(
+        "POST", "/settings", FormData({"live_min_confidence_pct": "65", "next": "/settings"}),
+        store, journal, CONFIG, NOW,
+    )
+    assert saved.status in (200, 302, 303)
+    assert store.read_settings().live_min_confidence == pytest.approx(0.65)
+    page = route_http("GET", "/settings", {}, store, journal, CONFIG, NOW)
+    assert 'name="live_min_confidence_pct" value="65"' in page.body.decode("utf-8")
 
 
 def test_demo_route_caches_and_snapshot_change_invalidates():

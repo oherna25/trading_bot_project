@@ -176,7 +176,7 @@ def narrate_alert(
             )
             receipts = [receipt]
             model_id = receipt.model_id
-        elif decision.tier in ("model", "user"):
+        elif decision.tier in ("model", "user", "baseten"):
             spec = chat_spec(decision.role, env)
             reply, receipts = run_analyst(
                 spec,

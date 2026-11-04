@@ -152,3 +152,43 @@ def test_board_route_serves_page():
     response = route_http("GET", "/board", {}, _seeded_store(), Journal(), CONFIG, NOW)
     assert response.status == 200
     assert "Dealer positioning board" in response.body.decode("utf-8")
+
+
+def test_chart_and_board_have_ticker_search():
+    store = _seeded_store()
+    chart = route_http("GET", "/chart?underlying=TEST", {}, store, Journal(), CONFIG, NOW)
+    body = chart.body.decode("utf-8")
+    assert '<form class="block" method="get" action="/chart" role="search">' in body
+    assert 'name="underlying"' in body
+    assert '<option value="DEMO"></option>' in body
+    assert '<option value="TEST"></option>' in body
+    board = route_http("GET", "/board", {}, store, Journal(), CONFIG, NOW)
+    assert 'action="/chart"' in board.body.decode("utf-8")
+
+
+def test_chart_search_reaches_another_ticker_case_insensitively():
+    store = _seeded_store()
+    response = route_http("GET", "/chart?underlying=demo", {}, store, Journal(), CONFIG, NOW)
+    assert response.status == 200
+    assert "DEMO gamma by strike" in response.body.decode("utf-8")
+
+
+def test_root_is_portfolio_overview_not_a_symbol_dashboard():
+    response = route_http("GET", "/", {}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 200
+    body = response.body.decode("utf-8")
+    assert "Portfolio overview" in body
+    assert "Paper P&amp;L" in body
+    assert "Trade record" in body
+    assert "<h2>Holdings</h2>" in body
+    assert "<h2>Digest</h2>" in body
+    assert "Top card" not in body
+    empty = route_http("GET", "/", {}, SnapshotStore(), Journal(), CONFIG, NOW)
+    assert empty.status == 200
+    assert "Portfolio overview" in empty.body.decode("utf-8")
+
+
+def test_dashboard_has_no_video_section():
+    response = route_http("GET", "/dashboard?underlying=TEST", {}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 200
+    assert "video" not in response.body.decode("utf-8").lower()

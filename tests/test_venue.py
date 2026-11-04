@@ -210,7 +210,7 @@ def _checklist() -> dict[str, bool]:
 
 def test_submit_live_returns_fill_and_updates_state():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     venue = _StubVenue(LiveAck(order_id="1", status="filled", fill_price=100.0, quantity=10))
     fill, position, updated = submit_live(_intent(), _state(), None, LIMITS, journal, NOW, venue, 100.0)
     assert fill.venue == "live"
@@ -224,7 +224,7 @@ def test_submit_live_returns_fill_and_updates_state():
 
 def test_submit_live_blocks_while_halted():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     venue = _StubVenue(LiveAck(order_id="1", status="filled", fill_price=100.0, quantity=10))
     with pytest.raises(LiveDisabledError):
         submit_live(_intent(), _state(halt_active=True), None, LIMITS, journal, NOW, venue, 100.0)

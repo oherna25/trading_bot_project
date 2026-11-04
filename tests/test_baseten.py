@@ -7,6 +7,8 @@ from bot.baseten import (
     REASON_MAX_TOKENS,
     REASON_MODEL_DEFAULT,
     REASON_REASONING,
+    baseten_status,
+    baseten_summary,
     generate_pick,
     generate_reason,
     predict_url,
@@ -48,6 +50,20 @@ def test_select_reason_backend_needs_only_api_key():
 def test_select_reason_backend_baseten_when_both_vars_set():
     backend, reason = select_reason_backend(Journal(), NOW, dict(ENV))
     assert (backend, reason) == ("baseten", "")
+
+
+def test_baseten_status_is_key_free():
+    status = baseten_status(dict(SLUG_ENV))
+    assert status == {
+        "baseten_key_set": True,
+        "baseten_model": SLUG,
+        "baseten_chat": True,
+    }
+    assert "key-1" not in str(status)
+    assert baseten_status({})["baseten_key_set"] is False
+    assert baseten_status(dict(ENV))["baseten_chat"] is False
+    assert "chat roles" in baseten_summary(dict(SLUG_ENV))
+    assert baseten_summary({}) == "baseten: not set"
 
 
 def test_generate_reason_posts_stats_with_api_key():

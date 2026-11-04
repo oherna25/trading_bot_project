@@ -229,7 +229,7 @@ def advisory_review(
         journal.append(now, "review_skipped", {"reason": "live models off"})
         return ""
     backend, reason = select_backend("reviewer", journal, now, env)
-    if backend != "model":
+    if backend not in ("model", "user", "baseten"):
         journal.append(now, "review_skipped", {"reason": reason})
         return ""
     prompt = _review_prompt(evidence, journal)

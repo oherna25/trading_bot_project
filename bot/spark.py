@@ -14,6 +14,7 @@ from typing import Mapping, Optional
 
 import html
 
+from bot.diff import pct
 from bot.exposure import compute_gex
 from bot.ideas import resolve_direction
 from bot.journal import Journal
@@ -72,7 +73,7 @@ def format_spark_block(
         return f"spark audit: {verdict.status} -- {verdict.detail}"
     lines = [
         f"spark audit: {verdict.status} (model {claim.direction} vs engine {expected})",
-        f"model: {claim.model_id} confidence {claim.confidence:.2f}",
+        f"model: {claim.model_id} confidence {pct(claim.confidence)}",
         f"thesis: {claim.thesis}",
         f"check: {verdict.detail}",
         "note: free prose is unverified, only direction vs engine counts",
@@ -110,7 +111,7 @@ def spark_panel_html(store: SnapshotStore, journal: Journal, underlying: str) ->
         note = "Offline by design: no key, no problem. The engine grades every claim when Spark is on."
     else:
         verdict = f'<span class="pill verdict {cls}">SPARK AUDIT · {html.escape(status)}</span>'
-        conf = f" · confidence {confidence:.2f}" if confidence is not None else ""
+        conf = f" · confidence {pct(confidence)}" if confidence is not None else ""
         model_side = (
             f"<span>Muse Spark proposes</span><b>{html.escape(model_dir)}</b>"
             f"<p class=\"sub\">muse-spark-1.3{html.escape(conf)}</p>"

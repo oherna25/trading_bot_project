@@ -52,7 +52,7 @@ def llm_route(
     http_post: HttpPost | None = None,
 ) -> tuple[str, dict[str, Any], str]:
     backend, reason = select_backend("analyst", journal, now, env)
-    if backend not in ("model", "user"):
+    if backend not in ("model", "user", "baseten"):
         raise ValueError(reason or "missing META_MODEL_API_KEY")
     catalog = "\n".join(f"- {name}: {tool.description}" for name, tool in TOOL_REGISTRY.items())
     prompt = f"Request: {text}\nDefault underlying: {underlying}\nTools:\n{catalog}"

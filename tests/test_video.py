@@ -169,17 +169,14 @@ def test_route_chat_video_brief_journals_and_names_project_dir(monkeypatch, tmp_
     assert entries[0].payload["underlyings"] == ["TEST"]
 
 
-def test_tool_registry_exposes_get_video_brief(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    assert TOOL_REGISTRY["get_video_brief"].description == (
-        "Render-ready HyperFrames video brief project from stored snapshots"
-    )
+def test_tool_registry_has_no_video_brief():
+    assert "get_video_brief" not in TOOL_REGISTRY
     reply = dispatch_tool(
         "get_video_brief", {"query": "video brief"}, _seeded_store(), Journal(), CONFIG, NOW,
         underlying="TEST",
     )
-    assert reply.ok is True
-    assert "data/video-brief" in reply.reply
+    assert reply.ok is False
+    assert "unknown tool" in reply.reply
 
 
 def test_route_http_get_video_serves_html_and_400s_unknown():
@@ -318,7 +315,7 @@ def test_submission_spark_scene_shows_live_verdict_when_journaled():
     brief = build_submission_brief("TEST", _seeded_store(), journal, NOW)
     spark = next(s for s in brief.scenes if s.scene_id == "spark-audit")
     assert "THIS RUN: MATCH" in spark.body_html
-    assert "confidence 0.83" in spark.body_html
+    assert "confidence 83%" in spark.body_html
 
 
 def test_submission_composition_root_contract():

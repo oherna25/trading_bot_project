@@ -2,10 +2,12 @@
 """Exhaustive gate verification for live-ordering safety (formal-live-gates).
 
 Property (must hold in EVERY case in scope):
-  Live money cannot move unless every gate passed, and kill_switch always stops it.
+  Live money cannot move unless the toggle is armed and every submit gate
+  passed, and kill_switch always stops it.
   Concretely, for every gate-flag combination and every short event ordering:
     venue.place_order is reached IFF (adapter armed AND no halt AND no kill
     AND risk review approves AND all review inputs present).
+    Arming is a plain toggle: enable_live arms IFF no halt AND no kill.
 
 Method: exhaustive small-model enumeration executed against the REAL product
 code (bot/autonomy.py, bot/risk.py). No hand model of any gate function: the
@@ -15,7 +17,7 @@ persistence: all journals are in-memory, each case/sequence starts clean, and
 the module-global autonomy.live_enabled is reset between cases.
 
 Scope (finite, complete -- every case runs, nothing is sampled):
-  Phase A: enable_live over signature(2) x halt(2) x kill(2) x evidence(5) x checklist(3) = 120
+  Phase A: enable_live toggle over halt(2) x kill(2) = 4
   Phase B: review_intent halt/kill veto + notional/options dimensions = 8
   Phase C: submit_live over armed(2) x halt(2) x kill(2) x intent(2) x args(5) = 160
   Phase D: kill/reset ordering spot checks (arm -> fill -> kill -> blocked ->
@@ -45,13 +47,10 @@ import bot.autonomy as autonomy
 from bot.autonomy import LiveDisabledError, enable_live, kill_switch, reset_autonomy, submit_live
 from bot.journal import Journal
 from bot.risk import fire_halt, review_intent
-from bot.shapes import OrderIntent, OrderLeg, PaperEvidence, RiskLimits, RiskState
+from bot.shapes import OrderIntent, OrderLeg, RiskLimits, RiskState
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 LIMITS = RiskLimits(max_trade_size=5000.0, day_profit_target=500.0, max_day_loss=1000.0)
-READY = PaperEvidence(clean_days=12, clean_days_target=10, max_drawdown=100.0,
-                      drawdown_bound=500.0, halt_drills_passed=True)
-FULL_CHECKLIST = {"paper_evidence_reviewed": True, "risk_limits_set": True, "kill_switch_tested": True}
 
 FAILURES: list[str] = []
 COUNTS = {"cases": 0}
@@ -117,45 +116,28 @@ def _submit_or_raise(intent, state, limits, journal, now, venue):
     return True, updated, venue.calls - before
 
 
-# ---- Phase A: enable_live gate matrix --------------------------------------
+# ---- Phase A: enable_live toggle matrix ------------------------------------
 def _phase_a() -> None:
-    weak_days = PaperEvidence(clean_days=3, clean_days_target=10, max_drawdown=100.0,
-                              drawdown_bound=500.0, halt_drills_passed=True)
-    weak_dd = PaperEvidence(clean_days=12, clean_days_target=10, max_drawdown=800.0,
-                            drawdown_bound=500.0, halt_drills_passed=True)
-    weak_drills = PaperEvidence(clean_days=12, clean_days_target=10, max_drawdown=100.0,
-                                drawdown_bound=500.0, halt_drills_passed=False)
-    evidences = [("none", None), ("weak-days", weak_days), ("weak-dd", weak_dd),
-                 ("weak-drills", weak_drills), ("ready", READY)]
-    checklists = [("empty", {}),
-                  ("partial", {"paper_evidence_reviewed": True, "risk_limits_set": True}),
-                  ("full", dict(FULL_CHECKLIST))]
-    for sig in ("", "op-signed"):
-        for halt in (False, True):
-            for kill in (False, True):
-                for ev_name, ev in evidences:
-                    for cl_name, cl in checklists:
-                        COUNTS["cases"] += 1
-                        autonomy.live_enabled = False
-                        journal = Journal()
-                        got = enable_live(sig, _state(halt_active=halt, kill_active=kill),
-                                          journal, NOW, ev, cl)
-                        expected = (bool(sig) and not halt and not kill
-                                    and ev is READY and cl == FULL_CHECKLIST)
-                        if got != expected or autonomy.live_enabled != expected:
-                            _fail(
-                                "[counterexample A: enable_live] "
-                                f"sig={sig!r} halt={halt} kill={kill} "
-                                f"evidence={ev_name} checklist={cl_name} -> "
-                                f"enable_live returned {got}, live_enabled="
-                                f"{autonomy.live_enabled}; expected {expected}")
-                        elif not expected and sig and not halt and not kill:
-                            kinds = [e.kind for e in journal.entries()]
-                            if not kinds or kinds[-1] != "live_blocked":
-                                _fail(
-                                    "[counterexample A: enable_live journal] "
-                                    f"sig={sig!r} evidence={ev_name} checklist={cl_name} "
-                                    f"-> rejected without a live_blocked receipt")
+    for halt in (False, True):
+        for kill in (False, True):
+            COUNTS["cases"] += 1
+            autonomy.live_enabled = False
+            journal = Journal()
+            got = enable_live(_state(halt_active=halt, kill_active=kill), journal, NOW)
+            expected = not halt and not kill
+            if got != expected or autonomy.live_enabled != expected:
+                _fail(
+                    "[counterexample A: enable_live] "
+                    f"halt={halt} kill={kill} -> "
+                    f"enable_live returned {got}, live_enabled="
+                    f"{autonomy.live_enabled}; expected {expected}")
+            elif not expected:
+                kinds = [e.kind for e in journal.entries()]
+                if not kinds or kinds[-1] != "live_blocked":
+                    _fail(
+                        "[counterexample A: enable_live journal] "
+                        f"halt={halt} kill={kill} "
+                        "-> rejected without a live_blocked receipt")
     autonomy.live_enabled = False
 
 
@@ -288,7 +270,7 @@ def _phase_d() -> None:
     journal = Journal()
     venue = StubVenue()
     state = _state()
-    assert enable_live("op-signed", state, journal, NOW, READY, FULL_CHECKLIST) is True
+    assert enable_live(state, journal, NOW) is True
     filled, state, _ = _submit_or_raise(_good_intent(), state, LIMITS, journal, NOW, venue)
     if not filled or venue.calls != 1:
         _fail("[counterexample D] armed adapter did not fill a good intent")
@@ -311,15 +293,14 @@ def _phase_d() -> None:
     if filled or venue.calls != 1:
         _fail("[counterexample D] submit_live filled after reset without re-arm "
               f"(filled={filled} venue_calls={venue.calls})")
-    assert enable_live("op-signed", cleared, journal, NOW, READY, FULL_CHECKLIST) is True
+    assert enable_live(cleared, journal, NOW) is True
     filled, state, _ = _submit_or_raise(_good_intent(), cleared, LIMITS, journal, NOW, venue)
     if not filled or venue.calls != 2:
         _fail("[counterexample D] full re-arm path did not recover")
     COUNTS["cases"] += 1
     autonomy.live_enabled = False
     journal2 = Journal()
-    if enable_live("op-signed", _state(halt_active=True), journal2, NOW,
-                   READY, FULL_CHECKLIST) is not False or autonomy.live_enabled:
+    if enable_live(_state(halt_active=True), journal2, NOW) is not False or autonomy.live_enabled:
         _fail("[counterexample D] enable_live armed the adapter while halt_active")
     autonomy.live_enabled = False
 
@@ -336,9 +317,9 @@ def _run_sequence(seq: tuple[str, ...]) -> None:
     fills = 0
     for op in seq:
         if op == "Eok":
-            enable_live("op-signed", _state(), journal, NOW, READY, FULL_CHECKLIST)
+            enable_live(_state(), journal, NOW)
         elif op == "Ebad":
-            enable_live("", _state(), journal, NOW, READY, FULL_CHECKLIST)
+            enable_live(_state(halt_active=True), journal, NOW)
         elif op == "K":
             cur = kill_switch(cur, journal, NOW)
         elif op == "H":
@@ -398,7 +379,7 @@ def main() -> int:
     _phase_d()
     _phase_e()
     print(f"formal-live-gates: {COUNTS['cases']} cases executed "
-          f"(A enable=120, B review=8, C submit=160, C2 own-gates=41, D ordering=2, "
+          f"(A enable=4, B review=8, C submit=160, C2 own-gates=41, D ordering=2, "
           f"E sequences=9330 incl. S-steps).")
     print("gates: bot/autonomy.py:enable_live/submit_live/kill_switch/reset_autonomy + "
           "bot/risk.py:review_intent/fire_halt/fire_kill/operator_reset; "
@@ -410,7 +391,7 @@ def main() -> int:
         if len(FAILURES) > 20:
             print(f"  ... and {len(FAILURES) - 20} more")
         return 1
-    print("PASS: live money cannot move unless every gate passed; kill_switch always stops it.")
+    print("PASS: live money cannot move unless the toggle is armed and every submit gate passed; kill_switch always stops it.")
     return 0
 
 

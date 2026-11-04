@@ -173,7 +173,6 @@ NAV_LINKS = (
     ("chart", "/chart"),
     ("trackrecord", "/trackrecord"),
     ("earnings", "/earnings"),
-    ("video", "/video"),
     ("live", "/live"),
     ("settings", "/settings"),
 )
@@ -183,7 +182,7 @@ def nav_header(underlying: str, current: str, settings: DashboardSettings, next_
     escaped = _urlencode(underlying)
     links = []
     for label, href in NAV_LINKS:
-        if label in ("dashboard", "chart", "cards", "demo", "video"):
+        if label in ("dashboard", "chart", "cards", "demo"):
             href = f"{href}?underlying={escaped}"
         mark = ' aria-current="page"' if label == current else ""
         links.append(f'<a href="{href}"{mark}>{label}</a>')
@@ -195,7 +194,7 @@ def nav_header(underlying: str, current: str, settings: DashboardSettings, next_
         f'<button type="submit" aria-label="switch to {other} mode">{other} mode</button></form>'
     )
     brand = (
-        f"<a class=\"brand\" href=\"/dashboard?underlying={escaped}\">"
+        f"<a class=\"brand\" href=\"/\">"
         f"<img src=\"{ICON_URL}\" alt=\"\" width=\"26\" height=\"26\">{BRAND}</a>"
     )
     return f"<header class=\"top\"><nav>{brand}{''.join(links)}</nav>{toggle}</header>"

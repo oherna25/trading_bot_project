@@ -117,7 +117,7 @@ def test_take_live_disarmed_never_reaches_broker():
 def test_take_live_armed_fills_through_review_and_journals():
     store = _seeded_store(threshold=0.10)
     journal = Journal()
-    assert enable_live("op-1", _state(), journal, NOW, _ready_evidence(), _checklist()) is True
+    assert enable_live(_state(), journal, NOW) is True
     venue = StubVenue()
     text = take_live_trade(0, "TEST", store, journal, CONFIG, NOW, venue=venue)
     assert "filled" in text
@@ -128,7 +128,7 @@ def test_take_live_armed_fills_through_review_and_journals():
 def test_kill_switch_blocks_aftermath():
     store = _seeded_store(threshold=0.10)
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _ready_evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     kill_live_ui(store, journal, NOW)
     venue = StubVenue()
     with pytest.raises(ValueError, match="rejected"):
@@ -153,7 +153,7 @@ def test_auto_hook_default_off_makes_no_broker_contact(monkeypatch):
 def test_auto_sends_only_qualifying_cards_when_armed():
     store = _seeded_store(threshold=0.10, auto=True)
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _ready_evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     from bot.tradecards import query_trade_cards
 
     cards = query_trade_cards("trade ideas", "TEST", store, journal, NOW)
@@ -164,21 +164,27 @@ def test_auto_sends_only_qualifying_cards_when_armed():
     assert len(venue.calls) >= 1
 
 
-def test_live_page_toggle_and_gated_enable():
+def test_live_page_is_a_toggle_with_a_warning():
     store = _seeded_store()
     journal = Journal()
     page = route_http("GET", "/live", {}, store, journal, CONFIG, NOW)
     assert page.status == 200
-    assert "live ordering" in page.body.decode("utf-8")
-    assert 'http-equiv="refresh"' not in page.body.decode("utf-8")
-    bad = route_http("POST", "/live", FormData({"action": "enable"}), store, journal, CONFIG, NOW)
-    assert bad.status == 400
+    body = page.body.decode("utf-8")
+    assert "live ordering" in body
+    assert "Warning: live orders can move real money" in body
+    assert "signature" not in body
+    assert 'http-equiv="refresh"' not in body
+    armed = route_http("POST", "/live", FormData({"action": "enable"}), store, journal, CONFIG, NOW)
+    assert armed.status == 200
+    assert autonomy.live_enabled is True
     killed = route_http("POST", "/live", FormData({"action": "kill"}), store, journal, CONFIG, NOW)
     assert killed.status == 200
     assert autonomy.live_enabled is False
 
 
-def test_enable_ui_needs_evidence():
+def test_enable_ui_is_a_plain_toggle():
     store = _seeded_store()
-    with pytest.raises(ValueError, match="blocked"):
-        enable_live_ui("op-1", _checklist(), store, Journal(), CONFIG, NOW)
+    journal = Journal()
+    assert enable_live_ui(store, journal, CONFIG, NOW) == "live ordering armed"
+    assert autonomy.live_enabled is True
+    assert journal.entries()[-1].kind == "live_enabled"

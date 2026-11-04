@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from typing import Any, Mapping
 
-from bot.diff import compact_dollars
+from bot.diff import compact_dollars, pct
 from bot.journal import Journal
 from bot.models import HttpPost, chat_api_key, chat_base_url, chat_spec, receipt_payload, run_analyst, select_backend
 from bot.store import need_snapshot_text
@@ -38,7 +38,7 @@ def _stats(card: TradeCard) -> dict[str, Any]:
 
 
 def _fallback_bull(card: TradeCard) -> str:
-    parts = [f"Take the {card.direction}: {card.spread} {card.expiry} screens at {card.confidence:.2f} confidence."]
+    parts = [f"Take the {card.direction}: {card.spread} {card.expiry} screens at {pct(card.confidence)} confidence."]
     if card.wall_exposure is not None:
         parts.append(f"It keys off the {compact_dollars(card.wall_exposure)} wall at {card.strike:g}.")
     if card.spot is not None and card.flip_point is not None:
@@ -59,9 +59,9 @@ def _fallback_bear(card: TradeCard) -> str:
     if card.spread_pct is not None and card.spread_pct > 5.0:
         risks.append(f"a {card.spread_pct:.1f}% wide market bleeds edge")
     if card.confidence < 0.5:
-        risks.append("the screen itself scores below 0.50")
+        risks.append("the screen itself scores below 50%")
     if not risks:
-        risks.append(f"edge is thin at {card.confidence:.2f} with no hard catalyst")
+        risks.append(f"edge is thin at {pct(card.confidence)} with no hard catalyst")
     return f"Fade the {card.direction}: " + "; ".join(risks) + "."
 
 
@@ -76,7 +76,7 @@ def _model_case(
     http_post: HttpPost | None,
 ) -> str | None:
     backend, reason = select_backend(role, journal, now, env)
-    if backend not in ("model", "user"):
+    if backend not in ("model", "user", "baseten"):
         journal.append(now, "model_fallback", {"reason": reason, "debate": role})
         return None
     try:
@@ -121,9 +121,9 @@ def debate_card(
     bull_text = bull if bull is not None else _fallback_bull(card)
     bear_text = bear if bear is not None else _fallback_bear(card)
     if card.confidence >= 0.5:
-        verdict = f"verdict: take the {card.direction} ({card.confidence:.2f})"
+        verdict = f"verdict: take the {card.direction} ({pct(card.confidence)})"
     else:
-        verdict = f"verdict: pass ({card.confidence:.2f} below 0.50)"
+        verdict = f"verdict: pass ({pct(card.confidence)} below 50%)"
     return f"BULL [{bull_source}]: {bull_text}\nBEAR [{bear_source}]: {bear_text}\n{verdict}"
 
 

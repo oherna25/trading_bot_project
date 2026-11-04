@@ -9,7 +9,7 @@ from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar
 from urllib.parse import urlencode
 
 from bot.config import read_dotenv as _read_dotenv
-from bot.diff import compact_dollars
+from bot.diff import compact_dollars, pct
 from bot.ivrank import iv_rank as _iv_rank
 from bot.risk import even_legs
 from bot.shapes import (
@@ -619,7 +619,7 @@ def format_ideas(ideas: Sequence[TradeIdea]) -> str:
     for number, idea in enumerate(ideas, 1):
         line = (
             f"{number}. {idea.symbol} {idea.direction} {idea.spread or idea.call_or_put} "
-            f"expiry {idea.expiry} confidence {idea.confidence:.2f}: {idea.thesis} | {idea.trigger}"
+            f"expiry {idea.expiry} confidence {pct(idea.confidence)}: {idea.thesis} | {idea.trigger}"
         )
         if idea.earnings_date is not None:
             line += f" | earnings {idea.earnings_date}"

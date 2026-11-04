@@ -7,6 +7,7 @@ from typing import Mapping
 
 from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
+from bot.baseten import baseten_status
 from bot.localmodels import LOCAL_REGISTRY, local_available, local_weights
 from bot.models import chat_spec, select_backend, spend_today, user_model_status
 
@@ -68,7 +69,7 @@ def select_model_tier(
                 last_reason = "no local weights"
             continue
         backend, reason = select_backend(step, journal, now, env)
-        if backend in ("model", "user"):
+        if backend in ("model", "user", "baseten"):
             model_id = chat_spec(step, env).model_id
             decision = TierDecision(task, backend, step, model_id, "")
             journal.append(
@@ -112,10 +113,12 @@ def format_tier_status(status: Mapping[str, object]) -> str:
         user_detail += f" ({user_source})"
     if status.get("user_model_error"):
         user_detail += f" ({status.get('user_model_error')})"
+    baseten_detail = str(status.get("baseten_model") or "none") if status.get("baseten_key_set") else "none"
     lines = [
         f"tier status: spend {spend_text} / {budget_text} today",
         f"local: {status.get('local_model') or 'none'}",
         f"user model: {user_detail}",
+        f"baseten: {baseten_detail}",
     ]
     for klass, order in CLASS_ORDER.items():
         lines.append(f"{klass}: {' -> '.join(order)}")
@@ -135,4 +138,5 @@ def tier_status(
         "tasks": dict(TASK_CLASS),
     }
     status.update(user_model_status(env))
+    status.update(baseten_status(env))
     return status

@@ -207,9 +207,6 @@ def _actions_html(underlying: str) -> str:
         "<form class=\"block\" method=\"post\" action=\"/action\">"
         "<input type=\"hidden\" name=\"tool\" value=\"backfill_iv\">"
         f"{hidden_symbol}<button type=\"submit\">backfill</button></form></div>"
-        "<div class=\"action\"><h3>video brief</h3><p>Render-ready HyperFrames project.</p>"
-        f"<p><a href=\"/video?underlying={encoded}\">open composition</a> or "
-        f"<a href=\"/action?tool=get_video_brief&amp;underlying={encoded}\">rebuild it</a></p></div>"
         "<div class=\"action\"><h3>replay with costs</h3><p>Backtest net of commission and slippage.</p>"
         f"<form class=\"block\" method=\"get\" action=\"/action\">"
         "<input type=\"hidden\" name=\"tool\" value=\"run_replay\">"
@@ -272,8 +269,47 @@ def _actions_html(underlying: str) -> str:
     )
 
 
+def _overview_html(
+    store: SnapshotStore, journal: Journal, now: datetime, rows: list[dict[str, Any]],
+    alerts: list[str], stats: str,
+) -> str:
+    from bot.research_paper import paper_pnl_text
+    from bot.theme import page
+    from bot.trackrecord import trackrecord_text
+
+    settings = store.read_settings()
+    body = (
+        f"{stats}"
+        f"<h2>Paper P&amp;L</h2><pre>{html.escape(paper_pnl_text(journal, store))}</pre>"
+        f"<h2>Trade record</h2><pre>{html.escape(trackrecord_text(journal, store))}</pre>"
+        f"<h2>Holdings</h2>{_holdings_html(store)}"
+        f"<h2>Digest</h2>{_board_table(rows)}{_alerts_list(alerts, now)}"
+        "<h2>Overview</h2><div class=\"actions\">"
+        "<div class=\"action\"><h3><a href=\"/trackrecord\">track record</a></h3>"
+        "<p>Closed paper trades with win rate and equity.</p></div>"
+        "<div class=\"action\"><h3><a href=\"/pnl\">paper P&amp;L</a></h3>"
+        "<p>Paper P and L from journaled fills.</p></div>"
+        "<div class=\"action\"><h3><a href=\"/deployments/page\">deployments</a></h3>"
+        "<p>Open short positions, collateral, and realized PnL.</p></div>"
+        "<div class=\"action\"><h3><a href=\"/board\">board</a></h3>"
+        "<p>Regime board across every stored underlying.</p></div>"
+        "</div>"
+    )
+    return page(
+        "Portfolio overview",
+        "Portfolio overview",
+        "portfolio and trade overview, from stored snapshots",
+        body,
+        settings.default_underlying,
+        "dashboard",
+        settings,
+        "/",
+        refresh=True,
+    )
+
+
 def dashboard_html(
-    store: SnapshotStore, journal: Journal, now: datetime, underlying: str
+    store: SnapshotStore, journal: Journal, now: datetime, underlying: str | None = None
 ) -> str:
     from bot.alerts import collect_alerts
     from bot.theme import page
@@ -296,6 +332,8 @@ def dashboard_html(
         f"<div class=\"stat\"><b>{len(store.read_holdings())}</b><span>holdings</span></div>"
         "</div>"
     )
+    if underlying is None:
+        return _overview_html(store, journal, now, rows, alerts, stats)
     from bot.spark import spark_panel_html
 
     body = (

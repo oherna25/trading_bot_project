@@ -67,18 +67,18 @@ def _stub_post(url, headers, payload, timeout):
 def test_fallback_debate_grounds_both_sides():
     text = debate_card(_card(), Journal(), NOW)
     assert text.startswith("BULL [rules]: Take the short")
-    assert "screens at 0.65 confidence" in text
+    assert "screens at 65% confidence" in text
     assert "BEAR [rules]: Fade the short" in text
     assert "max loss $250" in text
     assert "earnings 2026-11-02 lands inside the window" in text
     assert "8.0% wide market bleeds edge" in text
-    assert text.endswith("verdict: take the short (0.65)")
+    assert text.endswith("verdict: take the short (65%)")
 
 
 def test_fallback_verdict_passes_below_half():
     text = debate_card(_card(confidence=0.30), Journal(), NOW)
-    assert "the screen itself scores below 0.50" in text
-    assert text.endswith("verdict: pass (0.30 below 0.50)")
+    assert "the screen itself scores below 50%" in text
+    assert text.endswith("verdict: pass (30% below 50%)")
 
 
 def test_live_models_argue_and_journal_receipts():

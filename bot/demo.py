@@ -88,12 +88,19 @@ def shock_html(
     )
 
 
+def _live_models_available() -> bool:
+    from bot.models import model_api_key, portable_config
+
+    return portable_config()[0] is not None or bool(model_api_key())
+
+
 def _chat_box(underlying: str) -> str:
     sym = html.escape(underlying, quote=True)
     chips = "".join(
         f"<button type=\"button\" class=\"chipbtn\" data-q=\"{html.escape(q, quote=True)}\">{html.escape(q)}</button>"
         for q in ("gex brief", "trade cards", "spark audit", "wheel ideas", f"shock {underlying} -2%")
     )
+    checked = " checked" if _live_models_available() else ""
     return (
         "<section class=\"chatbox\" aria-label=\"Ask the desk\">"
         "<span class=\"eyebrow\">Try it live</span><h2 style=\"margin-top:.35rem\">Ask the desk</h2>"
@@ -101,14 +108,16 @@ def _chat_box(underlying: str) -> str:
         f"<div class=\"chips\">{chips}</div>"
         "<form id=\"chat-form\"><label class=\"field\" style=\"flex:1 1 16rem\">question"
         f"<input type=\"text\" id=\"chat-q\" name=\"q\" value=\"gex brief\" autocomplete=\"off\" aria-label=\"chat question\"></label>"
+        f"<label class=\"field\">live models<input type=\"checkbox\" id=\"chat-live\"{checked}>"
+        "<span class=\"sub\">on: Spark answers with your key. off: deterministic engine only.</span></label>"
         "<button class=\"solid\" type=\"submit\">Ask</button></form>"
         "<pre id=\"chat-reply\" aria-live=\"polite\"></pre>"
         "<script>"
-        "const f=document.getElementById('chat-form'),q=document.getElementById('chat-q'),r=document.getElementById('chat-reply');"
+        "const f=document.getElementById('chat-form'),q=document.getElementById('chat-q'),r=document.getElementById('chat-reply'),lv=document.getElementById('chat-live');"
         "document.querySelectorAll('.chipbtn').forEach(b=>b.addEventListener('click',()=>{q.value=b.dataset.q;f.requestSubmit()}));"
         "f.addEventListener('submit',async e=>{e.preventDefault();r.className='show';r.textContent='thinking…';"
         "try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},"
-        f"body:JSON.stringify({{text:q.value,underlying:'{sym}'}})}});const j=await res.json();"
+        f"body:JSON.stringify({{text:q.value,underlying:'{sym}',live_models:lv.checked}})}});const j=await res.json();"
         "r.textContent=j.reply||j.error||('HTTP '+res.status)}catch(err){r.textContent='chat failed: '+err}});"
         "</script></section>"
     )

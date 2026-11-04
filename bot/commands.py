@@ -426,7 +426,7 @@ def spark_translate(
     http_post: HttpPost | None = None,
 ) -> dict[str, Any]:
     decision = select_model_tier("portfolio", journal, now, env)
-    if decision.tier not in ("model", "user"):
+    if decision.tier not in ("model", "user", "baseten"):
         return {"action": "unknown"}
     book_json = json.dumps(open_book(journal), default=str)
     prompt = f"Request: {text}\nOpen book: {book_json}"

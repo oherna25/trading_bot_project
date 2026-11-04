@@ -95,7 +95,7 @@ def read_chart_image(
         journal.append(now, "chart_skipped", {"reason": "image too large"})
         return "chart image rejected: image too large"
     backend, reason = select_backend("analyst", journal, now, env)
-    if backend not in ("model", "user"):
+    if backend not in ("model", "user", "baseten"):
         journal.append(now, "chart_skipped", {"reason": reason})
         return f"chart reading unavailable: {reason}"
     found = store.read_latest(underlying)

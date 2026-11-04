@@ -58,7 +58,7 @@ def test_chat_brief_carries_profile_numbers():
     assert "coverage 100%" in reply
     assert "calls $520K / puts -$624K" in reply
     assert "change vs previous: n/a (first snapshot)" in reply
-    assert "direction: short confidence: 0.50 (regime fallback)" in reply
+    assert "direction: short confidence: 50% (regime fallback)" in reply
 
 
 def test_chat_brief_shows_change_vs_previous_snapshot():

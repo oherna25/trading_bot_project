@@ -168,6 +168,23 @@ def test_html_escapes_reason_with_script_tags():
     assert "reason: deterministic (offline)" in page
 
 
+def test_card_html_shows_wall_dollars_and_confidence_percent():
+    card = TradeCard(
+        symbol="TEST", direction="long", spread="single", strike=100.0,
+        expiry="2026-11-20", call_or_put="call", hedge_strike=None,
+        confidence=0.8, snapshot_id="TEST:x", max_loss=120.0, breakeven=101.2,
+        net_debit=120.0, spread_pct=8.0, wall_exposure=-2352664863.87,
+        regime="short-gamma", spot=102.0, flip_point=99.0, reason="r",
+        reason_source="fallback",
+    )
+    page = trade_cards_html([card], "TEST")
+    assert "confidence <b>80%</b> (strong)" in page
+    assert "wall exposure -$2.4B" in page
+    assert "<span>Wall</span><b>-$2.4B</b>" in page
+    assert "in plain terms:" in page
+    assert "new here? what am I looking at" in page
+
+
 def test_empty_ideas_render_none_found():
     assert format_trade_cards([]) == "trade cards: none found"
 

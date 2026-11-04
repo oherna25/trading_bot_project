@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Mapping
 from urllib.parse import urlencode
 
+from bot.diff import pct
 from bot.ideas import ideas_limit, parse_timeframe, rank_ideas
 from bot.ivrank import histories_for
 from bot.ideas import cached_earnings
@@ -153,7 +154,7 @@ def builder_preview_text(
     for number, idea in enumerate(filtered[:5], 1):
         lines.append(
             f"{number}. {idea.direction} {idea.spread} {idea.expiry} "
-            f"conf {idea.confidence:.2f}: {idea.thesis}"
+            f"conf {pct(idea.confidence)}: {idea.thesis}"
         )
     spec = StrategySpec(
         underlying=symbol, direction=direction, dte_min=dte_min, dte_max=dte_max,

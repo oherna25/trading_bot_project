@@ -4,7 +4,8 @@ Research-first options trading system. It ingests chains and bars from
 free-tier market APIs, computes its own GEX/VEX/DEX exposure from stored
 snapshots, answers research questions in chat, and journals every signal,
 intent, and fill. Paper trading works. Live ordering ships disabled behind
-a signed action.
+a toggle on `/live` (blocked by an active halt/kill; every order still
+passes risk review).
 
 ## Quick start
 

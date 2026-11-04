@@ -30,8 +30,9 @@ It reads the chain, computes its own dealer exposure, picks contracts, sizes aga
 | 1 | `/demo` | Spark proposes, the engine disposes. Regime, walls, flip, top card, replay, shock test, chat box, one screen. |
 | 2 | `/deployments/page` | The agent's book: open short puts and credit spreads, collateral per contract, utilization bars, realized PnL. |
 | 3 | `/cards?underlying=SPY` | Defined-risk trade cards with payoff diagrams and one-click paper execution through the same risk gate as live. |
-| 4 | `/live` | Live ordering is off. Arming needs a signature, paper evidence, and a checklist. The kill switch is one click. |
+| 4 | `/live` | Live ordering is off. One toggle turns it on, with a small warning; the kill switch turns it off. |
 | 5 | Chat on `/demo` | Type `deploy sell puts on SPY paper capital 40000`, then `agent cycle`. The bounded cycle observes, proposes, acts, and verifies; with `BASETEN_API_KEY` set, Spark Open picks or skips a candidate and the journal shows `agent_proposal` before the gated fill. |
+| 6 | Chat on `/demo`, one-key only | The chat box has a live-models toggle (pre-checked when a key is configured). Ask `spark audit` and Spark's claim comes back graded MATCH or CONTRADICTION against the engine, journaled as `spark_claim` + `spark_verdict`. On `/cards`, refresh after a few seconds and card reasons flip from deterministic to Muse Spark Open. |
 
 ## At a glance
 
@@ -76,7 +77,7 @@ Save a profile first, in chat: `profile: risk_tolerance=moderate, portfolio_size
 | Muse Spark 1.3 | Analyst thesis with a forced `get_gex_profile` tool call, grounded notes, card reasons, chat routing, shock news | `bot/research_analyst.py`, `bot/metareason.py` | Deterministic flip rule, journaled as a fallback |
 | Muse Wonder 1.0 | Advisory risk review before live promotion, journal coach | `bot/research_analyst.py`, `bot/coach.py` | Rules coach over the same journal counts |
 | Muse Spark Open / Glimmer (local) | On-device analyst rescue, alert judging, narration and draft tasks at zero API cost | `bot/localmodels.py`, `bot/tiers.py` | Tier falls through to hosted or rules |
-| Muse Spark Open on Baseten | Deployment candidate pick or skip, plus card reasons when `BASETEN_API_KEY` is set | `bot/baseten.py`, `bot/agent.py`, `bot/metareason.py` | Deterministic annualized-return order and fallback reasons |
+| Muse Spark Open on Baseten | Analyst and reviewer chat roles, card reasons, plus deployment candidate pick or skip when `BASETEN_API_KEY` is set | `bot/baseten.py`, `bot/agent.py`, `bot/metareason.py`, `bot/models.py` | Deterministic annualized-return order and fallback reasons |
 | Muse Voice / Transcribe | Spoken holdings, voice commands, two-step voice kill switch | `bot/voice.py` | Text chat only |
 | SAM 3.1 + Spark | Document and chart screenshot reading against engine walls | `bot/docread.py`, `bot/chartread.py` | Pages and text surfaces only |
 | Muse Image | Card art, infographics, edits, refine | `bot/models.py`, `bot/cards.py` | Caption without art |
@@ -172,7 +173,7 @@ MarketWingMan zero-key demo (no keys, no network, seeded data)
 seeded: SPY, QQQ; open http://127.0.0.1:8000/demo
 ```
 
-Open `http://127.0.0.1:8000/demo`. Stop the server with Ctrl+C. Each start rebuilds the seed in memory, so a restart resets the demo to its first state.
+Open `http://127.0.0.1:8000/demo`. Stop the server with Ctrl+C. Each start rebuilds the seed in memory, so a restart resets the demo to its first state. Prefer containers or a server deploy? See [Deploy it](#deploy-it) below for the Docker and non-Docker paths.
 
 Useful variants:
 
@@ -187,11 +188,11 @@ Useful variants:
 
 | Step | Open | What to look for |
 |---|---|---|
-| 1 | `/demo` | One screen: regime read with walls and flip, Spark audit panel reading OFF, top trade card, wheel screen, replay, shock buttons, and the chat box. |
-| 2 | `/cards?underlying=SPY` | Five defined-risk cards built from the seeded chain. Try QQQ in place of SPY. |
+| 1 | `/demo` | One screen: regime read with walls and flip, Spark audit panel (reads OFF with no key), top trade card, wheel screen, replay, shock buttons, and the chat box. The chat box carries a live-models toggle: unticked with no key, pre-checked when a model key is configured. |
+| 2 | `/cards?underlying=SPY` | Five defined-risk cards built from the seeded chain. Walls in dollars, confidence as a percent. With a key set, refresh after a few seconds: card reasons flip from deterministic to Muse Spark Open as the background reason worker lands them. Try QQQ in place of SPY. |
 | 3 | `/deployments/page` | One paper `put_credit_spread` deployment on SPY with a $40,000 capital cap. Run it from chat with `run deployments` and watch a spread open through the paper risk gate. |
 | 4 | `/chart?underlying=SPY` | Gamma by strike with the flip marked. |
-| 5 | `/live` | Live ordering is off. Arming needs a signature, paper evidence, and a checklist, and the kill switch is one click. |
+| 5 | `/live` | Live ordering is off. One toggle turns it on, with a small warning; the kill switch turns it off in one click. |
 
 ### Try it in chat
 
@@ -201,11 +202,14 @@ Use the chat box on `/demo`, or post to `/chat`:
 curl -s -X POST localhost:8000/chat -H 'Content-Type: application/json' -d '{"text": "gex brief", "underlying": "SPY"}'
 ```
 
+The chat box has a live-models toggle (the `"live_models": true` field in API terms). It stays off with no key and comes pre-checked when a model key is configured; untick it any time to return to the deterministic engine.
+
 Prompts that work on the seeded data:
 
 | Prompt | What comes back |
 |---|---|
 | `gex brief` | Spot, regime, total GEX, flip, call and put walls from the seeded SPY chain. |
+| `spark audit` | With live models on and a key set: Spark states a direction and confidence, the engine grades it MATCH or CONTRADICTION, both journaled. With no key or live models off: reads OFF and the deterministic engine answers. |
 | `trade cards` | Ranked defined-risk cards, sized against the seeded profile. |
 | `wheel ideas` | Premium candidates that pass the delta, spread, open interest, and premium-return screens. |
 | `run deployments` | The seeded deployment sells a put credit spread on paper, journaled end to end. |
@@ -232,13 +236,15 @@ Prompts that work on the seeded data:
 
 The demo is complete without keys. Keys only change who writes the model text.
 
-- Set `BASETEN_API_KEY` in `.env` and restart. Muse Spark Open on `meta-models/muse-spark-open-1026` then picks or skips among filtered deployment candidates, journaled as `agent_proposal`, and writes card reasons. Without it the deterministic annualized-return order runs.
+- Set `BASETEN_API_KEY` in `.env` and restart. Muse Spark Open on `meta-models/muse-spark-open-1026` then serves the analyst and reviewer chat roles (briefs, chat routing, debate, coach, narrations, chart reads), picks or skips among filtered deployment candidates, journaled as `agent_proposal`, and writes card reasons. The demo chat box pre-checks its live-models toggle, so `spark audit` grades a live claim on the spot. Without it the deterministic annualized-return order runs.
 - Set `META_MODEL_API_KEY` together with `MODEL_DAY_BUDGET_USD` for the built-in Spark analyst and Wonder reviewer. Both are required. The key alone leaves the deterministic paths in place.
 - Feed keys (`TRADIER_ACCESS_TOKEN`, `MARKETDATA_API_KEY`, and the rest in `.env.example`) only matter for `run_app.py` against live feeds. The demo never calls a feed.
 
 ### Troubleshooting
 
 - `Address already in use`: pass `--port 8123` or stop the process already on 8000.
+- Card reasons still read `deterministic (offline)` with a key set: wait a few seconds and refresh `/cards`. Reasons generate in a background worker (roughly two seconds per card); the first paint is always the fallback, and the page picks up each model reason as it lands.
+- `spark audit` reads OFF with a key set: the chat box live-models toggle is off, or the API call omitted `"live_models": true`. Tick the toggle and ask again.
 - Blank or 400 page for a symbol other than SPY or QQQ: the demo seeds only those two. Naming any other ticker returns the stored-symbol list and asks you to load it, which needs a feed key under `run_app.py`.
 - Numbers look round: they are seeded fixtures by design. Source reads `demo_seed` on every brief so demo data is never mistaken for a live feed.
 
@@ -247,11 +253,36 @@ The demo is complete without keys. Keys only change who writes the model text.
 | Mode | Set | What runs |
 |---|---|---|
 | Zero keys (default) | nothing | Full offline demo on canned fixtures. Spark audit reads `OFF`; the deterministic engine answers every page. |
-| One key: Baseten | `BASETEN_API_KEY` | Muse Spark Open card reasons plus deployment candidate picks. No budget needed. |
+| One key: Baseten | `BASETEN_API_KEY` | Muse Spark Open chat roles, card reasons, and deployment candidate picks. No budget needed. |
 | One key: bring your own | `USER_MODEL_API_KEY` | Your OpenAI-compatible model serves analyst and reviewer roles. No day budget needed. |
 | Built-in Meta pair | `META_MODEL_API_KEY` + `MODEL_DAY_BUDGET_USD` | Spark/Wonder analyst, reviewer, grounding, voice, and image. Both are required; the key alone leaves these on deterministic paths. |
 
 Everything else in `.env.example` is optional and advanced: live market feeds, local GGUF weights, alert pushes, and tuning. No feed key is needed to judge the demo.
+
+### Deploy it
+
+Two paths, same demo. Both serve `/demo` on port 8000 (or `$PORT` where the platform sets it). Add `-e BASETEN_API_KEY=...` (Docker) or a `.env` file (non-Docker) for the one-key demo; with no key the deterministic demo runs.
+
+**Docker:**
+
+```bash
+docker build -t marketwingman .
+docker run --rm -p 8000:8000 marketwingman
+# one-key demo:
+docker run --rm -p 8000:8000 -e BASETEN_API_KEY=... marketwingman
+```
+
+The image is `python:3.12-slim` plus the package (runtime is standard library only). Paper activity persists in the `/data` volume when `--store-dir` is used, which the image sets by default. `make docker-demo` runs the build and the zero-key run.
+
+**Non-Docker (any host with Python 3.11+):**
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install .
+.venv/bin/marketwingman-demo --host 0.0.0.0 --port 8000 --store-dir data/demo
+```
+
+Or from a clone without installing: `make demo` (uses the repo venv when present). For a persistent process, run the same command under your supervisor of choice (systemd, launchd, pm2); the server is one process, standard library only, and writes state only under `--store-dir`. To run against live feeds instead of the seeded demo, swap the entry point to `marketwingman` (`run_app.py`) and set the feed keys from `.env.example`.
 
 The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/) as Mermaid sources. AI agents start with [AGENTS.md](AGENTS.md).
 
@@ -332,13 +363,13 @@ Meta Model API serves a Spark analyst behind research, plus voice input, card ar
 | `bot/config.py` | Single dotenv plus environment reader, bearer token, profile-to-limits `operator_config` |
 | `bot/metareason.py` | Meta reason-model client: `generate_reason`, backend selection |
 | `bot/agent.py` | Bounded agent cycle (`run_agent_cycle`: observe, propose, act, verify) and graded Baseten candidate proposals (`propose_order`) over deterministic deployment candidates |
-| `bot/baseten.py` | Baseten client for Muse Spark Open (`meta-models/muse-spark-open-1026`): card reasons (`generate_reason`) and deployment candidate picks (`generate_pick`), plus deployed-model `predict_url` |
+| `bot/baseten.py` | Baseten client for Muse Spark Open (`meta-models/muse-spark-open-1026`): chat-role config for `bot/models.py`, card reasons (`generate_reason`), and deployment candidate picks (`generate_pick`), plus deployed-model `predict_url` |
 | `bot/muse.py` | Muse chat transport: `parse_chat_payload`, `handle_chat`, `TOOL_REGISTRY`, `dispatch_tool`, `openapi_spec`, `route_http`, `create_server`, `serve` with timer refresh, open-server warning, drill `Harness` (facade over the four `muse_*` libs below) |
 | `bot/muse_tools.py` | MCP tool handlers plus `TOOL_REGISTRY` |
 | `bot/muse_chat.py` | Chat payload parsing, LLM routing, `dispatch_tool` |
 | `bot/muse_session.py` | Session trigger path, schedule parsing, `SessionController` |
 | `bot/muse_http.py` | HTTP primitives, `openapi_spec`, `route_http`, response cache with ETags |
-| `bot/video.py` | HyperFrames video brief: frozen scene model, timeline-free composition HTML, project writer, npx render shell, chat plus tool plus session wiring |
+| `bot/video.py` | HyperFrames video brief: frozen scene model, timeline-free composition HTML, project writer, npx render shell, chat plus HTTP plus session wiring |
 | `bot/ledger.py` | Reservation ledger: atomic quota claims plus lock-serialized budget holds with TTL expiry and idempotent settle |
 
 ## Feeds
@@ -383,7 +414,7 @@ MODEL_DAY_BUDGET_USD=<usd>   # required with META_MODEL_API_KEY; day budget for 
 USER_MODEL_API_KEY=<key>   # optional; your own key for any OpenAI-compatible chat API (analyst + reviewer roles, no budget needed)
 USER_MODEL_BASE_URL=<url>   # optional; default https://api.openai.com/v1
 USER_MODEL_ID=<id>   # optional; default gpt-4o-mini
-BASETEN_API_KEY=<key>   # optional; Baseten Muse Spark Open for card reasons and deployment candidate picks (no key: deterministic order)
+BASETEN_API_KEY=<key>   # optional; Baseten Muse Spark Open for chat roles, card reasons, and deployment candidate picks (no key: deterministic order)
 BASETEN_REASON_MODEL_ID=meta-models/muse-spark-open-1026   # optional; hackathon slug, or a deployed model id / predict URL
 LEDGER_DIR=<dir>   # optional; reservation ledger root (default: <store_dir>/ledger)
 LLAMA_CTX=2048   # optional; per-server model context
@@ -395,7 +426,7 @@ SCAN_BROAD=0   # optional; set 1 to refresh the broad universe on every tick
 SCAN_MAX_IDEAS=15   # optional; idea cap, 1-50
 ```
 
-The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0). Grounding, voice transcription, and image generation stay on this built-in pair because their endpoints are provider-specific. The day budget is enforced through lock-serialized ledger holds that every process reads (`LEDGER_DIR` sets the ledger root) instead of a journal scan. Trade card reasons use your own model first, then Baseten Spark Open with `BASETEN_API_KEY`, then `META_MODEL_API_KEY`; without any of them, the offline fallback writes each reason. Baseten also proposes deployment candidate picks when its key is set, with deterministic order as the fallback. Bring your own model with `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default `https://api.openai.com/v1`) and `USER_MODEL_ID` (default `gpt-4o-mini`): any OpenAI-compatible chat API then serves the analyst and reviewer roles (briefs, chat router, debate, coach, narrations, portfolio commands, chart reads, card reasons), with receipts journaled at zero cost since your key pays your bill and no day budget is required. The same key can be supplied at runtime instead of `.env`: paste it into the `set_user_model` MCP tool or the dashboard `/settings` model-key form (never into chat text, which the chat model would see). Runtime keys live in server memory only, clear on restart, take precedence over the env key while set, and are never persisted, journaled, or echoed back -- status lines and the settings page show the model id and source only. Grounding, voice transcription, and image generation stay on the built-in key because their endpoints are provider-specific. The tier readout names the user model, and `/healthz` reports `user_key_set` (presence only, never the key). The local tier reads `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` plus `LLAMA_SERVER_BIN` and starts one persistent `llama-server` per weights file on 127.0.0.1; prompts travel in the POST body so they never appear in `ps`. `LLAMA_CTX` and `LLAMA_THREADS` cap context and threads per server. Without weights every tier behaves exactly as before.
+The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0). Grounding, voice transcription, and image generation stay on this built-in pair because their endpoints are provider-specific. The day budget is enforced through lock-serialized ledger holds that every process reads (`LEDGER_DIR` sets the ledger root) instead of a journal scan. Trade card reasons use your own model first, then Baseten Spark Open with `BASETEN_API_KEY`, then `META_MODEL_API_KEY`; without any of them, the offline fallback writes each reason. Baseten also proposes deployment candidate picks when its key is set, with deterministic order as the fallback. The same key serves the analyst and reviewer chat roles through the Baseten inference chat API when `BASETEN_REASON_MODEL_ID` is a model slug (the default): portable-role resolution is your own model first, then Baseten, then the built-in Meta key, with receipts journaled at zero cost since your Baseten account pays. A deployed (non-slug) model id keeps serving card reasons and agent picks through its predict URL and stays off the chat roles. `/health` reports `baseten_key_set` (presence only), and the tier readout names the Baseten model. Bring your own model with `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default `https://api.openai.com/v1`) and `USER_MODEL_ID` (default `gpt-4o-mini`): any OpenAI-compatible chat API then serves the analyst and reviewer roles (briefs, chat router, debate, coach, narrations, portfolio commands, chart reads, card reasons), with receipts journaled at zero cost since your key pays your bill and no day budget is required. The same key can be supplied at runtime instead of `.env`: paste it into the `set_user_model` MCP tool or the dashboard `/settings` model-key form (never into chat text, which the chat model would see). Runtime keys live in server memory only, clear on restart, take precedence over the env key while set, and are never persisted, journaled, or echoed back -- status lines and the settings page show the model id and source only. Grounding, voice transcription, and image generation stay on the built-in key because their endpoints are provider-specific. The tier readout names the user model, and `/healthz` reports `user_key_set` (presence only, never the key). The local tier reads `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` plus `LLAMA_SERVER_BIN` and starts one persistent `llama-server` per weights file on 127.0.0.1; prompts travel in the POST body so they never appear in `ps`. `LLAMA_CTX` and `LLAMA_THREADS` cap context and threads per server. Without weights every tier behaves exactly as before.
 
 ## App tour
 
@@ -416,7 +447,7 @@ Live pages served from a stored bundle with `run_app.py`. Every shot below comes
 </tr>
 <tr>
 <td><img src="docs/screenshots/builder.png" alt="Strategy builder"><br><strong><code>/builder</code>: visual strategy builder.</strong> Pick guardrails, preview matching ideas, and backtest them against SPY buy-and-hold on stored snapshots.</td>
-<td><img src="docs/screenshots/live.png" alt="Live ordering gate"><br><strong><code>/live</code>: the live gate, closed.</strong> Arming needs a signature, all three checklist items, and journaled paper evidence. The kill switch disarms in one click, and every gate miss journals instead of ordering.</td>
+<td><img src="docs/screenshots/live.png" alt="Live ordering gate"><br><strong><code>/live</code>: the live gate, closed.</strong> One toggle arms it under a small real-money warning; an active halt or kill still blocks arming. The kill switch disarms in one click, and every blocked order journals instead of ordering.</td>
 </tr>
 </table>
 
@@ -547,9 +578,10 @@ tail data/session.log
 | `/cards?underlying=SPY[&query=...]` | GET | none; HTML trade cards page |
 | `/cards.json?underlying=SPY[&query=...]` | GET | none; trade cards JSON |
 | `/card?underlying=SPY[&snapshot=...][&index=0][&debate=1]` | GET | none; permalink for one card pinned to a snapshot (`debate=1` appends the bull-bear debate) |
-| `/chart?underlying=SPY` | GET | none; gamma-by-strike SVG chart with flip line, refreshes every 60s |
-| `/board` | GET | none; regime board across all stored underlyings, refreshes every 60s |
-| `/demo`, `/` | GET | none; one-screen demo page, brief plus top card plus wheel plus replay (400 when no snapshot stored) |
+| `/chart?underlying=SPY` | GET | none; gamma-by-strike SVG chart with flip line, refreshes every 60s; ticker search form (stored symbols as suggestions, case-insensitive) jumps to any stored ticker |
+| `/board` | GET | none; regime board across all stored underlyings, refreshes every 60s; same ticker search form |
+| `/` | GET | none; portfolio and trade overview: paper P&L, trade record, holdings, and the digest across all stored underlyings |
+| `/demo` | GET | none; one-screen demo page, brief plus top card plus wheel plus replay (400 when no snapshot stored) |
 | `/video?underlying=SPY` | GET | none; timeline-free HyperFrames video brief composition (400 when no snapshot stored) |
 | `/dashboard?underlying=SPY` | GET | none; digest plus top card plus holdings page (400 when the store is empty) |
 | `/voice?underlying=SPY[&live_models=1]` | POST | raw WAV/ogg audio bytes (10MB cap); transcribes and returns the brief as `{"ok", "reply"}` |
@@ -569,7 +601,7 @@ tail data/session.log
 | `/healthz` | GET | none; minimal `{"ok": true}` probe (always open) |
 | `/openapi.json` | GET | none |
 
-MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_spark_audit`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`, `backfill_iv`, `snapshot_diff`, `shock_test` (`{"shock_pct": -2}`), `set_holdings` (`{"holdings": [...]}`), `debate_card` (`{"index": 0}`, optional `snapshot` and `live_models`), `get_profile`, `get_dashboard`, `get_alerts`, `get_holdings`, `get_video_brief`, `get_coach_review`, `portfolio_command` (`{"command": "close my losers"}`), `shock_news` (`{"shock_pct": -2}`), `read_chart_image` (`{"image_b64": "..."}`), `read_document` (`{"image_b64": "..."}`), `share_card` (`{"index": 0}`), `get_narrated_alerts`, `get_tier_status`, `set_settings`, `get_settings`, `load_snapshot`, `set_profile`, `get_earnings_radar`, `take_paper_trade`, `take_live_trade` (`{"index": 0}`), `get_live_status`, `evaluate_strategy` (`{"text": "my strategy: ..."}`), `list_strategies`, `deploy_strategy` (`{"strategy_id": "cash_secured_put", "symbols": ["SPY"], "capital": 50000}`), `list_deployments`, `run_deployments`, `get_deployment_trackrecord`, `run_agent_cycle`, `show_builder`, `get_trackrecord`, `explain_position`, `onboarding_step`, `set_alert_rule`, `list_alert_rules`, `cancel_alert_rule`, `get_open_brief`, `get_live_board`, `set_user_model`, `clear_user_model`. `take_live_trade` is POST-only like the other mutating tools, so it never fires from a GET refresh. Each session run also pushes new flip, regime, wall-proximity, and wall-growth alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session. Server sessions paper trade one position per symbol by default, same as the CLI; pass `paper_trade: false` to `/session` or `run_session` to skip.
+MCP tools: `get_gex_brief`, `get_vex_brief`, `get_dex_brief`, `get_spark_audit`, `get_trade_cards`, `get_trade_ideas`, `get_wheel_ideas`, `journal_tail`, `paper_pnl`, `run_session`, `get_iv_rank`, `run_replay`, `backfill_iv`, `snapshot_diff`, `shock_test` (`{"shock_pct": -2}`), `set_holdings` (`{"holdings": [...]}`), `debate_card` (`{"index": 0}`, optional `snapshot` and `live_models`), `get_profile`, `get_dashboard`, `get_alerts`, `get_holdings`, `get_coach_review`, `portfolio_command` (`{"command": "close my losers"}`), `shock_news` (`{"shock_pct": -2}`), `read_chart_image` (`{"image_b64": "..."}`), `read_document` (`{"image_b64": "..."}`), `share_card` (`{"index": 0}`), `get_narrated_alerts`, `get_tier_status`, `set_settings`, `get_settings`, `load_snapshot`, `set_profile`, `get_earnings_radar`, `take_paper_trade`, `take_live_trade` (`{"index": 0}`), `get_live_status`, `evaluate_strategy` (`{"text": "my strategy: ..."}`), `list_strategies`, `deploy_strategy` (`{"strategy_id": "cash_secured_put", "symbols": ["SPY"], "capital": 50000}`), `list_deployments`, `run_deployments`, `get_deployment_trackrecord`, `run_agent_cycle`, `show_builder`, `get_trackrecord`, `explain_position`, `onboarding_step`, `set_alert_rule`, `list_alert_rules`, `cancel_alert_rule`, `get_open_brief`, `get_live_board`, `set_user_model`, `clear_user_model`. `take_live_trade` is POST-only like the other mutating tools, so it never fires from a GET refresh. Each session run also pushes new flip, regime, wall-proximity, and wall-growth alerts to Discord or Telegram when configured. Session runs copy state out, run unlocked, and merge back, so reads never block on a session. Server sessions paper trade one position per symbol by default, same as the CLI; pass `paper_trade: false` to `/session` or `run_session` to skip.
 
 When `store_dir` is passed to `serve` (as `run_app.py` does), the server reloads the JSON bundle whenever the scheduled session rewrites it, and with `refresh_seconds > 0` it re-ingests on its own timer (`bot/schedule.py: refresh_store`, ingest-only, no signals minted), prunes in-memory growth, and persists every pass, so snapshots stay fresh without restarts. Each tick refreshes the startup symbols plus every underlying currently in the store, so a ticker added later via `run_session.py --underlying QQQ` stays fresh with no restart. Session runs (`/session`, `run_session`, and the session timer) likewise cover the requested symbols plus every underlying in the store, requested first. `serve` also starts the card-reason worker, which drains queued model reasons in the background.
 
@@ -848,7 +880,7 @@ Voice notes now route by transcript after transcription: `"save holding long 100
 
 ### Video brief
 
-The video brief turns stored engine numbers into a render-ready HyperFrames project: one folder holding a timeline-free `index.html` composition with a title card, one gamma scene per symbol, a regime board, trade ideas, and an outro. Three entry points cover it. Chat `"video brief"` writes the project to `data/video-brief` and journals `video_brief`. `GET /video?underlying=SPY` serves the composition in the response with no files written and nothing journaled. Append `&storyboard=1` to preview the same scenes stacked as a scrollable storyboard instead of the render composition. Every scheduled session rewrites `<store_dir>/video-brief` and journals `video_brief`, or `video_brief_failed` with the error class name when the refresh fails.
+The video brief turns stored engine numbers into a render-ready HyperFrames project: one folder holding a timeline-free `index.html` composition with a title card, one gamma scene per symbol, a regime board, trade ideas, and an outro. Two entry points cover it. Chat `"video brief"` writes the project to `data/video-brief` and journals `video_brief`. `GET /video?underlying=SPY` serves the composition in the response with no files written and nothing journaled. It is not on the dashboard or in the MCP tool registry. Append `&storyboard=1` to preview the same scenes stacked as a scrollable storyboard instead of the render composition. Every scheduled session rewrites `<store_dir>/video-brief` and journals `video_brief`, or `video_brief_failed` with the error class name when the refresh fails.
 
 Render it with the HyperFrames CLI from the project dir:
 
@@ -902,7 +934,7 @@ The script pushes the model dir and prints the predict URL pattern plus the two 
 
 ### Paper to live
 
-Paper trade first (see the snippet above), then walk the promotion gate. `check_promotion` reads a `PaperEvidence` record and returns `"ready_for_checklist"` or `"stay_paper"`; build it by hand or generate it from a backtest with `paper_evidence_from_journal`. `advisory_review` adds a standalone Wonder pre-promotion read when the model backend is available:
+Paper trade first (see the snippet above). `check_promotion` is an advisory read: it takes a `PaperEvidence` record and returns `"ready_for_checklist"` or `"stay_paper"`; build it by hand or generate it from a backtest with `paper_evidence_from_journal`. It does not gate the live toggle. `advisory_review` adds a standalone Wonder pre-promotion read when the model backend is available:
 
 ```python
 from bot.autonomy import check_promotion
@@ -917,13 +949,12 @@ print(advisory_review(evidence, journal, now, live_models=True))
 
 `advisory_review` needs `live_models=True` plus the model keys, and returns an empty string (journaled as `review_skipped`) when the backend is unavailable.
 
-Live ordering ships disabled. `enable_live` flips it on only when every condition holds: a non-empty operator signature, no halt or kill flag, `PaperEvidence` that passes `check_promotion` (clean-days target met, drawdown inside the bound, halt drills passed), and a full checklist of `paper_evidence_reviewed`, `risk_limits_set`, and `kill_switch_tested`. Misses journal `live_blocked` with the reason and leave the adapter off. The flag is memory-only, so each process start needs a fresh enable. The `/live` page is the UI for the same gate: it shows the arming status, takes the signature plus checklist, and offers the kill switch, with the threshold forms beside it. `submit_live` fails closed on a missing intent, symbol, or venue, reviews the intent before placing, and routes it through `TradierVenue.from_env()` (credentials from `.env`, host from `TRADIER_BASE_URL`). A positive `reference_price` is required for sizing:
+Live ordering ships disabled. `enable_live(state, journal, now)` is a plain toggle: it arms unless a halt or kill flag is active, in which case it journals `live_blocked` with the reason and leaves the adapter off. `check_promotion` stays available as an advisory paper-evidence read and no longer gates arming. The flag is memory-only, so each process start needs a fresh toggle-on. The `/live` page is that toggle: it shows the arming status under a small warning that live orders can move real money, offers the kill switch, and keeps the threshold forms beside it. Arming is not ordering: `submit_live` still requires the armed flag, a clean halt/kill state, and a passing risk review. `submit_live` fails closed on a missing intent, symbol, or venue, reviews the intent before placing, and routes it through `TradierVenue.from_env()` (credentials from `.env`, host from `TRADIER_BASE_URL`). A positive `reference_price` is required for sizing:
 
 ```python
 from bot.autonomy import enable_live, submit_live
 
-checklist = {"paper_evidence_reviewed": True, "risk_limits_set": True, "kill_switch_tested": True}
-print(enable_live("operator-smith-2026-10-29", state, journal, now, evidence, checklist))
+print(enable_live(state, journal, now))
 fill, position, state = submit_live(intent, state, position, limits, journal, now,
                                     reference_price=769.7)
 ```
@@ -932,7 +963,7 @@ fill, position, state = submit_live(intent, state, position, limits, journal, no
 
 ### Confidence-gated live execution
 
-`DashboardSettings` carries `live_auto_send` (default off) and `live_min_confidence` (default 0.80), editable on `/settings` and `/live` and persisted in `settings.json`. `take_live_trade` sends one card to the broker only when the card direction is long or short, its confidence meets the threshold, a profile with `options_ok` is saved, and the adapter is armed; anything else journals `live_skipped` or raises the gate reason, and the venue is never touched. `maybe_auto_live` applies the same check across cards when auto-send is on, caps at 3 fills per run, and journals `live_auto` with the outcome. The gate property is machine-checked: `.venv/bin/python .opencode/skills/formal-live-gates/check_live_gates.py` enumerates the full flag matrix plus all 9,330 event orderings against the real functions and exits `PASS` only when live money cannot move unless every gate passed.
+`DashboardSettings` carries `live_auto_send` (default off) and `live_min_confidence` (default 0.80), editable on `/settings` and `/live` and persisted in `settings.json`. `take_live_trade` sends one card to the broker only when the card direction is long or short, its confidence meets the threshold, a profile with `options_ok` is saved, and the adapter is armed; anything else journals `live_skipped` or raises the gate reason, and the venue is never touched. `maybe_auto_live` applies the same check across cards when auto-send is on, caps at 3 fills per run, and journals `live_auto` with the outcome. The gate property is machine-checked: `.venv/bin/python .opencode/skills/formal-live-gates/check_live_gates.py` enumerates the full flag matrix plus all 9,330 event orderings against the real functions and exits `PASS` only when live money cannot move unless the toggle is armed and every submit gate passed.
 
 ### Strategy feedback and visual builder
 

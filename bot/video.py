@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Sequence
 
 from bot.charts import CALL_COLOR, PUT_COLOR, board_rows, gamma_svg
-from bot.diff import compact_dollars
+from bot.diff import compact_dollars, pct
 from bot.exposure import compute_gex
 from bot.ideas import cached_earnings, rank_ideas
 from bot.ivrank import histories_for
@@ -155,7 +155,7 @@ def _ideas_body(symbols: Sequence[str], store: SnapshotStore, now: datetime) -> 
     for idea in ideas:
         line = (
             f"{idea.symbol} {idea.direction} {idea.spread or idea.call_or_put} "
-            f"expiry {idea.expiry} confidence {idea.confidence:.2f}: {idea.thesis} | {idea.trigger}"
+            f"expiry {idea.expiry} confidence {pct(idea.confidence)}: {idea.thesis} | {idea.trigger}"
         )
         items.append(f"<li>{html.escape(line)}</li>")
     return f"<ol>{''.join(items)}</ol>"
@@ -278,7 +278,7 @@ def _spark_scene_body(symbol: str, store: SnapshotStore, journal: Journal) -> st
     live = status != "OFF" and bool(model_dir)
     model_text = model_dir if live else "not run yet — live models off"
     if live and confidence is not None:
-        model_text = f"{model_dir} · confidence {confidence:.2f}"
+        model_text = f"{model_dir} · confidence {pct(confidence)}"
     verdict_cls = {"MATCH": "match", "CONTRADICTION": "contradiction"}.get(status, "off")
     return (
         "<div class=\"duel\">"
@@ -316,7 +316,7 @@ def _card_scene_body(symbol: str, store: SnapshotStore, journal: Journal, now: d
     be = f"{card.breakeven:g}" if card.breakeven is not None else "n/a"
     return (
         f"<p class=\"big\">{html.escape(card.symbol)} {html.escape(card.direction)} {html.escape(card.spread)} · {html.escape(card.expiry)}</p>"
-        f"<p>confidence {card.confidence:.2f} · max loss {loss} · breakeven {be} · regime {html.escape(card.regime)}</p>"
+        f"<p>confidence {pct(card.confidence)} · max loss {loss} · breakeven {be} · regime {html.escape(card.regime)}</p>"
         f"<p>entry: {html.escape(card.entry)}</p><p>why: {html.escape(card.reason)}</p>"
         + _caption("Same screener in chat, /cards, and /demo — surfaces never disagree.")
     )

@@ -23,6 +23,7 @@ NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 FULL_ENV = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
 USER_ENV = {"USER_MODEL_API_KEY": "user-secret-1", "USER_MODEL_BASE_URL": "https://llm.example/v1",
             "USER_MODEL_ID": "anything-llm"}
+BASETEN_ENV = {"BASETEN_API_KEY": "bt-key"}
 
 
 def _seeded_store() -> SnapshotStore:
@@ -143,6 +144,44 @@ def test_select_backend_user_key_wins_over_builtin():
     assert select_backend("reviewer", Journal(), NOW, {**FULL_ENV, **USER_ENV}) == ("user", "")
 
 
+def test_select_backend_baseten_key_needs_no_budget():
+    assert select_backend("analyst", Journal(), NOW, dict(BASETEN_ENV)) == ("baseten", "")
+    assert select_backend("reviewer", Journal(), NOW, dict(BASETEN_ENV)) == ("baseten", "")
+
+
+def test_select_backend_baseten_wins_over_builtin_but_not_user():
+    assert select_backend("analyst", Journal(), NOW, {**FULL_ENV, **BASETEN_ENV}) == ("baseten", "")
+    assert select_backend("analyst", Journal(), NOW, {**BASETEN_ENV, **USER_ENV}) == ("user", "")
+
+
+def test_baseten_chat_config_uses_inference_endpoint():
+    from bot.models import baseten_chat_config
+
+    config = baseten_chat_config(dict(BASETEN_ENV))
+    assert config is not None
+    assert config.base_url == "https://inference.baseten.co/v1"
+    assert config.model_id == "meta-models/muse-spark-open-1026"
+    assert chat_api_key("analyst", dict(BASETEN_ENV)) == "bt-key"
+    assert chat_base_url("analyst", dict(BASETEN_ENV)) == "https://inference.baseten.co/v1"
+    spec = chat_spec("analyst", dict(BASETEN_ENV))
+    assert spec.model_id == "meta-models/muse-spark-open-1026"
+    assert spec.price_in == 0.0 and spec.price_out == 0.0
+
+
+def test_baseten_deployed_model_id_stays_off_chat():
+    from bot.models import baseten_chat_config
+
+    env = {"BASETEN_API_KEY": "bt-key", "BASETEN_REASON_MODEL_ID": "abcd1234"}
+    assert baseten_chat_config(env) is None
+    assert select_backend("analyst", Journal(), NOW, env)[0] == "fallback"
+
+
+def test_select_backend_baseten_ignored_for_provider_roles():
+    backend, reason = select_backend("grounding", Journal(), NOW, dict(BASETEN_ENV))
+    assert backend == "fallback"
+    assert reason == "missing META_MODEL_API_KEY"
+
+
 def test_select_backend_user_key_ignored_for_provider_roles():
     backend, reason = select_backend("grounding", Journal(), NOW, dict(USER_ENV))
     assert backend == "fallback"
@@ -234,6 +273,36 @@ def test_analyst_backend_user_key_hits_user_endpoint():
     assert "user-secret-1" not in json.dumps([e.payload for e in journal.entries()])
     tiers = [e for e in journal.entries() if e.kind == "tier_selected"]
     assert tiers and tiers[0].payload["tier"] == "user"
+
+
+def test_analyst_backend_baseten_key_hits_inference_endpoint():
+    seen = {}
+
+    def post(url, headers, payload, timeout):
+        seen["url"] = url
+        seen["auth"] = headers["Authorization"]
+        seen["model"] = payload["model"]
+        return {
+            "choices": [{"message": {"content": "Baseten thesis.\nDIRECTION: long\nCONFIDENCE: 0.6"}}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 10},
+        }
+
+    store = _seeded_store()
+    snapshot_id, snapshot, profile, bar = _snapshot_parts(store)
+    journal = Journal()
+    signal = analyst_backend("brief", snapshot_id, snapshot, profile, bar, journal, NOW,
+                             live_models=True, env=dict(BASETEN_ENV), http_post=post)
+    assert signal.thesis == "Baseten thesis."
+    assert seen["url"] == "https://inference.baseten.co/v1/chat/completions"
+    assert seen["auth"] == "Bearer bt-key"
+    assert seen["model"] == "meta-models/muse-spark-open-1026"
+    receipts = [e for e in journal.entries() if e.kind == "model_receipt"]
+    assert len(receipts) == 1
+    assert receipts[0].payload["model_id"] == "meta-models/muse-spark-open-1026"
+    assert receipts[0].payload["cost_usd"] == 0.0
+    assert "bt-key" not in json.dumps([e.payload for e in journal.entries()])
+    tiers = [e for e in journal.entries() if e.kind == "tier_selected"]
+    assert tiers and tiers[0].payload["tier"] == "baseten"
 
 
 def test_spend_today_sums_only_today_receipts():

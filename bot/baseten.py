@@ -14,7 +14,8 @@ from bot.models import HttpPost
 API_KEY_ENV = "BASETEN_API_KEY"
 MODEL_ID_ENV = "BASETEN_REASON_MODEL_ID"
 REASON_TIMEOUT_SECONDS = 60.0
-INFERENCE_CHAT_URL = "https://inference.baseten.co/v1/chat/completions"
+INFERENCE_BASE_URL = "https://inference.baseten.co/v1"
+INFERENCE_CHAT_URL = f"{INFERENCE_BASE_URL}/chat/completions"
 REASON_MODEL_DEFAULT = "meta-models/muse-spark-open-1026"
 REASON_MAX_TOKENS = 1000
 REASON_REASONING = {"effort": "low"}
@@ -101,6 +102,25 @@ def _predict_reason(body: Any) -> str:
 
 def reason_model_id(env: Mapping[str, str] | None = None) -> str:
     return _read_baseten_env(env).get(MODEL_ID_ENV, "") or REASON_MODEL_DEFAULT
+
+
+def baseten_status(env: Mapping[str, str] | None = None) -> dict[str, object]:
+    """Key-free status: presence and model id only, never the key."""
+    values = _read_baseten_env(env)
+    model_id = values.get(MODEL_ID_ENV, "") or REASON_MODEL_DEFAULT
+    return {
+        "baseten_key_set": bool(values.get(API_KEY_ENV)),
+        "baseten_model": model_id,
+        "baseten_chat": bool(values.get(API_KEY_ENV)) and is_model_slug(model_id),
+    }
+
+
+def baseten_summary(env: Mapping[str, str] | None = None) -> str:
+    status = baseten_status(env)
+    if not status["baseten_key_set"]:
+        return "baseten: not set"
+    scope = "chat roles, card reasons, agent picks" if status["baseten_chat"] else "card reasons, agent picks"
+    return f"baseten: {status['baseten_model']} ({scope})"
 
 
 def _parse_pick(body: Any) -> tuple[int, str]:

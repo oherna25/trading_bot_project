@@ -1,7 +1,7 @@
 """Confidence-gated live execution plus the /live UI helpers.
 
-Safety shape: arming still flows only through ``bot.autonomy.enable_live``
-(full evidence plus checklist gates) and every fill still flows through
+Safety shape: arming is a plain toggle through ``bot.autonomy.enable_live``
+(blocked only by an active halt/kill) and every fill still flows through
 ``bot.autonomy.submit_live`` (armed flag, halt/kill, risk review, journal).
 This module adds no new gate bypass: it builds the intent, checks the
 operator-selected confidence threshold from ``DashboardSettings``, and keeps
@@ -18,9 +18,10 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from bot.autonomy import LiveDisabledError, enable_live, kill_switch
+from bot.diff import pct
 from bot.journal import Journal
 from bot.shapes import OperatorConfig, OrderIntent, OrderLeg, RiskLimits, RiskState, Signal
 from bot.store import SnapshotStore
@@ -99,39 +100,21 @@ def live_status_text(store: SnapshotStore, journal: Journal, now: datetime) -> s
     return (
         f"live ordering is {flag} ({state_bits}) -- "
         f"auto_send={settings.live_auto_send} "
-        f"min_confidence={settings.live_min_confidence:.2f}"
+        f"min_confidence={pct(settings.live_min_confidence)}"
     )
 
 
 def enable_live_ui(
-    signature: str,
-    checklist: Mapping[str, bool],
     store: SnapshotStore,
     journal: Journal,
     config: OperatorConfig,
     now: datetime,
 ) -> str:
-    """Arm live ordering from validated UI input. Raises ValueError when gated."""
-    from bot.replay import paper_evidence_from_journal
-
-    clean_signature = (signature or "").strip()
-    if not clean_signature:
-        raise ValueError("live enable needs a non-empty operator signature")
-    checks = {
-        "paper_evidence_reviewed": bool(checklist.get("paper_evidence_reviewed", False)),
-        "risk_limits_set": bool(checklist.get("risk_limits_set", False)),
-        "kill_switch_tested": bool(checklist.get("kill_switch_tested", False)),
-    }
-    kinds = {entry.kind for entry in journal.entries()}
-    evidence = paper_evidence_from_journal(
-        journal,
-        halt_drills_passed=("halt" in kinds or "kill_fired" in kinds),
-    )
+    """Arm live ordering (the toggle). Raises ValueError when halt/kill is active."""
     state, _ = live_state_and_limits(store, config)
     if state.halt_active or state.kill_active:
         raise ValueError("live session is halted; kill-switch reset is required before re-arming")
-    armed = enable_live(clean_signature, state, journal, now, evidence, checks)
-    if not armed:
+    if not enable_live(state, journal, now):
         reason = journal.entries()[-1].payload.get("reason", "gated") if journal.entries() else "gated"
         raise ValueError(f"live enable blocked ({reason})")
     with _lock:
@@ -143,7 +126,7 @@ def enable_live_ui(
             halt_active=False,
             kill_active=False,
         )
-    return f"live ordering armed by {clean_signature}"
+    return "live ordering armed"
 
 
 def kill_live_ui(store: SnapshotStore, journal: Journal, now: datetime) -> str:
@@ -229,7 +212,7 @@ def build_live_intent(
         )
     signal = Signal(
         direction=card.direction,
-        thesis=f"live {card.spread} {card.expiry} conf {card.confidence:.2f}",
+        thesis=f"live {card.spread} {card.expiry} conf {pct(card.confidence)}",
         confidence=card.confidence,
         snapshot_id=card.snapshot_id,
         symbol=card.symbol,
@@ -296,7 +279,7 @@ def _submit_card(
     _store_live_result(updated if updated is not None else state, limits)
     return (
         f"live order filled: {intent.side} {fill.size:.0f} {card.symbol} "
-        f"@{fill.price:.2f} (card {index} conf {card.confidence:.2f})"
+        f"@{fill.price:.2f} (card {index} conf {pct(card.confidence)})"
     )
 
 

@@ -149,6 +149,42 @@ def effective_user_model(
     return None, "", error
 
 
+def baseten_chat_config(env: Mapping[str, str] | None = None) -> UserModelConfig | None:
+    """Baseten Spark Open as an OpenAI-compatible chat backend, when keyed.
+
+    Only a model slug routes to the inference chat API; a deployed model id
+    keeps serving card reasons and agent picks through its predict URL.
+    """
+    from bot import baseten
+
+    values = baseten._read_baseten_env(env)
+    key = values.get(baseten.API_KEY_ENV, "")
+    model_id = baseten.reason_model_id(env)
+    if not key or not baseten.is_model_slug(model_id):
+        return None
+    return UserModelConfig(api_key=key, base_url=baseten.INFERENCE_BASE_URL, model_id=model_id)
+
+
+def portable_config(
+    env: Mapping[str, str] | None = None,
+) -> tuple[UserModelConfig | None, str, str]:
+    """Chat backend for the portable roles: user model, then Baseten.
+
+    Returns (config, source, error) with source "user" or "baseten". An
+    explicit but invalid user setup fails loud instead of silently spending
+    another key.
+    """
+    config, _, error = effective_user_model(env)
+    if config is not None:
+        return config, "user", ""
+    if error:
+        return None, "", error
+    baseten_config = baseten_chat_config(env)
+    if baseten_config is not None:
+        return baseten_config, "baseten", ""
+    return None, "", ""
+
+
 def user_model_status(env: Mapping[str, str] | None = None) -> dict[str, object]:
     """Key-free status for dashboards: presence and model id only, never the key."""
     config, source, error = effective_user_model(env)
@@ -184,11 +220,11 @@ def user_model_summary(env: Mapping[str, str] | None = None) -> str:
 
 
 def chat_spec(role: str, env: Mapping[str, str] | None = None) -> ModelSpec:
-    """Effective spec for a chat role: the user model when configured, else registry."""
+    """Effective spec for a chat role: portable backend when configured, else registry."""
     spec = MODEL_REGISTRY[role]
     if role not in USER_PORTABLE_ROLES:
         return spec
-    config, _, _ = effective_user_model(env)
+    config, _, _ = portable_config(env)
     if config is None:
         return spec
     return replace(spec, model_id=config.model_id, price_in=0.0, price_out=0.0)
@@ -196,7 +232,7 @@ def chat_spec(role: str, env: Mapping[str, str] | None = None) -> ModelSpec:
 
 def chat_api_key(role: str, env: Mapping[str, str] | None = None) -> str:
     if role in USER_PORTABLE_ROLES:
-        config, _, _ = effective_user_model(env)
+        config, _, _ = portable_config(env)
         if config is not None:
             return config.api_key
     return model_api_key(env)
@@ -204,7 +240,7 @@ def chat_api_key(role: str, env: Mapping[str, str] | None = None) -> str:
 
 def chat_base_url(role: str, env: Mapping[str, str] | None = None) -> str:
     if role in USER_PORTABLE_ROLES:
-        config, _, _ = effective_user_model(env)
+        config, _, _ = portable_config(env)
         if config is not None:
             return config.base_url
     return MODEL_API_BASE_URL
@@ -255,9 +291,9 @@ def select_backend(
         # The operator's key pays their own bill, so it needs no day budget
         # and takes no ledger hold. An explicit but invalid setup fails loud
         # instead of silently spending the built-in key.
-        user, _, error = effective_user_model(env)
-        if user is not None:
-            return "user", ""
+        config, source, error = portable_config(env)
+        if config is not None:
+            return source, ""
         if error:
             return "fallback", error
     reason = meta_budget_reason(journal, now, env)

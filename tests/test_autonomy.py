@@ -53,41 +53,20 @@ def test_promotion_stays_paper_until_all_evidence_passes():
     assert check_promotion(ready) == "ready_for_checklist"
 
 
-def _evidence() -> PaperEvidence:
-    return PaperEvidence(clean_days=12, clean_days_target=10, max_drawdown=100.0,
-                         drawdown_bound=500.0, halt_drills_passed=True)
-
-
-def _checklist() -> dict[str, bool]:
-    return {"paper_evidence_reviewed": True, "risk_limits_set": True, "kill_switch_tested": True}
-
-
-def test_enable_live_needs_signature_and_clean_state():
+def test_enable_live_toggle_needs_clean_state():
     journal = Journal()
-    assert enable_live("", _state(), journal, NOW, _evidence(), _checklist()) is False
-    assert enable_live("op-1", _state(kill_active=True), journal, NOW, _evidence(), _checklist()) is False
-    assert enable_live("op-1", _state(halt_active=True), journal, NOW, _evidence(), _checklist()) is False
-    with pytest.raises(LiveDisabledError):
-        submit_live(_intent())
-
-
-def test_enable_live_needs_ready_evidence_and_full_checklist():
-    journal = Journal()
-    weak = PaperEvidence(clean_days=3, clean_days_target=10, max_drawdown=100.0,
-                         drawdown_bound=500.0, halt_drills_passed=True)
-    assert enable_live("op-1", _state(), journal, NOW, None, _checklist()) is False
-    assert enable_live("op-1", _state(), journal, NOW, weak, _checklist()) is False
+    assert enable_live(_state(kill_active=True), journal, NOW) is False
     assert journal.entries()[-1].kind == "live_blocked"
-    partial = {"paper_evidence_reviewed": True, "risk_limits_set": True}
-    assert enable_live("op-1", _state(), journal, NOW, _evidence(), partial) is False
-    assert journal.entries()[-1].payload["reason"] == "checklist incomplete"
+    assert journal.entries()[-1].payload["reason"] == "kill active"
+    assert enable_live(_state(halt_active=True), journal, NOW) is False
+    assert journal.entries()[-1].payload["reason"] == "halt active"
     with pytest.raises(LiveDisabledError):
         submit_live(_intent())
 
 
-def test_enable_live_with_evidence_and_checklist_arms_adapter(monkeypatch, tmp_path):
+def test_enable_live_toggle_arms_adapter(monkeypatch, tmp_path):
     journal = Journal()
-    assert enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist()) is True
+    assert enable_live(_state(), journal, NOW) is True
     assert journal.entries()[-1].kind == "live_enabled"
     monkeypatch.delenv("TRADIER_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("TRADIER_ACCOUNT_ID", raising=False)
@@ -98,7 +77,7 @@ def test_enable_live_with_evidence_and_checklist_arms_adapter(monkeypatch, tmp_p
 
 def test_kill_switch_halts_and_needs_operator_reset():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     halted = kill_switch(_state(), journal, NOW)
     assert halted.kill_active
     assert halted.halt_active
@@ -114,14 +93,14 @@ def test_kill_switch_halts_and_needs_operator_reset():
 
 def test_submit_live_fails_closed_without_gate_inputs():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     with pytest.raises(LiveDisabledError):
         submit_live(_intent())
 
 
 def test_submit_live_risk_review_rejects_oversized_intent():
     journal = Journal()
-    enable_live("op-1", _state(), journal, NOW, _evidence(), _checklist())
+    enable_live(_state(), journal, NOW)
     oversized = OrderIntent(symbol="TEST", side="buy", size=999999.0,
                             risk_numbers={"size": 999999.0}, signal_id="sig-9")
     with pytest.raises(LiveDisabledError):

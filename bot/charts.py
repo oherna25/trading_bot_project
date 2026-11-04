@@ -138,6 +138,21 @@ def gamma_svg(profile: GexProfile, width: int = CHART_WIDTH, height: int = CHART
     return "".join(parts)
 
 
+def ticker_search_html(current: str, symbols: list[str]) -> str:
+    options = "".join(
+        f"<option value=\"{html.escape(symbol, quote=True)}\"></option>"
+        for symbol in symbols
+    )
+    return (
+        "<form class=\"block\" method=\"get\" action=\"/chart\" role=\"search\">"
+        "<label class=\"field\">ticker"
+        f"<input name=\"underlying\" value=\"{html.escape(current, quote=True)}\" "
+        "list=\"chart-tickers\" placeholder=\"SPY\" autocomplete=\"off\">"
+        f"</label><datalist id=\"chart-tickers\">{options}</datalist>"
+        "<button type=\"submit\">view chart</button></form>"
+    )
+
+
 def gamma_chart_html(
     underlying: str,
     snapshot: ChainSnapshot,
@@ -145,6 +160,7 @@ def gamma_chart_html(
     bar: Optional[Bar],
     now: Optional[datetime] = None,
     settings: Optional[DashboardSettings] = None,
+    symbols: Optional[list[str]] = None,
 ) -> str:
     from bot.theme import page
 
@@ -163,6 +179,7 @@ def gamma_chart_html(
         f"| flip {flip} | {regime}"
     )
     body = (
+        f"{ticker_search_html(underlying, symbols or [underlying])}"
         f"<div class=\"chart-panel\">{gamma_svg(profile)}</div>"
         f"<p class=\"sub\">snapshot {html.escape(profile.snapshot_id)}{html.escape(age)} "
         f"source {html.escape(snapshot.source_name)} | refreshes every "
@@ -335,7 +352,9 @@ def regime_board_html(store: SnapshotStore, now: datetime | None = None) -> str:
         f"if(r.ok)document.getElementById(\"live-board\").innerHTML=await r.text();}}"
         f"catch(e){{}}}},{poll_ms});</script>"
     )
-    body = f"<div id=\"live-board\">{live_board_fragment(store, moment)}</div>{script}"
+    symbols = [str(row["symbol"]) for row in rows]
+    search = ticker_search_html(settings.default_underlying, symbols) if symbols else ""
+    body = f"{search}<div id=\"live-board\">{live_board_fragment(store, moment)}</div>{script}"
     return page(
         title, title, sub, body, settings.default_underlying, "board", settings, "/board",
         refresh=True,

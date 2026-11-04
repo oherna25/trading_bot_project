@@ -107,11 +107,10 @@ def test_demo_page_journals_no_fills():
     assert [entry.kind for entry in journal.entries()].count("fill") == 0
 
 
-def test_demo_route_and_root_serve_and_400_unknown():
-    for path in ("/demo?underlying=TEST", "/?underlying=TEST"):
-        response = route_http("GET", path, {}, _seeded_store(), Journal(), CONFIG, NOW)
-        assert response.status == 200
-        assert "TEST demo" in response.body.decode("utf-8")
+def test_demo_route_serves_and_400_unknown():
+    response = route_http("GET", "/demo?underlying=TEST", {}, _seeded_store(), Journal(), CONFIG, NOW)
+    assert response.status == 200
+    assert "TEST demo" in response.body.decode("utf-8")
     missing = route_http("GET", "/demo?underlying=NOPE", {}, _seeded_store(), Journal(), CONFIG, NOW)
     assert missing.status == 400
 
@@ -198,3 +197,16 @@ def test_demo_page_has_hero_spark_panel_and_chat_box():
     assert "Ask the desk" in page
     assert 'id="chat-form"' in page
     assert "Gamma by strike" in page
+
+
+def test_demo_chat_box_sends_live_models_flag(monkeypatch):
+    from bot import models
+    from bot.shapes import UserModelConfig
+
+    monkeypatch.setattr(
+        models, "portable_config",
+        lambda env=None: (UserModelConfig("k", "https://x/v1", "m"), "baseten", ""),
+    )
+    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
+    assert 'id="chat-live" checked' in page
+    assert "live_models:lv.checked" in page

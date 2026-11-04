@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Optional
 
-from bot.diff import compact_dollars, signed_dollars
+from bot.diff import compact_dollars, pct as format_pct, signed_dollars
 from bot.exposure import compute_gex
 from bot.shapes import (
     Bar,
@@ -154,7 +154,7 @@ def format_brief(
     basis = ""
     if (profile.flip_point is None or bar is None) and signal.direction != "flat":
         basis = " (regime fallback)"
-    lines.append(f"direction: {signal.direction} confidence: {signal.confidence:.2f}{basis}")
+    lines.append(f"direction: {signal.direction} confidence: {format_pct(signal.confidence)}{basis}")
     lines.append(f"status: {signal.status} trigger: {signal.trigger}")
     return "\n".join(lines)
 

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Mapping, Optional
 
+from bot.baseten import baseten_summary
+from bot.diff import pct
 from bot.ivrank import histories_for, iv_rank
 from bot.journal import Journal
 from bot.models import set_runtime_user_model, user_model_summary, validate_user_model
@@ -21,7 +23,6 @@ from bot.research import (
 from bot.shapes import DashboardSettings, OperatorConfig, dashboard_settings_from
 from bot.store import SnapshotStore
 from bot.tradecards import cards_response
-from bot.video import video_response
 from bot.wheel import wheel_response
 
 from bot.muse_session import SessionController
@@ -85,15 +86,6 @@ def _wheel_ideas_handler(
     if not isinstance(query, str) or not query.strip():
         query = "wheel ideas"
     return wheel_response(query, underlying, store, journal, now)
-
-
-def _video_brief_handler(
-    args: dict[str, Any], store: SnapshotStore, journal: Journal, config: OperatorConfig, now: datetime, underlying: str
-) -> str:
-    query = args.get("query", "video brief") if isinstance(args, dict) else "video brief"
-    if not isinstance(query, str) or not query.strip():
-        query = "video brief"
-    return video_response(query, underlying, store, journal, now)
 
 
 def _vex_brief_handler(
@@ -625,8 +617,8 @@ def settings_summary(settings: DashboardSettings) -> str:
         f"default_underlying={settings.default_underlying} "
         f"refresh_seconds={settings.refresh_seconds} "
         f"live_auto_send={settings.live_auto_send} "
-        f"live_min_confidence={settings.live_min_confidence:.2f} "
-        f"{user_model_summary()}"
+        f"live_min_confidence={pct(settings.live_min_confidence)} "
+        f"{user_model_summary()} | {baseten_summary()}"
     )
 
 
@@ -696,6 +688,8 @@ def save_settings_merge(
     for key in merged:
         if key in raw:
             merged[key] = raw[key]
+    if "live_min_confidence_pct" in raw:
+        merged["live_min_confidence"] = float(str(raw["live_min_confidence_pct"])) / 100.0
     settings = dashboard_settings_from(merged)
     store.save_settings(settings)
     journal.append(
@@ -897,9 +891,6 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_dashboard": MuseTool("get_dashboard", "Read the one-screen digest across stored underlyings", _dashboard_handler),
     "get_alerts": MuseTool("get_alerts", "Read current alerts across stored underlyings", _alerts_handler),
     "get_holdings": MuseTool("get_holdings", "Read the saved operator book against live positioning", _holdings_read_handler),
-    "get_video_brief": MuseTool(
-        "get_video_brief", "Render-ready HyperFrames video brief project from stored snapshots", _video_brief_handler
-    ),
     "get_coach_review": MuseTool(
         "get_coach_review", "Wonder trading-coach review of the journaled record", _coach_handler
     ),

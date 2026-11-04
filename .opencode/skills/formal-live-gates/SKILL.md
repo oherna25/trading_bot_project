@@ -1,6 +1,6 @@
 ---
 name: formal-live-gates
-description: Exhaustive gate verification for live-ordering safety. Use when a change touches bot/autonomy.py, the halt/kill/review gates in bot/risk.py, or anything in the submit_live path — or when reviewing such a change — to prove live money still cannot move unless every gate passed and kill_switch still always stops it.
+description: Exhaustive gate verification for live-ordering safety. Use when a change touches bot/autonomy.py, the halt/kill/review gates in bot/risk.py, or anything in the submit_live path — or when reviewing such a change — to prove live money still cannot move unless the toggle is armed and every submit gate passed, and kill_switch still always stops it.
 ---
 
 # formal-live-gates
@@ -9,7 +9,7 @@ Area: live-ordering safety gates (`submit_live` / `enable_live` / `kill_switch` 
 
 ## Property (one sentence)
 
-Live money cannot move unless every gate passed, and `kill_switch` always stops it.
+Live money cannot move unless the toggle is armed and every submit gate passed, and `kill_switch` always stops it.
 
 ## Does a change touch verified code?
 
@@ -36,7 +36,7 @@ in-memory and the `live_enabled` global is reset between cases.
 ## What the check is
 
 Exhaustive small-model enumeration executed against the REAL product code --
-not a hand model. 7,716 cases: full flag matrices for `enable_live` (120),
+not a hand model. 7,600 cases: the `enable_live` toggle matrix over halt/kill (4),
 `submit_live` (160), `submit_live`'s own gates with the review verdict forced
 both ways (41, proves defense in depth), `review_intent` vetoes (8),
 kill/reset ordering (2), plus ALL 9,330 event sequences over

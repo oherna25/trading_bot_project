@@ -6,7 +6,7 @@ import html
 from datetime import datetime
 from typing import Any, Mapping
 
-from bot.diff import compact_dollars
+from bot.diff import compact_dollars, pct
 from bot.journal import Journal
 from bot.models import (
     MODEL_REGISTRY,
@@ -96,7 +96,7 @@ def share_text(card: TradeCard, art_hash: str | None = None) -> str:
     flip = f"{card.flip_point:g}" if card.flip_point is not None else "none"
     loss = f"max loss {_money(card.max_loss)}" if card.max_loss is not None else "loss uncapped"
     lines = [
-        f"contract {card.symbol} {card.direction} {card.spread} {card.expiry} (confidence {card.confidence:.2f})",
+        f"contract {card.symbol} {card.direction} {card.spread} {card.expiry} (confidence {pct(card.confidence)})",
         f"{entry_text(card)} | {targets_text(card)}",
         f"wall {wall} | regime {card.regime} | spot {spot} vs flip {flip} | {loss}",
         f"why: {card.reason}",

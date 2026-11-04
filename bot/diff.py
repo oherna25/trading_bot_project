@@ -19,6 +19,10 @@ def compact_dollars(value: float) -> str:
     return f"{sign}${magnitude:.0f}"
 
 
+def pct(value: float) -> str:
+    return f"{value * 100:.0f}%"
+
+
 def signed_dollars(value: float) -> str:
     if value < 0:
         return compact_dollars(value)

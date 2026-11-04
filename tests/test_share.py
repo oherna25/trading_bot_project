@@ -77,7 +77,7 @@ def _art_stub(log):
 def test_share_text_covers_card():
     text = share_text(_card(), art_hash="ab" * 32)
     assert "TEST short single put 100.0 2026-11-20" in text
-    assert "0.65" in text and "short-gamma" in text
+    assert "65%" in text and "short-gamma" in text
     assert "max loss $250" in text
     assert "why: r" in text
     assert "art abababababab" in text

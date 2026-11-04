@@ -28,7 +28,7 @@ Every shipped item below has a regression test in the suite.
 
 ## Live toggle and confidence-gated broker sends (2026-11-01)
 
-* `/live` arms and disarms live ordering through the unchanged `enable_live` gate (signature, full checklist, journaled paper evidence, clean halt/kill state) and the `kill_switch`. Misses journal `live_blocked` with the reason. See `enable_live_ui` and `kill_live_ui` in `bot/live_trade.py`.
+* `/live` is a plain toggle for live ordering: `enable_live(state, journal, now)` arms unless a halt/kill flag is active (then it journals `live_blocked`), under a small real-money warning, and `kill_switch` disarms. No signature, evidence, or checklist gate. `submit_live` still enforces the armed flag, halt/kill, and risk review; the formal gate check passes 7,600 cases on this property. See `enable_live_ui` and `kill_live_ui` in `bot/live_trade.py`.
 * `DashboardSettings` carries `live_auto_send` (default off) and `live_min_confidence` (default 0.80), edited on `/settings` and `/live`, persisted in `settings.json`, validated 0-1 at the boundary. Below-threshold cards journal `live_skipped` and never reach the venue.
 * `take_live_trade` sends one qualifying card through `submit_live` with option legs built from the card and sized by `size_for_card`; `maybe_auto_live` repeats the check across cards when auto-send is on, caps at 3 fills per run, and never raises. The formal gate check still exits `PASS` on this tree.
 * Strategy feedback (`bot/strategy.py`: `parse_strategy`, `evaluate_strategy`, `POST /strategy`) and the visual builder (`bot/builder.py`, `GET /builder`) backtest guardrails over stored snapshots and bars through `replay_week` with a custom `signal_fn`.
@@ -83,6 +83,22 @@ Every shipped item below has a regression test in the suite.
 * Feed GETs retry transient 429 and 5xx responses three times with backoff. Failures surface as `FeedUnavailableError` with no URL or key in the message.
 * The `.env` file parses once per modification instead of on every lookup. The wheel screener parses each expiry once and tallies candidates in one pass.
 * Tests no longer make a real network call from the dashboard test, and lock tests sleep 0.3s per feed attempt instead of 1.0s.
+
+**Clarity**
+
+* Walls render in dollars on every surface. The card facts grid, card stat list, and fallback card reason used raw share counts (`wall exposure -2352664864`); they now go through `compact_dollars` like the brief and share text already did (`wall exposure -$2.4B`).
+* Confidence renders as a percent, never a decimal. One helper (`pct` in `bot/diff.py`) feeds the card meter and stat list, chat brief, spark audit, debate verdicts, builder, video brief, share text, and live status. Stored values, JSON payloads, and journal entries keep the raw 0-1 float. The settings and live pages take the auto-send threshold as a percent (`live_min_confidence_pct`, translated to 0-1 in `save_settings_merge`); the JSON settings API is unchanged.
+* Trade cards explain themselves. The meter adds a plain word next to the percent (strong, moderate, weak), each card carries a one-line "in plain terms" summary, every fact has a hover explanation, and the cards page opens with a collapsed "new here?" glossary. Expert surfaces keep the full stat list and raw JSON.
+
+**Baseten utilization**
+
+* `BASETEN_API_KEY` now serves the portable chat roles, not just card reasons and agent picks. `portable_config` in `bot/models.py` resolves your own model first, then Baseten Spark Open through the inference chat API (`baseten_chat_config`, slug model ids only), then the built-in Meta key. Briefs, chat routing, spark claims, debate, the reviewer, coach, alert narrations, portfolio commands, and chart reads all flow through it with zero-cost journaled receipts, and the six role gates plus the tier selector accept the `baseten` backend. A deployed (non-slug) model id keeps the predict-URL reason/pick path and stays off chat. Grounding, voice, and image roles stay on the built-in key (provider-specific endpoints). `/health` reports `baseten_key_set`, the tier readout and settings summary name the Baseten model, and no surface echoes the key.
+
+**Demo and deploy**
+
+* The demo chat box can finally show the hero feature. It never sent `live_models`, so `spark audit` read OFF even with a key set. It now has a live-models toggle, pre-checked when a chat key is configured, and posts the flag with each question. Zero-key behavior is unchanged (toggle off, deterministic answers).
+* Card reasons no longer hide behind the HTTP cache forever. The `/cards` response key did not change when the async reason worker landed a model reason, so the first-paint fallback page was served until the snapshot changed. The key now includes `reason_cache_version`, bumped on every reason store; a regression test pins cache-hit then refresh-after-reason behavior.
+* Deployment is one command on both paths. A `Dockerfile` (`python:3.12-slim`, stdlib-only runtime, `/data` volume, `$PORT` honored) plus `make docker-demo`, and the non-Docker `pip install .` + `marketwingman-demo` path; both verified end to end (container healthz + `/demo` 200, clean-venv console script). The README judges section gained the one-key spark-audit step and a Deploy subsection covering both.
 
 **Measured results**
 

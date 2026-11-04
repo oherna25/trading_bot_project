@@ -32,6 +32,7 @@ from bot.tradecards import (
     chain_fingerprint,
     peek_trade_cards_key,
     query_trade_cards,
+    reason_cache_version,
     trade_cards_html,
 )
 from bot.video import build_video_brief, composition_html
@@ -260,6 +261,12 @@ def openapi_spec() -> dict:
                     "responses": {"200": {"description": "Saved profile"}},
                 }
             },
+            "/": {
+                "get": {
+                    "summary": "Portfolio and trade overview",
+                    "responses": {"200": {"description": "Overview page"}},
+                }
+            },
             "/dashboard": {
                 "get": {
                     "summary": "Dashboard with tool actions",
@@ -374,6 +381,7 @@ def health_detail(
         "push_providers": providers,
         "model_key_set": bool(_env_value("META_MODEL_API_KEY", "", env)),
         "user_key_set": bool(_env_value("USER_MODEL_API_KEY", "", env)),
+        "baseten_key_set": bool(_env_value("BASETEN_API_KEY", "", env)),
         "user_model": user_model_status(env).get("user_model"),
         "feeds": feed_health(journal, now),
     }
@@ -391,7 +399,7 @@ def _page_underlying(path: str, store: SnapshotStore) -> str:
     query_string = path.split("?", 1)[1] if "?" in path else ""
     params = parse_qs(query_string)
     raw = (params.get("underlying", [""])[0] or "").strip()
-    return raw or store.read_settings().default_underlying
+    return raw.upper() or store.read_settings().default_underlying
 
 
 def _truthy(raw: Any) -> bool:
@@ -488,12 +496,12 @@ def _settings_html(store: SnapshotStore) -> str:
         f"<option value=\"0\"{' selected' if not settings.live_auto_send else ''}>off</option>"
         f"<option value=\"1\"{' selected' if settings.live_auto_send else ''}>on</option>"
         "</select></label>"
-        "<label class=\"field\">live_min_confidence"
-        f"<input name=\"live_min_confidence\" value=\"{settings.live_min_confidence:.2f}\" size=\"6\">"
+        "<label class=\"field\">min confidence to auto-send (%)"
+        f"<input name=\"live_min_confidence_pct\" value=\"{settings.live_min_confidence * 100:.0f}\" size=\"6\" inputmode=\"numeric\">"
         "</label><input type=\"hidden\" name=\"next\" value=\"/settings\">"
         "<button class=\"solid\" type=\"submit\">save settings</button></form>"
         "<p class=\"sub\">live_auto_send on means qualifying trade cards "
-        "(confidence at or above live_min_confidence) are sent to the live broker "
+        "(confidence at or above the threshold percent) are sent to the live broker "
         "when the adapter is armed; the adapter itself is armed only on the "
         "<a href=\"/live\">live page</a>, never here.</p>"
         "<form class=\"block\" method=\"post\" action=\"/settings\">"
@@ -533,42 +541,30 @@ def _live_html(store: SnapshotStore, journal: Journal, now: datetime, note: str 
     note_html = f"<pre>{html.escape(note)}</pre>" if note else ""
     body = (
         f"<p class=\"sub\">{html.escape(status)}</p>{badge}{note_html}"
-        "<h2>Arm</h2>"
+        "<h2>Toggle</h2>"
         "<form class=\"block\" method=\"post\" action=\"/live\">"
         "<input type=\"hidden\" name=\"action\" value=\"enable\">"
-        "<label class=\"field\">operator signature"
-        "<input name=\"signature\" value=\"\" size=\"24\" autocomplete=\"off\">"
-        "</label>"
-        "<label class=\"field\">paper evidence reviewed"
-        "<input type=\"checkbox\" name=\"paper_evidence_reviewed\" value=\"1\">"
-        "</label>"
-        "<label class=\"field\">risk limits set"
-        "<input type=\"checkbox\" name=\"risk_limits_set\" value=\"1\">"
-        "</label>"
-        "<label class=\"field\">kill switch tested"
-        "<input type=\"checkbox\" name=\"kill_switch_tested\" value=\"1\">"
-        "</label>"
-        "<button class=\"solid\" type=\"submit\">arm live ordering</button></form>"
-        "<p class=\"sub\">Arming needs a signature, all three checklist boxes, "
-        "journaled paper evidence (clean days, drawdown bound, a halt or kill drill), "
-        "and a clean halt/kill state. Misses journal live_blocked with the reason.</p>"
-        "<h2>Disarm</h2>"
+        "<button class=\"solid\" type=\"submit\">turn live ordering on</button></form>"
+        "<p class=\"sub\">Warning: live orders can move real money. "
+        "An active halt or kill still blocks arming, and every order still passes risk review.</p>"
         "<form class=\"block\" method=\"post\" action=\"/live\">"
         "<input type=\"hidden\" name=\"action\" value=\"kill\">"
-        "<button class=\"solid\" type=\"submit\">kill switch (disarm)</button></form>"
+        "<button class=\"solid\" type=\"submit\">turn live ordering off (kill switch)</button></form>"
         "<h2>Auto-send threshold</h2>"
+        "<p class=\"sub\">When auto-send is on, only trade cards at or above this "
+        "confidence are sent to the live broker. Example: 80 means 80%.</p>"
         "<form class=\"block\" method=\"post\" action=\"/settings\">"
         f"<label class=\"field\">live_auto_send<select name=\"live_auto_send\">"
         f"<option value=\"0\"{' selected' if not settings.live_auto_send else ''}>off</option>"
         f"<option value=\"1\"{' selected' if settings.live_auto_send else ''}>on</option>"
         "</select></label>"
-        "<label class=\"field\">live_min_confidence"
-        f"<input name=\"live_min_confidence\" value=\"{settings.live_min_confidence:.2f}\" size=\"6\">"
+        "<label class=\"field\">min confidence (%)"
+        f"<input name=\"live_min_confidence_pct\" value=\"{settings.live_min_confidence * 100:.0f}\" size=\"6\" inputmode=\"numeric\">"
         "</label><input type=\"hidden\" name=\"next\" value=\"/live\">"
         "<button class=\"solid\" type=\"submit\">save threshold</button></form>"
     )
     return page(
-        "live ordering", "live ordering, armed only with signature plus evidence",
+        "live ordering", "live ordering, off until you turn it on",
         status, body, settings.default_underlying, "live", settings, "/live",
     )
 
@@ -757,7 +753,9 @@ def route_http(
         query = (params.get("query", ["trade ideas"])[0] or "trade ideas").strip() or "trade ideas"
         cards_key = peek_trade_cards_key(query, underlying, store, now)
         response_key = (
-            f"cards:{clean}:{cards_key}:{store.read_settings()!r}" if cards_key is not None else None
+            f"cards:{clean}:{cards_key}:{store.read_settings()!r}:{reason_cache_version()}"
+            if cards_key is not None
+            else None
         )
         if response_key is not None:
             hit = _cached_response(response_key, if_none_match)
@@ -794,7 +792,11 @@ def route_http(
         bar = store.read_latest_bar(underlying)
         profile = compute_gex(snapshot, snapshot_id, spot=bar.close if bar is not None else None)
         return HttpResponse.html(
-            200, gamma_chart_html(underlying, snapshot, profile, bar, now, store.read_settings())
+            200,
+            gamma_chart_html(
+                underlying, snapshot, profile, bar, now, store.read_settings(),
+                symbols=store.list_underlyings(),
+            ),
         )
     if method == "GET" and clean == "/board":
         board_parts = []
@@ -939,7 +941,11 @@ def route_http(
         if store.read_latest(underlying) is None:
             return HttpResponse.html(400, _cards_error_html(need_snapshot_text(underlying, store)))
         return HttpResponse.html(200, shock_html(underlying, store, journal, now, pct))
-    if method == "GET" and clean in ("/demo", "/"):
+    if method == "GET" and clean == "/":
+        from bot.dashboard import dashboard_html
+
+        return HttpResponse.html(200, dashboard_html(store, journal, now))
+    if method == "GET" and clean == "/demo":
         underlying = _page_underlying(path, store)
         found = store.read_latest(underlying)
         if found is None:
@@ -1073,15 +1079,7 @@ def route_http(
             if action == "kill":
                 note = kill_live_ui(store, journal, now)
             elif action == "enable":
-                checklist = {
-                    "paper_evidence_reviewed": _truthy(payload.get("paper_evidence_reviewed")),
-                    "risk_limits_set": _truthy(payload.get("risk_limits_set")),
-                    "kill_switch_tested": _truthy(payload.get("kill_switch_tested")),
-                }
-                note = enable_live_ui(
-                    str(payload.get("signature", "") or ""), checklist,
-                    store, journal, config, now,
-                )
+                note = enable_live_ui(store, journal, config, now)
             else:
                 return HttpResponse.html(400, _cards_error_html("live action must be enable or kill"))
         except ValueError as exc:

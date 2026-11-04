@@ -3,16 +3,16 @@
 Last green run describes the working tree below, not just the base commit
 (the tree has uncommitted changes on top of HEAD).
 
-base_commit: d710ad97e0c2c66e37c210c32605ddc57ce04cdb
+base_commit: fb0637fa5aa5d610657b4fcaac8ffd0457b48fc2
 check: .venv/bin/python .opencode/skills/formal-live-gates/check_live_gates.py
-result: PASS, 7716 cases, 2026-11-01
+result: PASS, 7600 cases, 2026-11-03
 
 verified_tree_sha256:
-  bot/autonomy.py 86c1922886b2efba626c2e3d2f8eb14223b341cf7b55272f0db8e46341297cf3
+  bot/autonomy.py bc4c954b9aecb7c08893b023446e8905344bdf28820b85bfe2082f4c5f4f21f5
   bot/risk.py 8b64af7f97950df985c4b33215d760d1b24c20720639e419ddeb71f66207dea6
   bot/venue.py eaa3e950e981810a6311330fe606ad587cc5b6005fe696ca05a1e04c14ec298c
   bot/journal.py 2e6be61796a930b2d48ce6f4fabbdded8dcd7d1bd932e666c6d79423f9e426aa
-  bot/shapes.py a00b7528620a45f590368cc9605f0e536b984759e1dc302f537175f7cfd3ceb5
+  bot/shapes.py e5c08f6c26be64021da2bde777e7c2213a4b11fdac7770bacbbb8b59cd509dd7
 
 Rule: move this marker forward only after the check passes on the new tree.
 Recompute with: git rev-parse HEAD && sha256sum bot/autonomy.py bot/risk.py bot/venue.py bot/journal.py bot/shapes.py

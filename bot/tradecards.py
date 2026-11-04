@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Mapping, Optional, Sequence
 
-from bot.diff import compact_dollars
+from bot.diff import compact_dollars, pct
 from bot.metareason import generate_reason, select_reason_backend
 from bot.exposure import compute_gex
 from bot.ideas import cached_earnings, parse_timeframe, rank_ideas, symbols_for, unknown_symbols
@@ -26,10 +26,15 @@ SIZED_DEFAULT_CONTRACTS = 3
 REASON_CACHE_MAX = 2000
 
 _reason_cache: dict[str, str] = {}
+_reason_cache_version = 0
 
 
 def clear_reason_cache() -> None:
     _reason_cache.clear()
+
+
+def reason_cache_version() -> int:
+    return _reason_cache_version
 
 
 def _reason_cache_key(stats: Mapping[str, Any], http_post: HttpPost | None) -> str:
@@ -38,9 +43,11 @@ def _reason_cache_key(stats: Mapping[str, Any], http_post: HttpPost | None) -> s
 
 
 def _reason_cache_store(key: str, reason: str) -> None:
+    global _reason_cache_version
     if len(_reason_cache) >= REASON_CACHE_MAX:
         _reason_cache.pop(next(iter(_reason_cache)), None)
     _reason_cache[key] = reason
+    _reason_cache_version += 1
 
 
 REASON_QUEUE_MAX = 256
@@ -237,7 +244,7 @@ def fallback_reason(stats: Mapping[str, Any]) -> str:
     parts = [f"{stats.get('direction', '')} via {stats.get('spread', '')}"]
     wall = stats.get("wall_exposure")
     if wall is not None:
-        parts.append(f"wall exposure {wall:.0f}")
+        parts.append(f"wall exposure {compact_dollars(wall)}")
     flip = stats.get("flip_point")
     spot = stats.get("spot")
     if flip is not None and spot is not None:
@@ -540,7 +547,7 @@ def format_trade_cards(cards: Sequence[TradeCard]) -> str:
     for number, card in enumerate(cards, 1):
         line = (
             f"{number}. {contract_text(card)} "
-            f"confidence {card.confidence:.2f} "
+            f"confidence {pct(card.confidence)} "
             f"max loss {_rounded(card.max_loss, 2)} breakeven {_rounded(card.breakeven, 2)} "
             f"wall {compact_dollars(card.wall_exposure) if card.wall_exposure is not None else 'none'} {card.regime} "
             f"spot {_rounded(card.spot, 2)} flip {_rounded(card.flip_point, 2)}"
@@ -634,13 +641,22 @@ def _clamp01(value: float) -> float:
     return min(1.0, max(0.0, value))
 
 
+def confidence_word(confidence: float) -> str:
+    if confidence >= 0.7:
+        return "strong"
+    if confidence >= 0.5:
+        return "moderate"
+    return "weak"
+
+
 def confidence_meter_html(confidence: float) -> str:
-    pct = _clamp01(float(confidence)) * 100.0
+    width = _clamp01(float(confidence)) * 100.0
     band = "hot" if confidence >= 0.7 else ("warm" if confidence >= 0.5 else "cool")
     return (
-        f"<div class=\"conf-row\"><span>confidence <b>{confidence:.2f}</b></span>"
-        f"<div class=\"meter {band}\" role=\"img\" aria-label=\"confidence {confidence:.2f}\">"
-        f"<i style=\"width:{pct:.0f}%\"></i></div></div>"
+        f"<div class=\"conf-row\"><span>confidence <b>{pct(confidence)}</b> "
+        f"({confidence_word(confidence)})</span>"
+        f"<div class=\"meter {band}\" role=\"img\" aria-label=\"confidence {pct(confidence)}\">"
+        f"<i style=\"width:{width:.0f}%\"></i></div></div>"
     )
 
 
@@ -775,14 +791,17 @@ def payoff_svg(card: TradeCard) -> str:
 
 def card_facts_html(card: TradeCard, profile=None) -> str:
     facts = [
-        ("Spread", f"{card.spread}"),
-        ("Strike", f"{card.strike:g}"),
-        ("Net", _net_text(card.net_debit)),
-        ("Max loss", _money(card.max_loss)),
-        ("Breakeven", f"{card.breakeven:g}" if card.breakeven is not None else "n/a"),
-        ("Wall", f"{card.wall_exposure:.0f}" if card.wall_exposure is not None else "n/a"),
-        ("IV rank", f"{card.iv_rank:.0f}" if card.iv_rank is not None else "n/a"),
-        ("Earnings", card.earnings_date or "none"),
+        ("Spread", f"{card.spread}", "the option structure: which legs you buy and sell"),
+        ("Strike", f"{card.strike:g}", "the price level this trade is anchored to"),
+        ("Net", _net_text(card.net_debit), "what you pay (debit) or collect (credit) per share to open"),
+        ("Max loss", _money(card.max_loss), "the most you can lose on this trade if it goes fully wrong"),
+        ("Breakeven", f"{card.breakeven:g}" if card.breakeven is not None else "n/a",
+         "spot must cross this price by expiry for the trade to profit"),
+        ("Wall", _money(card.wall_exposure),
+         "dealer gamma exposure at this strike, in dollars; big walls tend to slow or pin price"),
+        ("IV rank", f"{card.iv_rank:.0f}" if card.iv_rank is not None else "n/a",
+         "where implied volatility sits in its recent range: 0 cheap, 100 expensive"),
+        ("Earnings", card.earnings_date or "none", "earnings date inside the trade window, if any"),
     ]
     if profile is None:
         sizing = SIZING_HINT
@@ -790,8 +809,9 @@ def card_facts_html(card: TradeCard, profile=None) -> str:
         _, _, sizing = size_for_card(card.max_loss, risk_cap_for(profile))
         sizing = sizing
     cells = "".join(
-        f"<div class=\"fact\"><span>{html.escape(name)}</span><b>{html.escape(value)}</b></div>"
-        for name, value in facts
+        f"<div class=\"fact\" title=\"{html.escape(hint, quote=True)}\">"
+        f"<span>{html.escape(name)}</span><b>{html.escape(value)}</b></div>"
+        for name, value, hint in facts
     )
     return f"<div class=\"facts\">{cells}</div><p class=\"sub\">size: {html.escape(sizing)}</p>"
 
@@ -806,14 +826,12 @@ def card_article(
         f"contract {card.symbol} {card.direction} {card.spread} expiry {card.expiry}",
         f"{entry_text(card)}",
         f"{targets_text(card)}",
-        f"confidence {card.confidence:.2f}",
+        f"confidence {pct(card.confidence)} ({confidence_word(card.confidence)})",
         f"max loss {_money(card.max_loss)}",
         f"breakeven {_rounded(card.breakeven, 2) if card.breakeven is not None else 'n/a'}",
         f"net {_net_text(card.net_debit)}",
         f"spread width {card.spread_pct:.1f}%" if card.spread_pct is not None else "spread width n/a",
-        f"wall exposure {card.wall_exposure:.0f}"
-        if card.wall_exposure is not None
-        else "wall exposure n/a",
+        f"wall exposure {_money(card.wall_exposure)}",
         f"regime {card.regime}",
         f"spot {_rounded(card.spot, 2) if card.spot is not None else 'n/a'} "
         f"vs flip {_rounded(card.flip_point, 2) if card.flip_point is not None else 'n/a'}",
@@ -843,12 +861,22 @@ def card_article(
             card.spot is not None and card.flip_point is not None
         ) else "spot vs flip unavailable"
     )
+    regime_plain = (
+        "dealers are long gamma, so moves tend to be damped and price often pins near big walls"
+        if card.regime == "long-gamma"
+        else "dealers are short gamma, so moves can speed up and walls break more easily"
+    )
+    plain = (
+        f"in plain terms: a {card.direction} {card.spread} on {card.symbol}, "
+        f"{pct(card.confidence)} confidence ({confidence_word(card.confidence)}); {regime_plain}."
+    )
     visual = (
         "<div class=\"card-visual\">"
         f"<div class=\"card-head\"><h2>{html.escape(card.symbol)} "
         f"{html.escape(card.direction)} {html.escape(card.spread)}</h2>"
         f"{card_badges_html(card)}</div>"
         f"{confidence_meter_html(card.confidence)}"
+        f"<p class=\"sub\">{html.escape(plain)}</p>"
         "<div class=\"visual-grid\">"
         "<div class=\"visual\"><h3>Payoff at expiry</h3>"
         f"{payoff_svg(card)}"
@@ -886,7 +914,17 @@ def trade_cards_html(
         card_article(card, start_index + offset, profile=profile)
         for offset, card in enumerate(cards)
     ]
+    glossary = (
+        "<details><summary>new here? what am I looking at</summary>"
+        "<p>Each card is one paper-trade idea built from the stored options chain. "
+        "<b>Confidence</b> is how strongly the idea screens, as a percent. "
+        "<b>Wall</b> is dealer gamma exposure at the strike, in dollars: big walls tend to slow or pin price. "
+        "<b>Flip</b> is the spot price where dealer gamma changes sign; above it supports longs, below it favors shorts. "
+        "<b>Long-gamma</b> means dealers dampen moves; <b>short-gamma</b> means they can amplify them. "
+        "<b>Max loss</b> is the most the trade can lose. Hover any fact on a card for a short explanation. "
+        "Nothing here is financial advice, and every take is paper until you arm live on the live page.</p></details>"
+    )
     return page(
-        title, title, f"{len(cards)} cards, from stored snapshots", "".join(parts),
+        title, title, f"{len(cards)} cards, from stored snapshots", glossary + "".join(parts),
         underlying, "cards", resolved, f"/cards?underlying={underlying}",
     )
