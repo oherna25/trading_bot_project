@@ -10,3 +10,5 @@ build/
 .mypy_cache/
 data/
 docs/submission-video/.hyperframes/
+marketwingman-video/
+product-video/
