@@ -261,18 +261,48 @@ Everything else in `.env.example` is optional and advanced: live market feeds, l
 
 ### Deploy it
 
-Two paths, same demo. Both serve `/demo` on port 8000 (or `$PORT` where the platform sets it). Add `-e BASETEN_API_KEY=...` (Docker) or a `.env` file (non-Docker) for the one-key demo; with no key the deterministic demo runs.
+One image runs all three entry points: the full app (`marketwingman`), the zero-key demo (`marketwingman-demo`, the image default), and one scheduled session (`marketwingman-session`). The image is `python:3.12-slim` plus the package (runtime is standard library only), runs as a non-root user, and health-checks `GET /healthz`. All state lives in the `/data` volume; the image itself holds no keys or data.
 
-**Docker:**
+**Full app with Docker Compose:**
+
+```bash
+cp .env.example .env   # optional; fill in feed/model keys, or leave empty for canned fixtures
+docker compose up -d app
+curl -s localhost:8000/healthz
+```
+
+This serves the full app on port 8000 with the store at `/data/trading-bot`, re-ingesting every 900 seconds. Paper activity, the journal, and the reservation ledger (`/data/ledger`) persist in the `app-data` volume across restarts. `make docker-app` is the same command; `make docker-down` stops the stack.
+
+Run one scheduled session against the same store, the container form of the cron job in `deploy/`:
+
+```bash
+docker compose --profile jobs run --rm session
+```
+
+The running server picks up the session's bundle writes on its next request, so no restart is needed.
+
+**Demo in Docker:**
 
 ```bash
 docker build -t marketwingman .
 docker run --rm -p 8000:8000 marketwingman
 # one-key demo:
 docker run --rm -p 8000:8000 -e BASETEN_API_KEY=... marketwingman
+# or via Compose, on its own demo-data volume:
+docker compose --profile demo up demo
 ```
 
-The image is `python:3.12-slim` plus the package (runtime is standard library only). Paper activity persists in the `/data` volume when `--store-dir` is used, which the image sets by default. `make docker-demo` runs the build and the zero-key run.
+Paper activity persists in the `/data` volume when `--store-dir` is used, which the image sets by default. `make docker-demo` runs the build and the zero-key run.
+
+**Full app with plain Docker (no Compose):**
+
+```bash
+docker run -d --name marketwingman -p 8000:8000 -v marketwingman-data:/data \
+  --env-file .env marketwingman \
+  marketwingman --underlying SPY --store-dir /data/trading-bot --host 0.0.0.0
+```
+
+Compose knobs (set in the shell or a `.env` file next to `docker-compose.yml`): `HOST_PORT` (host port, default 8000), `UNDERLYING` (default `SPY`), `REFRESH_SECONDS` (default 900), `SESSION_SCHEDULE` (cron subset `M H * * DOW` for in-app sessions, empty by default), and `TZ` (default `UTC`; session schedules fire on container-local time). Every key in `.env.example` passes through the optional `.env` file; with no feed keys the app briefs from canned fixtures and still serves. The server binds `0.0.0.0` in the container, so set `MUSE_AUTH_TOKEN` in `.env` before publishing the port beyond a trusted network; without it the server prints an unauthenticated warning at startup. Live ordering stays off behind its `/live` toggle exactly as outside Docker.
 
 **Non-Docker (any host with Python 3.11+):**
 

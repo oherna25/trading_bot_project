@@ -72,6 +72,9 @@ deployment candidates, local code validates, sizes, and gates.
 
 Program entry points: `run_app.py` (brief once, then serve HTTP),
 `run_session.py` (one scheduled session). Library server: `bot.muse.serve`.
+Docker: one image (`Dockerfile`, demo default) plus `docker-compose.yml`
+services `app` (full app), `demo`, and `session` (one-shot, `jobs` profile);
+all state in the `/data` volume, health on `/healthz`.
 
 ## Conventions
 

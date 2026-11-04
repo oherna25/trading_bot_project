@@ -8,3 +8,17 @@ __pycache__
 .mypy_cache
 .ruff_cache
 .opencode
+.DS_Store
+build
+*.egg-info
+.github
+diagrams
+scripts
+video
+marketwingman-video
+product-video
+product-video-2
+docs/screenshots
+docs/submission-video
+Dockerfile
+docker-compose.yml

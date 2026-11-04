@@ -4,6 +4,12 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Docker full-app deploy (2026-11-04)
+
+* The whole app now deploys via Docker, not only the demo. `docker-compose.yml` adds an `app` service (full `run_app` server on `/data/trading-bot`, 900s refresh, optional in-app `SESSION_SCHEDULE`), a `demo` profile on its own volume, and a one-shot `session` service (`jobs` profile) sharing the app volume; the server reloads bundle writes on mtime change, so session output lands without a restart. Keys pass through an optional `.env` file; `LEDGER_DIR` is pinned to `/data/ledger` and `TZ` is exposed because session schedules fire on local time.
+* The image now runs as a non-root `app` user, sets `PYTHONUNBUFFERED`, copies `docs/icons` (with `PYTHONPATH=/app` so `bot/muse_http.py` finds the icon beside the copied source, not site-packages), health-checks `/healthz`, and `exec`s the demo default so signals reach Python. `.dockerignore` drops video/docs bulk from the build context.
+* Verified live: image build, demo `/demo` + `/icon.png` + healthy status, compose `app` brief/chat/restart persistence, `session` one-shot against the shared volume. Contract pinned by `tests/test_docker_deploy.py`.
+
 ## Agentic use-case and Baseten (2026-11-03)
 
 * Baseten is wired in. `bot/metareason.py` selects Baseten Muse Spark Open (`meta-models/muse-spark-open-1026`) after a user model and before the Meta key for card reasons; `bot/tradecards.py` treats `baseten` as a live reason backend.
