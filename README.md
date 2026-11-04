@@ -102,6 +102,7 @@ The local tier already runs Muse Glimmer and Muse Spark Open on this machine thr
 |---|---|
 | Offline test suite, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. Run `.venv/bin/python -m pytest tests/ -q` for the current count. |
 | Cross-platform CI | GitHub Actions runs `pip install .`, the `marketwingman` / `marketwingman-demo` / `marketwingman-session` `--help` smokes, pytest, `ruff`, and `mypy` on Ubuntu, Windows, and macOS with Python 3.11 and 3.12 (`.github/workflows/pytest.yml`). This proves install and the offline suite on all three OSes; it does not prove live feed or broker behavior on any of them. |
+| Docker deploy | Image build plus live container checks: demo and full app serve `/healthz`, `/demo`, chat, and MCP; the refresh loop and an in-app scheduled session journal against the named volume, and the one-shot session service completes against the same store. This proves the container path end to end; it does not prove broker behavior. |
 | HTTP drive on a scratch bundle | Create, list, and run deployments plus chat and MCP calls against the real server. The canned chain has no Greeks, so it proves routing and persistence; candidate selection is proved separately by the stubbed Baseten pick test, which opens the non-top candidate through the paper gate. |
 | Seeded screenshot bundle | Multi-symbol chains with Greeks drive the tour pages. Numbers are real stored state for that bundle, not market data. |
 | Live venue tests | Fake venue under an armed flag proves the submit path and tagging. No real order has been placed by the test suite, by design. |
@@ -135,6 +136,15 @@ py -m venv .venv
 ```
 
 Open `http://127.0.0.1:8000/demo`. The installed commands are `marketwingman` (full app), `marketwingman-demo` (zero-key demo), and `marketwingman-session` (one scheduled session); running them from the repo root as `.venv/bin/python run_app.py`, `.venv/bin/python run_demo.py`, and `.venv/bin/python run_session.py` (`.venv\Scripts\python` on Windows) still works.
+
+Or run it in Docker, with no Python install:
+
+```bash
+docker compose up -d app   # full app on http://127.0.0.1:8000
+docker build -t marketwingman . && docker run --rm -p 8000:8000 marketwingman   # zero-key demo
+```
+
+See [Deploy it](#deploy-it) for the one-shot session job, volumes, and configuration.
 
 Run the suite with no keys and no network:
 
