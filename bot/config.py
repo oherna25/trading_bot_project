@@ -23,7 +23,7 @@ def read_dotenv(path: str = DOTENV_PATH) -> dict[str, str]:
         return dict(cached[2])
     values: dict[str, str] = {}
     try:
-        with open(path) as handle:
+        with open(path, encoding="utf-8") as handle:
             lines = handle.readlines()
     except OSError:
         return values

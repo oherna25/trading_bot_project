@@ -1,4 +1,8 @@
+ifeq ($(OS),Windows_NT)
+PY := $(or $(wildcard .venv/Scripts/python.exe),python)
+else
 PY := $(or $(wildcard .venv/bin/python),python3)
+endif
 
 .PHONY: test lint typecheck help
 
@@ -11,7 +15,7 @@ test:
 	$(PY) -m pytest tests/ -q
 
 lint:
-	@$(PY) -m ruff check bot tests run_app.py run_session.py 2>/dev/null || echo "skip: ruff not installed"
+	@$(PY) -m ruff check bot tests run_app.py run_session.py || echo "skip: ruff not installed"
 
 typecheck:
-	@$(PY) -m mypy bot run_app.py run_session.py 2>/dev/null || echo "skip: mypy not installed"
+	@$(PY) -m mypy bot run_app.py run_session.py || echo "skip: mypy not installed"

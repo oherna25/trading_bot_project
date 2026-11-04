@@ -175,6 +175,8 @@ def test_card_routes_require_profile():
     page = route_http("GET", "/cards?underlying=TEST", {}, _snapshotted_store(), Journal(), config, NOW)
     assert page.status == 403
     assert PROFILE_REQUIRED in page.body.decode("utf-8")
+    assert 'name="tool" value="load_snapshot"' in page.body.decode("utf-8")
+    assert "Load snapshot" in page.body.decode("utf-8")
     doc = route_http("GET", "/cards.json?underlying=TEST", {}, _snapshotted_store(), Journal(), config, NOW)
     assert doc.status == 403
     assert PROFILE_REQUIRED in json.loads(doc.body)["error"]

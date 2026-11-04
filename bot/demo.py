@@ -152,20 +152,10 @@ def demo_html(underlying: str, store: SnapshotStore, journal: Journal, now: date
     )
     if profile_saved is None:
         top_html = f"<div class=\"panel\"><p>{html.escape(PROFILE_REQUIRED)}</p><p class=\"sub\">One 4-question profile unlocks sized trade cards everywhere.</p></div>"
-        take = ""
     elif cards:
         top_html = card_article(cards[0], 0, profile=profile_saved)
-        take = (
-            "<form class=\"block\" method=\"post\" action=\"/action\">"
-            "<input type=\"hidden\" name=\"tool\" value=\"take_paper_trade\">"
-            f"<input type=\"hidden\" name=\"underlying\" value=\"{html.escape(underlying, quote=True)}\">"
-            f"<input type=\"hidden\" name=\"snapshot\" value=\"{html.escape(snapshot_id, quote=True)}\">"
-            "<input type=\"hidden\" name=\"index\" value=\"0\">"
-            "<button class=\"solid\" type=\"submit\">Take this trade (paper)</button></form>"
-        )
     else:
         top_html = "<div class=\"panel\"><p>trade cards: none found</p></div>"
-        take = ""
     steps = (
         "<div class=\"steps\">"
         "<div class=\"step\"><span class=\"n\">1</span><b>Read the regime</b><p>Walls, flip, and $GEX per 1% from the stored chain — no vendor GEX feed.</p></div>"
@@ -180,7 +170,7 @@ def demo_html(underlying: str, store: SnapshotStore, journal: Journal, now: date
         f"<h2>1. Regime read</h2><div class=\"grid2\"><div class=\"panel\"><pre style=\"margin:0\">{html.escape(brief)}</pre></div>"
         f"<div class=\"panel\"><h3 style=\"margin-top:0\">Gamma by strike</h3><div class=\"chart-panel\" style=\"margin:0\">{gamma_svg(profile)}</div>"
         f"<p class=\"sub\">Green call walls, red put walls, dashed flip. <a href=\"/chart?underlying={_urlencode(underlying)}\">Open full chart</a></p></div></div>"
-        f"<h2>2. Top card</h2>{top_html}{take}"
+        f"<h2>2. Top card</h2>{top_html}"
         f"<p><a href=\"{html.escape(link, quote=True)}\">top card permalink</a> · <a href=\"/cards?underlying={_urlencode(underlying)}\">all cards</a></p>"
         f"<div class=\"grid2\"><div><h2>3. Wheel screen</h2><details open><summary>Premium candidates</summary><pre>{html.escape(wheel)}</pre></details></div>"
         f"<div><h2>4. Replay</h2><details open><summary>Backtest vs buy-and-hold</summary><pre>{html.escape(replay_text)}</pre></details></div></div>"

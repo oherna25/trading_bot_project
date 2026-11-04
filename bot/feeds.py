@@ -14,7 +14,7 @@ from typing import Any, Callable, Mapping
 
 from bot.config import env_value, read_dotenv as _read_dotenv
 from bot.journal import Journal
-from bot.shapes import Bar, ChainSnapshot, OptionContract
+from bot.shapes import Bar, ChainSnapshot, DashboardSettings, OptionContract
 from bot.store import SnapshotStore
 
 TRADIER_SANDBOX_URL = "https://sandbox.tradier.com/v1"
@@ -866,31 +866,55 @@ def feed_health(journal: Journal, now: datetime) -> dict[str, dict[str, Any]]:
     return stats
 
 
-def feed_health_html(feeds: dict[str, dict[str, Any]]) -> str:
+STATUS_CLASSES = {"ok": "fresh", "error": "stale"}
+
+
+def feed_health_html(
+    feeds: dict[str, dict[str, Any]], settings: DashboardSettings, underlying: str
+) -> str:
+    from bot.theme import page
+
     rows = []
     for name in sorted(feeds):
         stat = feeds[name]
+        status = str(stat["status"])
+        status_cls = STATUS_CLASSES.get(status)
+        status_cell = (
+            f"<span class=\"{status_cls}\">{html.escape(status)}</span>"
+            if status_cls
+            else html.escape(status)
+        )
         cells = [
-            name,
-            stat["kind"],
-            stat["status"],
+            html.escape(name),
+            html.escape(str(stat["kind"])),
+            status_cell,
             str(stat["successes"]),
             str(stat["failures"]),
-            stat["last_success_utc"] or "-",
+            html.escape(str(stat["last_success_utc"] or "-")),
             f"{stat['last_latency_ms']:.0f} ms" if stat["last_latency_ms"] is not None else "-",
             f"{stat['avg_latency_ms']:.0f} ms" if stat["avg_latency_ms"] is not None else "-",
             str(stat["last_depth"]) if stat["last_depth"] is not None else "-",
             f"{stat['quota_reserved_today']}/{stat['quota_released_today']}",
-            stat["last_error"] or "-",
+            html.escape(str(stat["last_error"] or "-")),
         ]
-        rows.append("<tr>" + "".join(f"<td>{html.escape(cell)}</td>" for cell in cells) + "</tr>")
-    return (
-        "<!doctype html><html lang=\"en\"><head><meta charset='utf-8'>"
-        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-        "<title>feed health</title></head><body>"
-        "<h1>feed health</h1>"
-        "<table><thead><tr><th>feed</th><th>kind</th><th>status</th><th>ok</th><th>fail</th>"
+        rows.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
+    ok_count = sum(1 for stat in feeds.values() if stat["status"] == "ok")
+    body = (
+        "<div class=\"table-scroll\"><table><thead><tr><th>feed</th><th>kind</th><th>status</th><th>ok</th><th>fail</th>"
         "<th>last success</th><th>last latency</th><th>avg latency</th>"
         "<th>fallback depth</th><th>quota today</th><th>last error</th></tr></thead>"
-        "<tbody>" + "".join(rows) + "</tbody></table></body></html>"
+        "<tbody>" + "".join(rows) + "</tbody></table></div>"
+        "<p class=\"sub\">Status comes from journal lineage only: successes, failures, "
+        "latency, and quota holds recorded per source. No feed is contacted to render this page.</p>"
+    )
+    return page(
+        "feed health",
+        "feed health",
+        f"{ok_count} of {len(feeds)} feeds ok, from journal lineage",
+        body,
+        underlying,
+        "feeds",
+        settings,
+        "/feeds",
+        refresh=True,
     )

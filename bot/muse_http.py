@@ -603,7 +603,11 @@ def route_http(
     if method == "GET" and clean == HEALTH_DETAIL_PATH:
         return HttpResponse.json(200, health_detail(store, journal, now))
     if method == "GET" and clean == "/feeds":
-        return HttpResponse.html(200, feed_health_html(feed_health(journal, now)))
+        settings = store.read_settings()
+        return HttpResponse.html(
+            200,
+            feed_health_html(feed_health(journal, now), settings, _page_underlying(path, store)),
+        )
     if method == "GET" and clean == "/replay.csv":
         from bot.replay import REPLAY_EXPORT_SECTIONS, replay_export
 
@@ -1153,6 +1157,11 @@ def _cards_error_html(message: str) -> str:
         "<body><div class=\"wrap\"><section class=\"hero\">"
         "<span class=\"eyebrow\">MarketWingMan</span><h1>One step missing</h1>"
         f"<p>{html.escape(message, quote=True)}</p>"
-        "<div class=\"hero-row\"><a class=\"btn solid\" href=\"/demo\">Open the demo</a>"
+        "<p>Load a snapshot to continue. No keys needed: offline it uses canned fixtures.</p>"
+        "<form class=\"block\" method=\"post\" action=\"/action\">"
+        "<input type=\"hidden\" name=\"tool\" value=\"load_snapshot\">"
+        "<label class=\"field\">symbol<input name=\"symbol\" value=\"SPY\" size=\"8\"></label>"
+        "<button class=\"solid\" type=\"submit\">Load snapshot</button></form>"
+        "<div class=\"hero-row\"><a class=\"btn\" href=\"/demo\">Open the demo</a>"
         "<a class=\"btn\" href=\"/dashboard\">Dashboard</a></div></section></div></body></html>"
     )

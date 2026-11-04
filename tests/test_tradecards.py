@@ -18,7 +18,7 @@ from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
-ENV = {"META_MODEL_API_KEY": "key-1"}
+ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
 
 
 def _chat_stub(*args):
@@ -165,6 +165,7 @@ def test_html_escapes_reason_with_script_tags():
     assert "<script>" not in page
     assert "&lt;script&gt;" in page
     assert "TEST long 100/105 call vertical expiry 2026-11-20" in page
+    assert "reason: deterministic (offline)" in page
 
 
 def test_empty_ideas_render_none_found():

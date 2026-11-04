@@ -91,13 +91,26 @@ python -m venv .venv
 
 Try the audit offline. It journals `OFF` and still answers.
 
-```bash
-.venv/bin/python -c "from datetime import datetime, timezone; from bot.journal import Journal; from bot.store import SnapshotStore; print('store ok', SnapshotStore() is not None)"
+```python
+from datetime import datetime, timezone
+from bot.feeds import ingest_bars, ingest_chain
+from bot.journal import Journal
+from bot.research import route_chat
+from bot.shapes import OperatorConfig
+from bot.store import SnapshotStore
+
+now = datetime.now(timezone.utc)
+store, journal = SnapshotStore(), Journal()
+config = OperatorConfig(max_day_loss=1000.0, day_profit_target=500.0, max_trade_size=5000.0)
+ingest_chain("tradier_sandbox", store, journal)
+ingest_bars("alpaca", store, journal)
+print(route_chat("spark audit", "SPY", store, journal, config, now))
 ```
 
-With keys, copy `.env.example` to `.env`, set `META_MODEL_API_KEY` and
-`MODEL_DAY_BUDGET_USD`, then run the app once and read the spark audit lines
-in the brief.
+One key is enough for a live model: set `BASETEN_API_KEY` for Baseten Muse
+Spark Open card reasons and deployment picks. Or set `META_MODEL_API_KEY`
+plus `MODEL_DAY_BUDGET_USD` (a required pair) for the built-in Meta analyst.
+No key: the audit reads `OFF` and the deterministic engine answers.
 
 ## Demo video
 
@@ -117,7 +130,7 @@ journal, so `spark_claim` + `spark_verdict` + `model_receipt` are on record.
 Composition source: `build_submission_brief` in `bot/video.py`.
 Scenes: hook 6s · SPY gamma 12s · Spark audit duel 16s (this run: MATCH, model short
 confidence 0.78 vs engine short) · top card 14s · safety gates 11s · replay vs
-buy-and-hold 13s · shock -2% 11s · MCP tools 12s (50 tools, one registry, live
+buy-and-hold 13s · shock -2% 11s · MCP tools 12s (one tool registry, live
 `tools/call` reply in-scene) · wheel screen 13s (broad scan, 5 ranked candidates
 led by NBIS SELL_PUT 4.52%) · outro 7s. Live ordering is the one feature that stays
 off — by design; the safety scene shows the gate that enforces that.
@@ -159,7 +172,7 @@ place an order.
 
 Depth: one pass exposure calc, bisect indexed store, gated paper venue with
 halt drills, no lookahead replay, a collateral ledger, and a contract book
-rebuilt from journaled fills. 963 offline tests. Journal or it did not
+rebuilt from journaled fills. Full offline test suite. Journal or it did not
 happen.
 
 Demo: one ticker, one audit verdict a judge can read from the back row, then

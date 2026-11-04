@@ -7,7 +7,7 @@ It reads the chain, computes its own dealer exposure, picks contracts, sizes aga
 
 <p align="center">
 <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
-<img alt="963 tests passing" src="https://img.shields.io/badge/tests-963%20passing-brightgreen">
+<img alt="Offline test suite passing" src="https://img.shields.io/badge/tests-passing-brightgreen">
 <img alt="Fully offline test suite" src="https://img.shields.io/badge/tests-fully%20offline-blueviolet">
 <img alt="Paper trading by default" src="https://img.shields.io/badge/trading-paper%20first-green">
 <img alt="Live ordering off by default" src="https://img.shields.io/badge/live-off%20until%20signed-red">
@@ -97,14 +97,14 @@ The local tier already runs Muse Glimmer and Muse Spark Open on this machine thr
 
 | Evidence | Scope and limits |
 |---|---|
-| 963 tests, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. |
+| Offline test suite, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. Run `.venv/bin/python -m pytest tests/ -q` for the current count. |
 | HTTP drive on a scratch bundle | Create, list, and run deployments plus chat and MCP calls against the real server. The canned chain has no Greeks, so it proves routing and persistence; candidate selection is proved separately by the stubbed Baseten pick test, which opens the non-top candidate through the paper gate. |
 | Seeded screenshot bundle | Multi-symbol chains with Greeks drive the tour pages. Numbers are real stored state for that bundle, not market data. |
 | Live venue tests | Fake venue under an armed flag proves the submit path and tagging. No real order has been placed by the test suite, by design. |
 
 ## Data boundaries and limitations
 
-Demo and test data are canned vendor-shaped fixtures or seeded snapshots. Sandbox chains are delayed about 15 minutes and carry no Greeks, so a brief can read flat when the truth is unknown; the GEX brief reports Greek coverage, the other exposure briefs do not yet. Live ordering requires Tradier credentials, a signed arming action, and a supplied venue, and stays off by default. Earnings are calendar dates only; there is no filings or transcript ingestion yet. The scheduled session has no exchange holiday calendar. This is research and paper-trading software, not financial advice, and no part of it guarantees a return.
+Demo and test data are canned vendor-shaped fixtures or seeded snapshots. Sandbox chains are delayed about 15 minutes and carry no Greeks, so a brief can read flat when the truth is unknown; the GEX brief and the VEX/DEX/CHARM/VANNA briefs report Greek coverage, with a no-Greeks caveat when coverage is 0%. Live ordering requires Tradier credentials, a signed arming action, and a supplied venue, and stays off by default. Earnings are calendar dates only; there is no filings or transcript ingestion yet. The scheduled session has no exchange holiday calendar. This is research and paper-trading software, not financial advice, and no part of it guarantees a return.
 
 ## Provenance
 
@@ -112,21 +112,143 @@ Everything in this repo was built during the Oct 27 to Nov 4, 2026 event window,
 
 ## Quick start
 
+The app installs on Windows, macOS, and Linux with Python 3.11 or 3.12. The runtime uses the standard library only; on Windows the `tzdata` package installs automatically so `zoneinfo` finds the IANA database.
+
+Install and run the demo (macOS/Linux):
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install .
+.venv/bin/marketwingman-demo
+```
+
+Windows (PowerShell):
+
+```powershell
+py -m venv .venv
+.venv\Scripts\pip install .
+.venv\Scripts\marketwingman-demo
+```
+
+Open `http://127.0.0.1:8000/demo`. The installed commands are `marketwingman` (full app), `marketwingman-demo` (zero-key demo), and `marketwingman-session` (one scheduled session); running them from the repo root as `.venv/bin/python run_app.py`, `.venv/bin/python run_demo.py`, and `.venv/bin/python run_session.py` (`.venv\Scripts\python` on Windows) still works.
+
 Run the suite with no keys and no network:
 
 ```bash
-python -m venv .venv
-.venv/bin/pip install pytest ruff mypy
+.venv/bin/pip install ".[dev]"
 .venv/bin/python -m pytest tests/ -q
 ```
 
-Then serve the dashboard (it serves whatever is in `data/trading-bot`, so seed that directory first with the snippet under [interactive snippets](#interactive-snippets) or add keys to `.env`):
+On Windows, use `.venv\Scripts\python -m pytest tests/ -q`. CI runs install, the three `--help` smokes, pytest, `ruff`, and `mypy` on Ubuntu, Windows, and macOS for Python 3.11 and 3.12.
+
+Then run the demo below. For live feeds and live briefs on your own store, seed `data/trading-bot` with the snippet under [interactive snippets](#interactive-snippets) or add keys to `.env`, then run `.venv/bin/python run_app.py`.
+
+## Run the demo
+
+The demo runs the full app with no keys. It needs no `.env` file, no outside accounts, no network, no MongoDB, and no Telegram bot. Paper trading only. Live ordering stays off.
+
+### Prerequisites
+
+- Python 3.11 or 3.12.
+- Nothing to install beyond the test dependencies in Quick start. The server uses the standard library only.
+
+### Start it
 
 ```bash
-.venv/bin/python run_app.py
+python3 -m venv .venv
+.venv/bin/pip install .
+.venv/bin/marketwingman-demo
 ```
 
-Open `localhost:8000/demo`. Without keys the suite and every offline flow run on canned fixtures. Copy `.env.example` to `.env` when you want live data.
+On Windows (PowerShell), run `py -m venv .venv`, `.venv\Scripts\pip install .`, `.venv\Scripts\marketwingman-demo`.
+
+The startup output reads:
+
+```text
+MarketWingMan zero-key demo (no keys, no network, seeded data)
+seeded: SPY, QQQ; open http://127.0.0.1:8000/demo
+```
+
+Open `http://127.0.0.1:8000/demo`. Stop the server with Ctrl+C. Each start rebuilds the seed in memory, so a restart resets the demo to its first state.
+
+Useful variants:
+
+```bash
+.venv/bin/python run_demo.py --port 8123
+.venv/bin/python run_demo.py --store-dir data/demo
+```
+
+`--port` changes the port, and `$PORT` is honored when `--port` is omitted. `--store-dir data/demo` writes the seeded bundle to that directory and reloads it on the next start, so paper trades, deployments, and journal entries survive a restart. Seeding is idempotent. A second start against the same directory adds no duplicate snapshots or deployments.
+
+### The 60-second walk
+
+| Step | Open | What to look for |
+|---|---|---|
+| 1 | `/demo` | One screen: regime read with walls and flip, Spark audit panel reading OFF, top trade card, wheel screen, replay, shock buttons, and the chat box. |
+| 2 | `/cards?underlying=SPY` | Five defined-risk cards built from the seeded chain. Try QQQ in place of SPY. |
+| 3 | `/deployments/page` | One paper `put_credit_spread` deployment on SPY with a $40,000 capital cap. Run it from chat with `run deployments` and watch a spread open through the paper risk gate. |
+| 4 | `/chart?underlying=SPY` | Gamma by strike with the flip marked. |
+| 5 | `/live` | Live ordering is off. Arming needs a signature, paper evidence, and a checklist, and the kill switch is one click. |
+
+### Try it in chat
+
+Use the chat box on `/demo`, or post to `/chat`:
+
+```bash
+curl -s -X POST localhost:8000/chat -H 'Content-Type: application/json' -d '{"text": "gex brief", "underlying": "SPY"}'
+```
+
+Prompts that work on the seeded data:
+
+| Prompt | What comes back |
+|---|---|
+| `gex brief` | Spot, regime, total GEX, flip, call and put walls from the seeded SPY chain. |
+| `trade cards` | Ranked defined-risk cards, sized against the seeded profile. |
+| `wheel ideas` | Premium candidates that pass the delta, spread, open interest, and premium-return screens. |
+| `run deployments` | The seeded deployment sells a put credit spread on paper, journaled end to end. |
+| `agent cycle` | The bounded observe, propose, act, verify loop over the same deployment. |
+| `replay` | Backtest over the five seeded days with next-bar fills, reported against buy-and-hold. The same data is at `/replay.csv?underlying=SPY`. |
+| `shock SPY -2%` | Walls and flip repriced at a moved spot. |
+
+### What is seeded
+
+`bot/demo_seed.py:seed_demo` builds the state at startup. Expiries are rebuilt 10 to 30 days out from the current date on every start, so the demo does not go stale.
+
+| Data | Seeded value |
+|---|---|
+| Symbols | SPY at spot 600, QQQ at spot 520 |
+| Chains | 54 contracts per symbol: nine strikes, calls and puts, three expiries, all with gamma, vega, delta, charm, vanna, bid, ask, IV, and open interest at or above 100 |
+| History | Five daily bars and five snapshots per symbol, ending at the current time |
+| IV history | 25 points per symbol, so IV rank computes instead of passing thin |
+| Profile | Moderate risk, $100,000 portfolio, intermediate knowledge, options enabled. Cards and sizing work with no setup step. |
+| Holdings | 100 SPY shares, so seeded covered calls read as covered |
+| Deployment | One paper `put_credit_spread` on SPY, $40,000 cap, id `d1` |
+| Journal | One `demo_seeded` entry recording the symbols and that no keys were required |
+
+### Adding a key later
+
+The demo is complete without keys. Keys only change who writes the model text.
+
+- Set `BASETEN_API_KEY` in `.env` and restart. Muse Spark Open on `meta-models/muse-spark-open-1026` then picks or skips among filtered deployment candidates, journaled as `agent_proposal`, and writes card reasons. Without it the deterministic annualized-return order runs.
+- Set `META_MODEL_API_KEY` together with `MODEL_DAY_BUDGET_USD` for the built-in Spark analyst and Wonder reviewer. Both are required. The key alone leaves the deterministic paths in place.
+- Feed keys (`TRADIER_ACCESS_TOKEN`, `MARKETDATA_API_KEY`, and the rest in `.env.example`) only matter for `run_app.py` against live feeds. The demo never calls a feed.
+
+### Troubleshooting
+
+- `Address already in use`: pass `--port 8123` or stop the process already on 8000.
+- Blank or 400 page for a symbol other than SPY or QQQ: the demo seeds only those two. Naming any other ticker returns the stored-symbol list and asks you to load it, which needs a feed key under `run_app.py`.
+- Numbers look round: they are seeded fixtures by design. Source reads `demo_seed` on every brief so demo data is never mistaken for a live feed.
+
+### Keys: zero, one, or full
+
+| Mode | Set | What runs |
+|---|---|---|
+| Zero keys (default) | nothing | Full offline demo on canned fixtures. Spark audit reads `OFF`; the deterministic engine answers every page. |
+| One key: Baseten | `BASETEN_API_KEY` | Muse Spark Open card reasons plus deployment candidate picks. No budget needed. |
+| One key: bring your own | `USER_MODEL_API_KEY` | Your OpenAI-compatible model serves analyst and reviewer roles. No day budget needed. |
+| Built-in Meta pair | `META_MODEL_API_KEY` + `MODEL_DAY_BUDGET_USD` | Spark/Wonder analyst, reviewer, grounding, voice, and image. Both are required; the key alone leaves these on deterministic paths. |
+
+Everything else in `.env.example` is optional and advanced: live market feeds, local GGUF weights, alert pushes, and tuning. No feed key is needed to judge the demo.
 
 The design pseudocode lives in [overview.md](overview.md). Diagrams live in [diagrams/](diagrams/) as Mermaid sources. AI agents start with [AGENTS.md](AGENTS.md).
 
@@ -253,8 +375,8 @@ MUSE_AUTH_TOKEN=<secret>   # optional; when set, chat/mcp/cards need `Authorizat
 DISCORD_WEBHOOK_URL=<url>   # optional; alert pushes (with no provider set, alerts stay journal-only)
 TELEGRAM_BOT_TOKEN=<token>   # optional; alert pushes need this plus TELEGRAM_CHAT_ID
 TELEGRAM_CHAT_ID=<id>   # optional; alert push target
-META_MODEL_API_KEY=<key>   # optional; model auth for analyst phases and card reasons (without it, deterministic paths run)
-MODEL_DAY_BUDGET_USD=<usd>   # optional; day budget for the model phases
+META_MODEL_API_KEY=<key>   # built-in Meta path: required pair with the next line (without both, deterministic paths run)
+MODEL_DAY_BUDGET_USD=<usd>   # required with META_MODEL_API_KEY; day budget for the built-in model phases
 USER_MODEL_API_KEY=<key>   # optional; your own key for any OpenAI-compatible chat API (analyst + reviewer roles, no budget needed)
 USER_MODEL_BASE_URL=<url>   # optional; default https://api.openai.com/v1
 USER_MODEL_ID=<id>   # optional; default gpt-4o-mini
@@ -270,7 +392,7 @@ SCAN_BROAD=0   # optional; set 1 to refresh the broad universe on every tick
 SCAN_MAX_IDEAS=15   # optional; idea cap, 1-50
 ```
 
-The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0). The day budget is enforced through lock-serialized ledger holds that every process reads (`LEDGER_DIR` sets the ledger root) instead of a journal scan. Trade card reasons use your own model first, then Baseten Spark Open with `BASETEN_API_KEY`, then `META_MODEL_API_KEY`; without any of them, the offline fallback writes each reason. Baseten also proposes deployment candidate picks when its key is set, with deterministic order as the fallback. Bring your own model with `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default `https://api.openai.com/v1`) and `USER_MODEL_ID` (default `gpt-4o-mini`): any OpenAI-compatible chat API then serves the analyst and reviewer roles (briefs, chat router, debate, coach, narrations, portfolio commands, chart reads, card reasons), with receipts journaled at zero cost since your key pays your bill and no day budget is required. The same key can be supplied at runtime instead of `.env`: paste it into the `set_user_model` MCP tool or the dashboard `/settings` model-key form (never into chat text, which the chat model would see). Runtime keys live in server memory only, clear on restart, take precedence over the env key while set, and are never persisted, journaled, or echoed back -- status lines and the settings page show the model id and source only. Grounding, voice transcription, and image generation stay on the built-in key because their endpoints are provider-specific. The tier readout names the user model, and `/healthz` reports `user_key_set` (presence only, never the key). The local tier reads `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` plus `LLAMA_SERVER_BIN` and starts one persistent `llama-server` per weights file on 127.0.0.1; prompts travel in the POST body so they never appear in `ps`. `LLAMA_CTX` and `LLAMA_THREADS` cap context and threads per server. Without weights every tier behaves exactly as before.
+The bot reads `.env` from the working directory automatically; real environment variables win over file values. Sandbox tokens only work on the sandbox host and production tokens only on production (`TRADIER_BASE_URL` selects the host). Secrets never appear in code, journals, or error messages. Model phases add `META_MODEL_API_KEY` and `MODEL_DAY_BUDGET_USD`; without both set, the deterministic paths run (Phase M0). Grounding, voice transcription, and image generation stay on this built-in pair because their endpoints are provider-specific. The day budget is enforced through lock-serialized ledger holds that every process reads (`LEDGER_DIR` sets the ledger root) instead of a journal scan. Trade card reasons use your own model first, then Baseten Spark Open with `BASETEN_API_KEY`, then `META_MODEL_API_KEY`; without any of them, the offline fallback writes each reason. Baseten also proposes deployment candidate picks when its key is set, with deterministic order as the fallback. Bring your own model with `USER_MODEL_API_KEY` plus optional `USER_MODEL_BASE_URL` (default `https://api.openai.com/v1`) and `USER_MODEL_ID` (default `gpt-4o-mini`): any OpenAI-compatible chat API then serves the analyst and reviewer roles (briefs, chat router, debate, coach, narrations, portfolio commands, chart reads, card reasons), with receipts journaled at zero cost since your key pays your bill and no day budget is required. The same key can be supplied at runtime instead of `.env`: paste it into the `set_user_model` MCP tool or the dashboard `/settings` model-key form (never into chat text, which the chat model would see). Runtime keys live in server memory only, clear on restart, take precedence over the env key while set, and are never persisted, journaled, or echoed back -- status lines and the settings page show the model id and source only. Grounding, voice transcription, and image generation stay on the built-in key because their endpoints are provider-specific. The tier readout names the user model, and `/healthz` reports `user_key_set` (presence only, never the key). The local tier reads `GLIMMER_GGUF_PATH` or `SPARK_OPEN_GGUF_PATH` plus `LLAMA_SERVER_BIN` and starts one persistent `llama-server` per weights file on 127.0.0.1; prompts travel in the POST body so they never appear in `ps`. `LLAMA_CTX` and `LLAMA_THREADS` cap context and threads per server. Without weights every tier behaves exactly as before.
 
 ## App tour
 
@@ -396,6 +518,12 @@ macOS launchd (`deploy/trading-bot-session.plist`):
 ```bash
 sed 's|REPO_ROOT|/path/to/trading_bot_project|g' deploy/trading-bot-session.plist > ~/Library/LaunchAgents/com.tradingbot.session.plist
 launchctl load ~/Library/LaunchAgents/com.tradingbot.session.plist
+```
+
+Windows Task Scheduler: create a weekly task that runs the installed session command on weekdays at 07:30, replacing `REPO_ROOT` with the repo path and appending output to the same log:
+
+```powershell
+schtasks /Create /TN MarketWingManSession /SC WEEKLY /D MON,TUE,WED,THU,FRI /ST 07:30 /TR "cmd /c cd /d REPO_ROOT && .venv\Scripts\marketwingman-session >> data\session.log 2>&1"
 ```
 
 Check the log after a run:

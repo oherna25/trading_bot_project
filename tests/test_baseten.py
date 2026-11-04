@@ -4,7 +4,9 @@ import pytest
 
 from bot.baseten import (
     INFERENCE_CHAT_URL,
+    REASON_MAX_TOKENS,
     REASON_MODEL_DEFAULT,
+    REASON_REASONING,
     generate_pick,
     generate_reason,
     predict_url,
@@ -78,7 +80,8 @@ def test_generate_reason_slug_posts_chat_with_bearer():
     assert seen["payload"]["model"] == SLUG
     assert seen["payload"]["messages"][0]["role"] == "system"
     assert seen["payload"]["messages"][1] == {"role": "user", "content": '{"symbol": "SPY"}'}
-    assert seen["payload"]["max_tokens"] == 200
+    assert seen["payload"]["max_tokens"] == REASON_MAX_TOKENS
+    assert seen["payload"]["reasoning"] == REASON_REASONING
     assert seen["timeout"] == 60.0
     assert isinstance(latency_ms, float)
 

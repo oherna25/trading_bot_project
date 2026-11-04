@@ -729,6 +729,7 @@ def deployments_html(store: SnapshotStore, journal: Journal, now: datetime) -> s
         body = (
             "<p>no deployments yet. Create one in chat: "
             "<code>deploy cash_secured_put on SPY paper capital 50000</code></p>"
+            f"<p><a class=\"btn solid\" href=\"/demo?underlying={html_module.escape(settings.default_underlying, quote=True)}\">Open the demo chat</a></p>"
             f"<h2>Strategies</h2><p>{html_module.escape(list_strategies_text()).replace(chr(10), '<br>')}</p>"
         )
         return page(
@@ -765,14 +766,15 @@ def deployments_html(store: SnapshotStore, journal: Journal, now: datetime) -> s
         table = "".join(rows) if positions else "<p>no open positions</p>"
         sections.append(
             f"<h2>{html_module.escape(deployment.id)} {html_module.escape(deployment.strategy_id)}</h2>"
-            f"<p>{html_module.escape(deployment.mode)} · {html_module.escape(deployment.status)} · "
+            f"<p><span class=\"pill\">{html_module.escape(deployment.mode)}</span> "
+            f"<span class=\"pill good\">{html_module.escape(deployment.status)}</span> · "
             f"symbols {html_module.escape(','.join(deployment.symbols))} · capital ${deployment.capital_cap:,.0f} · "
             f"deployed ${ledger.deployed_collateral:,.0f} · utilization {ledger.utilization:.0%} of "
             f"{ledger.target_utilization:.0%} target · closed {len(closed)} · realized ${realized:+,.0f} · "
             f"sizing scale {deployment.sizing_scale:.2f}</p>"
-            f"<div style=\"background:#21262d;border-radius:6px;height:14px;max-width:560px\">"
-            f"<div style=\"background:#3fb950;height:14px;border-radius:6px;width:{pct:.0f}%\"></div></div>"
-            f"{table}"
+            f"<div style=\"background:var(--chip);border-radius:6px;height:14px;max-width:560px\">"
+            f"<div style=\"background:var(--good);height:14px;border-radius:6px;width:{pct:.0f}%\"></div></div>"
+            f"<div class=\"table-scroll\">{table}</div>"
         )
     stats_parts.append(
         "<div class=\"stats\">"

@@ -22,9 +22,15 @@ def test_select_reason_backend_names_missing_var():
     assert (backend, reason) == ("fallback", "missing META_MODEL_API_KEY")
 
 
-def test_select_reason_backend_meta_when_key_set():
-    backend, reason = select_reason_backend(Journal(), NOW, dict(ENV))
+def test_select_reason_backend_meta_when_key_and_budget_set():
+    env = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
+    backend, reason = select_reason_backend(Journal(), NOW, env)
     assert (backend, reason) == ("meta", "")
+
+
+def test_select_reason_backend_meta_key_alone_falls_back_without_budget():
+    backend, reason = select_reason_backend(Journal(), NOW, dict(ENV))
+    assert (backend, reason) == ("fallback", "missing MODEL_DAY_BUDGET_USD")
 
 
 def test_select_reason_backend_prefers_baseten_over_meta():

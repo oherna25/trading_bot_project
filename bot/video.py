@@ -437,7 +437,7 @@ def build_submission_brief(
         "safety": "Every submit passes the same risk gate. Live ordering ships disabled, and the kill switch always wins.",
         "replay": "Replay scores the strategy against buy-and-hold on the same bars, with next-bar fills and no lookahead.",
         "shock": "A minus two percent shock reprices every wall and position before any sizing decision.",
-        "mcp": "Fifty tools, one registry, exposed over MCP-style HTTP. Chat, slash commands, and external clients all call the same handlers.",
+        "mcp": "One tool registry, exposed over MCP-style HTTP. Chat, slash commands, and external clients all call the same handlers.",
         "wheel": "The wheel screen ranks cash-secured puts and covered calls by premium return, filtered by delta, open interest, IV rank, and earnings.",
         "outro": "Spark proposes. The engine grades it. Try the demo, ask for a spark audit, and check the journal.",
     }
@@ -544,7 +544,8 @@ def write_submission_project(project_dir: str, brief: VideoBrief) -> str:
 
 
 def render_video(project_dir: str, output_mp4: str) -> RenderResult:
-    if shutil.which("npx") is None:
+    npx = shutil.which("npx")
+    if npx is None:
         return RenderResult(
             False,
             output_mp4,
@@ -553,7 +554,7 @@ def render_video(project_dir: str, output_mp4: str) -> RenderResult:
         )
     try:
         completed = subprocess.run(
-            ["npx", "hyperframes", "render", "--output", output_mp4],
+            [npx, "hyperframes", "render", "--output", output_mp4],
             cwd=project_dir,
             capture_output=True,
             text=True,

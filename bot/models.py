@@ -231,6 +231,20 @@ def spend_today(journal: Journal, now: datetime) -> float:
     return total
 
 
+def meta_budget_reason(
+    journal: Journal, now: datetime, env: Mapping[str, str] | None = None
+) -> str:
+    values = _read_model_env(env)
+    if not values.get("META_MODEL_API_KEY"):
+        return "missing META_MODEL_API_KEY"
+    budget = _day_budget_usd(values)
+    if budget is None or budget <= 0:
+        return "missing MODEL_DAY_BUDGET_USD"
+    if spend_today(journal, now) >= budget:
+        return "day budget spent"
+    return ""
+
+
 def select_backend(
     role: str, journal: Journal, now: datetime, env: Mapping[str, str] | None = None
 ) -> tuple[str, str]:
@@ -246,14 +260,11 @@ def select_backend(
             return "user", ""
         if error:
             return "fallback", error
+    reason = meta_budget_reason(journal, now, env)
+    if reason:
+        return "fallback", reason
     values = _read_model_env(env)
-    if not values.get("META_MODEL_API_KEY"):
-        return "fallback", "missing META_MODEL_API_KEY"
-    budget = _day_budget_usd(values)
-    if budget is None or budget <= 0:
-        return "fallback", "missing MODEL_DAY_BUDGET_USD"
-    if spend_today(journal, now) >= budget:
-        return "fallback", "day budget spent"
+    budget = _day_budget_usd(values) or 0.0
     ledger_dir = values.get("LEDGER_DIR", "")
     if ledger_dir:
         day = now.date().isoformat()

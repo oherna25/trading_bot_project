@@ -95,7 +95,8 @@ def drain_reason_queue(max_jobs: int | None = None) -> int:
         except Exception as exc:
             journal.append(
                 now, "reason_failed",
-                {"symbol": symbol, "snapshot_id": snapshot_id, "reason": type(exc).__name__},
+                {"symbol": symbol, "snapshot_id": snapshot_id, "reason": type(exc).__name__,
+                 "error": str(exc)[:200]},
             )
         else:
             _reason_cache_store(cache_key, reason)
@@ -643,15 +644,25 @@ def confidence_meter_html(confidence: float) -> str:
     )
 
 
+REASON_SOURCE_LABELS = {
+    "fallback": "reason: deterministic (offline)",
+    "meta": "reason: Muse Spark",
+    "baseten": "reason: Muse Spark Open (Baseten)",
+    "user": "reason: your model",
+}
+
+
 def card_badges_html(card: TradeCard) -> str:
     arrow = "▲" if card.direction == "long" else ("▼" if card.direction == "short" else "●")
     regime_mark = "●"
+    source = REASON_SOURCE_LABELS.get(card.reason_source, f"reason: {card.reason_source}")
     return (
         f"<span class=\"badge {html.escape(card.direction)}\">{html.escape(arrow)} "
         f"{html.escape(card.direction)}</span>"
         f"<span class=\"badge regime\">{html.escape(regime_mark)} "
         f"{html.escape(card.regime)}</span>"
         f"<span class=\"badge expiry\">{html.escape(card.expiry)}</span>"
+        f"<span class=\"badge regime\">{html.escape(source)}</span>"
     )
 
 

@@ -236,15 +236,28 @@ def format_exposure_brief(
         "CHARM": "delta bleed per day",
         "VANNA": "delta per vol point",
     }.get(kind, "delta x OI x 100")
+    greek_attr = {"VEX": "vega", "DEX": "delta", "CHARM": "charm", "VANNA": "vanna"}.get(kind)
+    contracts = snapshot.contracts_list
+    if greek_attr is not None and contracts:
+        coverage = sum(1 for c in contracts if getattr(c, greek_attr) is not None) / len(contracts)
+    else:
+        coverage = 0.0 if not contracts else 1.0
     spot_text = f"{spot:.2f}" if spot is not None else "unknown"
     walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:10]
     lines = [
         f"{snapshot.underlying} {kind} brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
-        f"spot {spot_text}",
+        f"spot {spot_text} | coverage {coverage * 100.0:.0f}%",
         f"total exposure: {compact_dollars(profile.total_exposure)} ({units})",
+    ]
+    if greek_attr is not None and contracts and coverage == 0.0:
+        lines.append(
+            f"note: no {greek_attr} Greeks in snapshot {profile.snapshot_id} "
+            f"(sandbox carries no Greeks) -- walls $0 mean unknown, not flat"
+        )
+    lines.extend([
         "walls: " + "; ".join(f"{strike:g} {compact_dollars(value)}" for strike, value in walls),
         _exposure_so_what(kind, profile),
-    ]
+    ])
     return "\n".join(lines)
 
 

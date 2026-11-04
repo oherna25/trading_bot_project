@@ -54,6 +54,13 @@ def _seeded_store() -> SnapshotStore:
     return store
 
 
+def test_demo_page_has_one_heading_and_one_paper_trade_form():
+    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
+    assert page.count("<h1>") == 1
+    assert page.count('name="tool" value="take_paper_trade"') == 1
+    assert 'http-equiv="refresh"' not in page
+
+
 def test_demo_page_walks_all_four_sections():
     page = demo_html("TEST", _seeded_store(), Journal(), NOW)
     assert page.startswith("<!doctype html>")
@@ -157,7 +164,7 @@ def test_demo_cards_honors_passed_reason_env():
         _seeded_store(),
         journal,
         NOW,
-        env={"META_MODEL_API_KEY": "key-1"},
+        env={"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"},
         http_post=_reason_stub,
     )
     assert cards
@@ -168,7 +175,7 @@ def test_demo_cards_honors_passed_reason_env():
         _seeded_store(),
         Journal(),
         NOW,
-        env={"META_MODEL_API_KEY": "key-1"},
+        env={"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"},
         http_post=_reason_stub,
     )
     assert {card.reason_source for card in live} == {"meta"}

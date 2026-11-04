@@ -207,6 +207,21 @@ def test_deployments_html_shows_utilization_and_positions():
     assert "strategy deployments" in body
     assert "collateral deployed" in body
     assert "sell put 95" in body
+    assert 'href="/deployments/page"' in body
+    assert 'class="table-scroll"' in body
+    assert "var(--good)" in body
+
+
+def test_deployments_page_route_and_empty_state_link_to_demo():
+    from bot.muse import route_http
+    from bot.shapes import default_operator_config
+
+    store, journal = _put_store()
+    response = route_http("GET", "/deployments/page", {}, store, journal, default_operator_config(), NOW)
+    assert response.status == 200
+    body = response.body.decode("utf-8")
+    assert "no deployments yet" in body
+    assert "Open the demo chat" in body
 
 
 def test_plain_english_deploy_maps_to_put_selling():

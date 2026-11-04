@@ -134,5 +134,9 @@ def main(argv: list[str] | None = None) -> str:
                args.session_schedule, args.session_underlying)
 
 
+def console_main() -> None:
+    main()
+
+
 if __name__ == "__main__":
     main()

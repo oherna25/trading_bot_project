@@ -170,7 +170,7 @@ def gamma_chart_html(
     )
     return page(
         title, title, sub, body, underlying, "chart", resolved,
-        f"/chart?underlying={underlying}",
+        f"/chart?underlying={underlying}", refresh=True,
     )
 
 
@@ -338,4 +338,5 @@ def regime_board_html(store: SnapshotStore, now: datetime | None = None) -> str:
     body = f"<div id=\"live-board\">{live_board_fragment(store, moment)}</div>{script}"
     return page(
         title, title, sub, body, settings.default_underlying, "board", settings, "/board",
+        refresh=True,
     )

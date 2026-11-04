@@ -50,7 +50,8 @@ def stylesheet() -> str:
         "box-shadow:var(--shadow);position:relative;overflow:hidden}"
         ".hero::after{content:'';position:absolute;inset:auto -60px -90px auto;width:280px;height:280px;border-radius:50%;"
         "background:radial-gradient(circle,var(--glow),transparent 65%);pointer-events:none}"
-        ".hero h1{max-width:46rem}.hero p{color:var(--muted);max-width:44rem;margin:.4rem 0 0}"
+        ".hero .hero-title{font-size:clamp(1.45rem,3vw,2.1rem);margin:0 0 .35rem;font-weight:800;letter-spacing:-.02em;line-height:1.12;max-width:46rem}"
+        ".hero .hero-title::before{display:none}.hero p{color:var(--muted);max-width:44rem;margin:.4rem 0 0}"
         ".hero-row{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin-top:1rem;position:relative;z-index:1}"
         ".pill{display:inline-flex;align-items:center;gap:.4rem;font-size:.82rem;font-weight:700;border:1px solid var(--border2);"
         "border-radius:999px;padding:.32rem .7rem;background:var(--panel2);white-space:nowrap}"
@@ -166,6 +167,7 @@ def stylesheet() -> str:
 NAV_LINKS = (
     ("demo", "/demo"),
     ("dashboard", "/dashboard"),
+    ("deployments", "/deployments/page"),
     ("cards", "/cards"),
     ("board", "/board"),
     ("chart", "/chart"),
@@ -214,6 +216,7 @@ def page(
     current: str,
     settings: DashboardSettings,
     next_path: str,
+    refresh: bool = False,
 ) -> str:
     return (
         "<!doctype html>"
@@ -223,7 +226,7 @@ def page(
         "<meta name=\"description\" content=\"MarketWingMan: Muse Spark proposes, the exposure engine grades it. Paper-first options research with a journaled audit trail.\">"
         f"<link rel=\"icon\" type=\"image/png\" href=\"{ICON_URL}\">"
         f"<link rel=\"apple-touch-icon\" href=\"{ICON_URL}\">"
-        f"{refresh_meta(settings)}"
+        f"{refresh_meta(settings) if refresh else ''}"
         f"<title>{html.escape(title)} | {BRAND}</title><style>{stylesheet()}</style></head><body>"
         "<a class=\"skip\" href=\"#main\">skip to content</a>"
         "<div class=\"wrap\">"
@@ -242,5 +245,5 @@ def hero_html(eyebrow: str, heading: str, lede: str, pills: str = "") -> str:
     return (
         "<section class=\"hero\">"
         f"<span class=\"eyebrow\">{html.escape(eyebrow)}</span>"
-        f"<h1>{html.escape(heading)}</h1><p>{html.escape(lede)}</p>{row}</section>"
+        f"<h2 class=\"hero-title\">{html.escape(heading)}</h2><p>{html.escape(lede)}</p>{row}</section>"
     )

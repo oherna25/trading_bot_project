@@ -55,5 +55,9 @@ def main(argv: list[str] | None = None) -> str:
     return brief
 
 
+def console_main() -> None:
+    main()
+
+
 if __name__ == "__main__":
     main()

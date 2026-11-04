@@ -16,7 +16,8 @@ MODEL_ID_ENV = "BASETEN_REASON_MODEL_ID"
 REASON_TIMEOUT_SECONDS = 60.0
 INFERENCE_CHAT_URL = "https://inference.baseten.co/v1/chat/completions"
 REASON_MODEL_DEFAULT = "meta-models/muse-spark-open-1026"
-REASON_MAX_TOKENS = 200
+REASON_MAX_TOKENS = 1000
+REASON_REASONING = {"effort": "low"}
 REASON_SYSTEM_PROMPT = (
     "Write one sentence stating why this options trade is a good trade. "
     "Reply with that sentence only."
@@ -78,6 +79,7 @@ def _chat_payload(model_id: str, stats: dict[str, Any]) -> dict[str, Any]:
             {"role": "user", "content": json.dumps(stats)},
         ],
         "max_tokens": REASON_MAX_TOKENS,
+        "reasoning": dict(REASON_REASONING),
     }
 
 
@@ -138,6 +140,7 @@ def generate_pick(
                 {"role": "user", "content": json.dumps({"candidates": candidates})},
             ],
             "max_tokens": REASON_MAX_TOKENS,
+            "reasoning": dict(REASON_REASONING),
         }
         body = post(
             predict_url(model_id),

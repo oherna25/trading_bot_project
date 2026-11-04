@@ -9,6 +9,6 @@ No Muse text-to-speech endpoint exists in MODEL_REGISTRY (muse-voice-transcribe-
 [ 48s- 59s] safety: Every submit passes the same risk gate. Live ordering ships disabled, and the kill switch always wins.
 [ 59s- 72s] replay: Replay scores the strategy against buy-and-hold on the same bars, with next-bar fills and no lookahead.
 [ 72s- 83s] shock: A minus two percent shock reprices every wall and position before any sizing decision.
-[ 83s- 95s] mcp: Fifty tools, one registry, exposed over MCP-style HTTP. Chat, slash commands, and external clients all call the same handlers.
+[ 83s- 95s] mcp: One tool registry, exposed over MCP-style HTTP. Chat, slash commands, and external clients all call the same handlers.
 [ 95s-108s] wheel: The wheel screen ranks cash-secured puts and covered calls by premium return, filtered by delta, open interest, IV rank, and earnings.
 [108s-115s] outro: Spark proposes. The engine grades it. Try the demo, ask for a spark audit, and check the journal.

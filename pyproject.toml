@@ -1,8 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "trading-bot"
 version = "0.1.0"
 description = "Research-first trading system, walking skeleton"
 requires-python = ">=3.11"
+# Runtime is standard library only. Windows ships no IANA tz database, so
+# zoneinfo (bot/morning.py) needs the tzdata package there.
+dependencies = [
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "mypy"]
+
+[project.scripts]
+marketwingman = "run_app:console_main"
+marketwingman-demo = "run_demo:console_main"
+marketwingman-session = "run_session:console_main"
+
+[tool.setuptools]
+packages = ["bot"]
+py-modules = ["run_app", "run_demo", "run_session"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

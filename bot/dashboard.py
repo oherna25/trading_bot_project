@@ -316,4 +316,5 @@ def dashboard_html(
         "dashboard",
         settings,
         next_path,
+        refresh=True,
     )

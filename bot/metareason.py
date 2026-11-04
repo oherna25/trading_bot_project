@@ -8,7 +8,7 @@ from typing import Any, Mapping
 from bot import baseten
 from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
-from bot.models import MODEL_API_BASE_URL, MODEL_REGISTRY, HttpPost, chat_spec, effective_user_model, run_analyst
+from bot.models import MODEL_API_BASE_URL, MODEL_REGISTRY, HttpPost, chat_spec, effective_user_model, meta_budget_reason, run_analyst
 
 API_KEY_ENV = "META_MODEL_API_KEY"
 REASON_TIMEOUT_SECONDS = 60.0
@@ -32,7 +32,6 @@ def _read_meta_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 def select_reason_backend(
     journal: Journal, now: datetime, env: Mapping[str, str] | None = None
 ) -> tuple[str, str]:
-    _ = (journal, now)
     user, _, error = effective_user_model(env)
     if user is not None:
         return "user", ""
@@ -44,6 +43,9 @@ def select_reason_backend(
     values = _read_meta_env(env)
     if not values.get(API_KEY_ENV):
         return "fallback", f"missing {API_KEY_ENV}"
+    reason = meta_budget_reason(journal, now, env)
+    if reason:
+        return "fallback", reason
     return "meta", ""
 
 

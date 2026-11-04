@@ -367,6 +367,11 @@ def test_feeds_page_renders_health_table():
     assert "alpaca" in page
     assert "45 ms" in page
     assert "fallback depth" in page
+    assert "<title>feed health | MarketWingMan</title>" in page
+    assert 'href="/deployments/page"' in page
+    assert 'class="table-scroll"' in page
+    assert '<span class="fresh">ok</span>' in page
+    assert "Paper trading is the default" in page
 
 
 def test_health_reports_push_providers_and_model_key():

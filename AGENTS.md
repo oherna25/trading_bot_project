@@ -10,11 +10,17 @@ a signed action.
 
 ```bash
 python -m venv .venv
-.venv/bin/pip install pytest ruff mypy
+.venv/bin/pip install ".[dev]"
 .venv/bin/python -m pytest tests/ -q
 ```
 
-CI runs pytest plus `ruff check` plus `mypy` on Python 3.11 and 3.12
+Installs on Windows, macOS, and Linux (Python 3.11+): `pip install .`
+provides `marketwingman`, `marketwingman-demo`, and `marketwingman-session`.
+On Windows use `py -m venv .venv` and `.venv\Scripts\python` in place of
+`.venv/bin/python`.
+
+CI runs install, the console-script `--help` smokes, pytest, `ruff check`,
+and `mypy` on Ubuntu, Windows, and macOS with Python 3.11 and 3.12
 (`.github/workflows/pytest.yml`). `make test` runs the same suite.
 
 ## Operating rules

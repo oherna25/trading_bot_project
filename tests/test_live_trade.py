@@ -170,6 +170,7 @@ def test_live_page_toggle_and_gated_enable():
     page = route_http("GET", "/live", {}, store, journal, CONFIG, NOW)
     assert page.status == 200
     assert "live ordering" in page.body.decode("utf-8")
+    assert 'http-equiv="refresh"' not in page.body.decode("utf-8")
     bad = route_http("POST", "/live", FormData({"action": "enable"}), store, journal, CONFIG, NOW)
     assert bad.status == 400
     killed = route_http("POST", "/live", FormData({"action": "kill"}), store, journal, CONFIG, NOW)
