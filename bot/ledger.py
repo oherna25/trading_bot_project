@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import time
 import uuid
 from contextlib import contextmanager
@@ -27,14 +28,13 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Iterator, Optional
 
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - non-POSIX platforms
-    fcntl = None  # type: ignore[assignment]
-
-try:
+if sys.platform == "win32":  # pragma: no cover - Windows only
     import msvcrt
-except ImportError:  # pragma: no cover - non-Windows platforms
+
+    fcntl = None  # type: ignore[assignment]
+else:
+    import fcntl
+
     msvcrt = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
