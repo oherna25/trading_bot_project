@@ -6,7 +6,9 @@
 It reads the chain, computes its own dealer exposure, picks contracts, sizes against a capital ledger, sells premium on paper every session, manages the shorts to exit or expiry, and journals every step.</p>
 
 <p align="center">
+<a href="https://github.com/oherna25/trading_bot_project/actions/workflows/pytest.yml"><img alt="CI: pytest on Windows, macOS, Linux" src="https://github.com/oherna25/trading_bot_project/actions/workflows/pytest.yml/badge.svg"></a>
 <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
+<img alt="Platforms: Windows, macOS, Linux" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue">
 <img alt="Offline test suite passing" src="https://img.shields.io/badge/tests-passing-brightgreen">
 <img alt="Fully offline test suite" src="https://img.shields.io/badge/tests-fully%20offline-blueviolet">
 <img alt="Paper trading by default" src="https://img.shields.io/badge/trading-paper%20first-green">
@@ -98,6 +100,7 @@ The local tier already runs Muse Glimmer and Muse Spark Open on this machine thr
 | Evidence | Scope and limits |
 |---|---|
 | Offline test suite, `ruff`, `mypy` | Fully offline on canned fixtures. Proves logic, gates, and journaling, not live feed quality or broker behavior. Run `.venv/bin/python -m pytest tests/ -q` for the current count. |
+| Cross-platform CI | GitHub Actions runs `pip install .`, the `marketwingman` / `marketwingman-demo` / `marketwingman-session` `--help` smokes, pytest, `ruff`, and `mypy` on Ubuntu, Windows, and macOS with Python 3.11 and 3.12 (`.github/workflows/pytest.yml`). This proves install and the offline suite on all three OSes; it does not prove live feed or broker behavior on any of them. |
 | HTTP drive on a scratch bundle | Create, list, and run deployments plus chat and MCP calls against the real server. The canned chain has no Greeks, so it proves routing and persistence; candidate selection is proved separately by the stubbed Baseten pick test, which opens the non-top candidate through the paper gate. |
 | Seeded screenshot bundle | Multi-symbol chains with Greeks drive the tour pages. Numbers are real stored state for that bundle, not market data. |
 | Live venue tests | Fake venue under an armed flag proves the submit path and tagging. No real order has been placed by the test suite, by design. |
