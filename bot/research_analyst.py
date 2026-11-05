@@ -158,6 +158,7 @@ def spark_signal(
         thesis=thesis,
         confidence=_parse_confidence(reply),
         snapshot_id=snapshot_id,
+        model_id=spec.model_id,
         symbol=snapshot.underlying,
     )
 
@@ -289,6 +290,7 @@ def local_signal(
         thesis=thesis,
         confidence=_parse_confidence(reply),
         snapshot_id=snapshot_id,
+        model_id=receipt.model_id,
         symbol=snapshot.underlying,
     )
 

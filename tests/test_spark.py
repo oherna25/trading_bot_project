@@ -72,6 +72,80 @@ def test_format_spark_block_marks_prose_unverified():
     assert "CONTRADICTION" in block
 
 
+def _live_post(captured):
+    def post(url, headers, payload, timeout):
+        captured.append(payload)
+        return {
+            "choices": [{"message": {"content": "Thesis holds.\nDIRECTION: long\nCONFIDENCE: 0.6", "tool_calls": []}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+
+    return post
+
+
+def _claim_model_id(journal):
+    claims = [e for e in journal.entries() if e.kind == "spark_claim"]
+    assert claims, "expected a spark_claim journal entry"
+    return claims[-1].payload.get("model_id")
+
+
+def test_spark_audit_labels_wonder_when_meta_key_makes_the_call():
+    store = _seeded_store()
+    journal = Journal()
+    captured: list = []
+    env = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+    text = spark_audit_response(
+        "audit", "SPY", store, journal, NOW,
+        live_models=True, env=env, http_post=_live_post(captured),
+    )
+    assert captured and captured[0]["model"] == "muse-wonder-1.0"
+    assert _claim_model_id(journal) == "muse-wonder-1.0"
+    assert "model: muse-wonder-1.0" in text
+
+
+def test_spark_audit_labels_spark_open_when_baseten_key_makes_the_call():
+    store = _seeded_store()
+    journal = Journal()
+    captured: list = []
+    env = {"BASETEN_API_KEY": "test-key"}
+    text = spark_audit_response(
+        "audit", "SPY", store, journal, NOW,
+        live_models=True, env=env, http_post=_live_post(captured),
+    )
+    assert captured and captured[0]["model"] == "meta-models/muse-spark-open-1026"
+    assert _claim_model_id(journal) == "meta-models/muse-spark-open-1026"
+    assert "model: meta-models/muse-spark-open-1026" in text
+
+
+def test_spark_audit_labels_local_model_when_local_tier_makes_the_call(tmp_path):
+    weights = tmp_path / "glimmer.gguf"
+    weights.write_bytes(b"fake")
+    store = _seeded_store()
+    journal = Journal()
+    text = spark_audit_response(
+        "audit", "SPY", store, journal, NOW,
+        live_models=True, env={"GLIMMER_GGUF_PATH": str(weights)},
+        local_runner=lambda *a: {"text": "local read\nDIRECTION: long\nCONFIDENCE: 0.8"},
+    )
+    assert _claim_model_id(journal) == "muse-glimmer-3b"
+    assert "model: muse-glimmer-3b" in text
+
+
+def test_spark_panel_shows_the_model_that_actually_claimed():
+    from bot.spark import spark_panel_html
+
+    store = _seeded_store()
+    journal = Journal()
+    env = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+    spark_audit_response(
+        "audit", "SPY", store, journal, NOW,
+        live_models=True, env=env, http_post=_live_post([]),
+    )
+    html = spark_panel_html(store, journal, "SPY")
+    assert "muse-wonder-1.0" in html
+    assert "muse-spark-1.3" not in html
+
+
 def test_spark_panel_html_off_state_is_visual_and_readonly():
     from bot.spark import spark_panel_html
 

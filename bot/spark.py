@@ -94,6 +94,14 @@ def latest_spark_audit(journal: Journal) -> tuple[str, str, str, float | None]:
     return status, expected, model_dir, confidence
 
 
+def _spark_claim_model_id(journal: Journal) -> str:
+    model_id = ""
+    for entry in journal.entries():
+        if entry.kind == "spark_claim":
+            model_id = str(entry.payload.get("model_id", "") or model_id)
+    return model_id
+
+
 def spark_panel_html(store: SnapshotStore, journal: Journal, underlying: str) -> str:
     found = store.read_latest(underlying)
     if found is None:
@@ -112,9 +120,10 @@ def spark_panel_html(store: SnapshotStore, journal: Journal, underlying: str) ->
     else:
         verdict = f'<span class="pill verdict {cls}">SPARK AUDIT · {html.escape(status)}</span>'
         conf = f" · confidence {pct(confidence)}" if confidence is not None else ""
+        model_id = _spark_claim_model_id(journal) or "model not recorded"
         model_side = (
             f"<span>Muse Spark proposes</span><b>{html.escape(model_dir)}</b>"
-            f"<p class=\"sub\">muse-spark-1.3{html.escape(conf)}</p>"
+            f"<p class=\"sub\">{html.escape(model_id)}{html.escape(conf)}</p>"
         )
         note = (
             "Spark proposed. The engine graded it. Both landed in the journal — free prose never counts, only direction vs engine."
@@ -190,7 +199,7 @@ def spark_audit_response(
         direction=signal.direction,
         confidence=signal.confidence,
         thesis=signal.thesis,
-        model_id="muse-spark-1.3",
+        model_id=signal.model_id,
     )
     journal.append(
         now,

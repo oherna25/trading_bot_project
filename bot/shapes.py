@@ -104,6 +104,7 @@ class Signal:
     thesis: str
     confidence: float
     snapshot_id: str
+    model_id: str = ""
     symbol: str = ""
     status: str = "unknown"
     trigger: str = ""
