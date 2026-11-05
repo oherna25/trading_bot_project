@@ -32,7 +32,7 @@ It reads the chain, computes its own dealer exposure, picks contracts, sizes aga
 | 3 | `/cards?underlying=SPY` | Defined-risk trade cards with payoff diagrams and one-click paper execution through the same risk gate as live. |
 | 4 | `/live` | Live ordering is off. One toggle turns it on, with a small warning; the kill switch turns it off. |
 | 5 | Chat on `/demo` | Type `deploy sell puts on SPY paper capital 40000`, then `agent cycle`. The bounded cycle observes, proposes, acts, and verifies; with `BASETEN_API_KEY` set, Spark Open picks or skips a candidate and the journal shows `agent_proposal` before the gated fill. |
-| 6 | Chat on `/demo`, one-key only | The chat box has a live-models toggle (pre-checked when a key is configured). Ask `spark audit` and Spark's claim comes back graded MATCH or CONTRADICTION against the engine, journaled as `spark_claim` + `spark_verdict`. On `/cards`, refresh after a few seconds and card reasons flip from deterministic to Muse Spark Open. |
+| 6 | Chat on `/demo`, one-key only | The chat box has a live-models toggle (pre-checked when a key is configured). Ask `spark audit` and the claim comes back graded MATCH or CONTRADICTION against the engine, journaled as `spark_claim` + `spark_verdict`. The claim names the model that served the call: Muse Wonder first on the premium tier, or Muse Spark Open when `BASETEN_API_KEY` is set. On `/cards`, refresh after a few seconds and card reasons flip from deterministic to Muse Spark Open. |
 
 ## At a glance
 
@@ -219,7 +219,7 @@ Prompts that work on the seeded data:
 | Prompt | What comes back |
 |---|---|
 | `gex brief` | Spot, regime, total GEX, flip, call and put walls from the seeded SPY chain. |
-| `spark audit` | With live models on and a key set: Spark states a direction and confidence, the engine grades it MATCH or CONTRADICTION, both journaled. With no key or live models off: reads OFF and the deterministic engine answers. |
+| `spark audit` | With live models on and a key set: the serving model states a direction and confidence, and the reply, the journal, and the panel name its model id. Premium routing tries Muse Wonder first, then Spark, then local; a Baseten key serves Spark Open instead. The engine grades the claim MATCH or CONTRADICTION. With no key or live models off: reads OFF and the deterministic engine answers. |
 | `trade cards` | Ranked defined-risk cards, sized against the seeded profile. |
 | `wheel ideas` | Premium candidates that pass the delta, spread, open interest, and premium-return screens. |
 | `run deployments` | The seeded deployment sells a put credit spread on paper, journaled end to end. |

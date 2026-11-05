@@ -4,6 +4,10 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Spark audit names the serving model (2026-11-04)
+
+* The audit no longer labels every claim `muse-spark-1.3`. Since the Wonder-first change, the analyst task runs on the premium tier, so the audited call is usually served by `muse-wonder-1.0`, or by `meta-models/muse-spark-open-1026` when a Baseten key routes the portable roles. `Signal` in `bot/shapes.py` now carries `model_id`; `spark_signal` stamps the serving spec and `local_signal` stamps the local receipt in `bot/research_analyst.py`. `bot/spark.py` labels the claim, the `spark_claim` journal entry, and the dashboard panel from that value, and shows "model not recorded" for journal entries written before the fix. Covered by `tests/test_spark.py`, including wire-level tests that assert the model in the outgoing request matches the label on the claim.
+
 ## Wonder-first premium tier (2026-11-04)
 
 * `muse-wonder-1.0` now leads the premium tier for the hardest chat work. `bot/tiers.py` classifies `analyst`, `portfolio`, and `chart` as premium (with `review`/`coach`), so the tier order reviewer (Wonder) -> analyst (Spark) -> local applies to briefs, portfolio commands, and chart reads. `bot/research_analyst.py: analyst_backend` now honors `TierDecision.role` (it previously always called the Spark analyst spec), and `bot/chartread.py` routes through `select_model_tier("chart")` instead of a direct Spark backend check.
