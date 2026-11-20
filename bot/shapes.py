@@ -34,6 +34,7 @@ class OptionContract:
     bid: Optional[float] = None
     ask: Optional[float] = None
     iv: Optional[float] = None
+    greeks_modelled: bool = False
 
 
 @dataclass(frozen=True)

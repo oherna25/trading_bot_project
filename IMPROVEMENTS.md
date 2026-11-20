@@ -4,6 +4,13 @@ This file records the October 2026 logic and speed pass.
 It also lists what was deliberately left alone and what to build next.
 Every shipped item below has a regression test in the suite.
 
+## Modelled Greeks at ingest (2026-11-19)
+
+* The default Tradier sandbox chain has bid/ask but no Greeks, so every exposure chart read flat and the wheel dropped every contract. `ingest_chain` now calls `fill_greeks` in `bot/greeks.py` before saving. Spot comes from put-call parity at the nearest expiry with a call and put mid (`implied_spot`), else the latest stored bar. Each contract's IV is solved from its bid/ask mid with `ivrank.implied_volatility`, then only the missing Greeks are computed: delta and gamma per $1, vega and vanna per vol point, charm as the delta change per calendar day, put delta negative. Vendor values are never overwritten.
+* Time to expiry runs to 16:00 US/Eastern on the expiry date, so a same-day expiry before the close still gets Greeks. A bare last price is not a quote. A contract with no usable quote, a mid below intrinsic, or no time left stays unchanged.
+* `OptionContract.greeks_modelled` marks contracts with at least one local Greek and round-trips through the bundle (old bundles thaw to False). `OptionContract.iv` is untouched, so IV history and the Alpaca/Yahoo backfill behave as before. The `snapshot_ingested` journal entry carries `modelled_greeks`. The chart page subtitle and the brief coverage lines say the Greeks are modelled, and the empty-state text now says no Greeks and no usable quotes were available.
+* Covered by `tests/test_greeks.py` (finite-difference checks on every Greek's units and sign, round trip on a synthetic chain, ingest path). `test_live_brief_tolerates_bar_failure` now asserts `spot unknown` instead of `direction: flat`, since its fixture has quotes and is no longer flat.
+
 ## Demo page removed, chart views (2026-11-19)
 
 * `/demo` and its nav entry are gone. The chat box ("Ask the desk") moved to the symbol dashboard (`/dashboard?underlying=SPY`), which no longer auto-refreshes so a typed question or chat reply is not wiped by the meta refresh; `/` still refreshes. `run_demo.py`, `bot/demo_seed.py`, the `marketwingman-demo` script, and the Docker and Make demo targets stay as the zero-key way to run the app, and now point at the dashboard. Shock, share, and deployment links that pointed at `/demo` point at `/dashboard?underlying=SYM`.

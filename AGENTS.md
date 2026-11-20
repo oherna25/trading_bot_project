@@ -50,6 +50,7 @@ market APIs -> feeds -> store -> exposure -> research -> risk -> paper venue
 | Feeds | `bot/feeds.py` | `FEED_REGISTRY`, `ingest_chain`, `ingest_bars`, `live_context` |
 | Store | `bot/store.py` | `SnapshotStore`, `read_latest`, `prune`, `restore` |
 | Exposure | `bot/exposure.py` | `compute_gex`, `compute_vex`, `compute_dex`, `compute_charm`, `compute_vanna` (one `compute_exposures` pass), `compute_gex_grid` (strike by expiry; sums to the per-strike GEX) |
+| Greeks | `bot/greeks.py` | `fill_greeks`, `bs_greeks`, `implied_spot` (Black-Scholes Greeks from quote mids; sets `OptionContract.greeks_modelled`) |
 | Research | `bot/research.py` (facade) | `route_chat`, `handle_chat_query`, `live_brief`, `scheduled_brief` |
 | Research libs | `bot/research_analyst.py`, `research_formatters.py`, `research_paper.py`, `research_ingest.py` | Analyst backends, brief formatting, paper trading, ingest |
 | Risk | `bot/risk.py` | `build_intent`, `review_intent` (runs inside both submits), `submit_paper`, `IntentRejectedError`, `PaperAccount` |
@@ -108,7 +109,7 @@ all state in the `/data` volume, health on `/healthz`.
 
 - Mirror module names: `tests/test_<module>.py`.
 - Focused run: `.venv/bin/python -m pytest tests/test_risk.py -q`.
-- Full suite is about 990 tests in about 10 seconds.
+- Full suite is about 1000 tests in about 10 seconds.
 
 ## Docs map
 
@@ -122,7 +123,7 @@ all state in the `/data` volume, health on `/healthz`.
 
 - `live_brief` raises `FeedUnavailableError` when every chain feed fails.
   Bars are best effort.
-- Sandbox Tradier chains are delayed about 15 minutes and carry no Greeks.
+- Sandbox Tradier chains are delayed about 15 minutes and the vendor sends no Greeks. `ingest_chain` fills them locally (`fill_greeks`) when the chain has bid/ask; contracts with no usable quote stay at no Greeks, which reads as unknown, not flat.
 - Ideas expire at least one day out. No 0DTE.
 - Naming a ticker with no stored snapshot errors instead of falling back.
 - Feed fallback order is fixed. Chains try Tradier then Market Data. Bars

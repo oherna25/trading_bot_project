@@ -103,7 +103,7 @@ The local tier already runs Muse Glimmer and Muse Spark Open on this machine thr
 
 ## Data boundaries and limitations
 
-Demo and test data are canned vendor-shaped fixtures or seeded snapshots. Sandbox chains are delayed about 15 minutes and carry no Greeks, so a brief can read flat when the truth is unknown; the GEX brief and the VEX/DEX/CHARM/VANNA briefs report Greek coverage, with a no-Greeks caveat when coverage is 0%. Live ordering requires Tradier credentials, a signed arming action, and a supplied venue, and stays off by default. Earnings are calendar dates only; there is no filings or transcript ingestion yet. The scheduled session has no exchange holiday calendar. This is research and paper-trading software, not financial advice, and no part of it guarantees a return.
+Demo and test data are canned vendor-shaped fixtures or seeded snapshots. Sandbox chains are delayed about 15 minutes and the vendor sends no Greeks. Ingest fills missing Greeks from the chain's own bid/ask mids (Black-Scholes, constant 4% rate, no dividends, spot from put-call parity or the latest bar) and marks those contracts `greeks_modelled`; a chain with no usable quotes still has none, so a brief can read flat when the truth is unknown; the GEX brief and the VEX/DEX/CHARM/VANNA briefs report Greek coverage, with a no-Greeks caveat when coverage is 0%. Live ordering requires Tradier credentials, a signed arming action, and a supplied venue, and stays off by default. Earnings are calendar dates only; there is no filings or transcript ingestion yet. The scheduled session has no exchange holiday calendar. This is research and paper-trading software, not financial advice, and no part of it guarantees a return.
 
 ## Provenance
 

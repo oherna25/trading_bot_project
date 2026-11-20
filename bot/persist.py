@@ -77,6 +77,7 @@ def _freeze_contract(contract: OptionContract) -> dict[str, Any]:
         "bid": contract.bid,
         "ask": contract.ask,
         "iv": contract.iv,
+        "greeks_modelled": contract.greeks_modelled,
     }
 
 
@@ -95,6 +96,7 @@ def _thaw_contract(raw: dict[str, Any]) -> OptionContract:
         bid=raw.get("bid"),
         ask=raw.get("ask"),
         iv=raw.get("iv"),
+        greeks_modelled=bool(raw.get("greeks_modelled", False)),
     )
 
 

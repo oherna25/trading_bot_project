@@ -9,6 +9,7 @@ from urllib.parse import quote as _urlencode
 
 from bot.diff import compact_dollars
 from bot.exposure import compute_exposures, compute_gex, compute_gex_grid
+from bot.greeks import MODELLED_NOTE
 from bot.shapes import (
     Bar,
     ChainSnapshot,
@@ -261,8 +262,8 @@ _NET_LEGEND = _legend(
 
 def _no_data(what: str) -> str:
     return (
-        f'<p class="sub">No {html.escape(what)} in this snapshot. Sandbox chains carry no Greeks, '
-        "so zero means unknown, not flat.</p>"
+        f'<p class="sub">No {html.escape(what)} in this snapshot. The vendor sent no Greeks and '
+        "no usable quotes were available to model them, so zero means unknown, not flat.</p>"
     )
 
 
@@ -480,6 +481,8 @@ def gamma_chart_html(
         f"snapshot {profile.snapshot_id}{age} | source {snapshot.source_name} "
         f"| refreshes every {refresh}s"
     )
+    if any(c.greeks_modelled for c in snapshot.contracts_list):
+        sub += f" | {MODELLED_NOTE}"
     body = (
         f"{ticker_search_html(underlying, symbols or [underlying], selected.key)}"
         f"{chart_stats_html(data)}"

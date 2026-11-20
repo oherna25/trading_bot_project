@@ -8,6 +8,7 @@ from typing import Optional
 
 from bot.diff import compact_dollars, pct as format_pct, signed_dollars
 from bot.exposure import compute_gex
+from bot.greeks import MODELLED_NOTE
 from bot.shapes import (
     Bar,
     ChainSnapshot,
@@ -19,6 +20,10 @@ from bot.shapes import (
     VexProfile,
 )
 from bot.store import SnapshotStore
+
+def _modelled_suffix(contracts) -> str:
+    return f" ({MODELLED_NOTE})" if any(c.greeks_modelled for c in contracts) else ""
+
 
 def derive_display(signal: Signal, snapshot: ChainSnapshot, profile: GexProfile, bar: Optional[Bar]) -> Signal:
     contracts = snapshot.contracts_list
@@ -115,7 +120,7 @@ def format_brief(
         stale_quote = quote_age > timedelta(minutes=15) and quote_age > 3 * snap_age
     lines = [
         f"{snapshot.underlying} GEX brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
-        f"spot {spot_text} | coverage {signal.coverage * 100.0:.0f}% | regime {regime}",
+        f"spot {spot_text} | coverage {signal.coverage * 100.0:.0f}%{_modelled_suffix(snapshot.contracts_list)} | regime {regime}",
     ]
     if stale_quote:
         lines.append("STALE -- refresh the quote before trading")
@@ -246,13 +251,13 @@ def format_exposure_brief(
     walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))[:10]
     lines = [
         f"{snapshot.underlying} {kind} brief -- snapshot {profile.snapshot_id} (age {age}, source {snapshot.source_name})",
-        f"spot {spot_text} | coverage {coverage * 100.0:.0f}%",
+        f"spot {spot_text} | coverage {coverage * 100.0:.0f}%{_modelled_suffix(contracts)}",
         f"total exposure: {compact_dollars(profile.total_exposure)} ({units})",
     ]
     if greek_attr is not None and contracts and coverage == 0.0:
         lines.append(
             f"note: no {greek_attr} Greeks in snapshot {profile.snapshot_id} "
-            f"(sandbox carries no Greeks) -- walls $0 mean unknown, not flat"
+            f"(vendor sent none and no usable quotes to model them) -- walls $0 mean unknown, not flat"
         )
     lines.extend([
         "walls: " + "; ".join(f"{strike:g} {compact_dollars(value)}" for strike, value in walls),
