@@ -60,7 +60,7 @@ def test_spark_audit_offline_journals_verdict():
     store = _seeded_store()
     journal = Journal()
     text = spark_audit_response("audit", "SPY", store, journal, NOW, live_models=False)
-    assert text.startswith("spark audit: OFF")
+    assert text.startswith("claude audit: OFF")
     kinds = [e.kind for e in journal.entries()]
     assert "spark_verdict" in kinds
 
@@ -93,14 +93,14 @@ def test_spark_audit_labels_wonder_when_meta_key_makes_the_call():
     store = _seeded_store()
     journal = Journal()
     captured: list = []
-    env = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+    env = {"ANTHROPIC_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
     text = spark_audit_response(
         "audit", "SPY", store, journal, NOW,
         live_models=True, env=env, http_post=_live_post(captured),
     )
-    assert captured and captured[0]["model"] == "muse-wonder-1.0"
-    assert _claim_model_id(journal) == "muse-wonder-1.0"
-    assert "model: muse-wonder-1.0" in text
+    assert captured and captured[0]["model"] == "claude-opus-5-5"
+    assert _claim_model_id(journal) == "claude-opus-5-5"
+    assert "model: claude-opus-5-5" in text
 
 
 def test_spark_audit_labels_spark_open_when_baseten_key_makes_the_call():
@@ -136,14 +136,13 @@ def test_spark_panel_shows_the_model_that_actually_claimed():
 
     store = _seeded_store()
     journal = Journal()
-    env = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+    env = {"ANTHROPIC_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
     spark_audit_response(
         "audit", "SPY", store, journal, NOW,
         live_models=True, env=env, http_post=_live_post([]),
     )
     html = spark_panel_html(store, journal, "SPY")
-    assert "muse-wonder-1.0" in html
-    assert "muse-spark-1.3" not in html
+    assert "claude-opus-5-5" in html
 
 
 def test_spark_panel_html_off_state_is_visual_and_readonly():
@@ -152,6 +151,6 @@ def test_spark_panel_html_off_state_is_visual_and_readonly():
     journal = Journal()
     html = spark_panel_html(_seeded_store(), journal, "SPY")
     assert "spark-panel" in html
-    assert "SPARK AUDIT" in html and "OFF" in html
-    assert "Spark (live models)" in html and "Engine disposes" in html
+    assert "CLAUDE AUDIT" in html and "OFF" in html
+    assert "Claude (live models)" in html and "Engine disposes" in html
     assert journal.entries() == []

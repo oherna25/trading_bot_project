@@ -1,32 +1,15 @@
-import base64
 from datetime import datetime, timezone
 
 import pytest
 
-from bot.cards import (
-    clear_share_cache,
-    milestone_text,
-    render_milestone_art,
-    render_signal_art,
-    share_card,
-    share_html,
-    share_text,
-)
+from bot.cards import share_card, share_html, share_text
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, OperatorProfile, OptionContract
 from bot.store import SnapshotStore
 from bot.tradecards import PROFILE_REQUIRED, TradeCard
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
-ART = base64.b64encode(b"fake-art-bytes").decode("ascii")
-
-
-@pytest.fixture(autouse=True)
-def _clean_cache():
-    clear_share_cache()
-    yield
-    clear_share_cache()
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 
 
 def _card(**overrides):
@@ -64,60 +47,22 @@ def _seeded_store(with_profile=True) -> SnapshotStore:
     return store
 
 
-def _art_stub(log):
-    def post(url, headers, payload, timeout):
-        log.append(payload)
-        assert payload["model"] == "muse-image-1.0"
-        assert "no text" in payload["prompt"]
-        return {"data": [{"b64_json": ART}]}
-
-    return post
-
-
 def test_share_text_covers_card():
-    text = share_text(_card(), art_hash="ab" * 32)
+    text = share_text(_card())
     assert "TEST short single put 100.0 2026-11-20" in text
     assert "65%" in text and "short-gamma" in text
     assert "max loss $250" in text
     assert "why: r" in text
-    assert "art abababababab" in text
+    assert "art" not in text.split("why:")[1].splitlines()[1]
 
 
-def test_share_text_without_art_notes_models():
-    assert "art: needs live models" in share_text(_card())
-
-
-def test_share_card_offline_returns_caption():
+def test_share_card_returns_caption_without_a_model_call():
     def explode(*args, **kwargs):
-        raise AssertionError("no model call offline")
+        raise AssertionError("no model call for a caption")
 
-    journal = Journal()
-    text = share_card(0, "TEST", _seeded_store(), journal, NOW, env=dict(ENV), http_post=explode)
+    text = share_card(0, "TEST", _seeded_store(), Journal(), NOW, env={}, http_post=explode)
     assert "TEST short" in text
-    assert "art: needs live models" in text
-    assert journal.entries()[-1].kind == "share_skipped"
-
-
-def test_share_card_live_renders_art():
-    log = []
-    journal = Journal()
-    text = share_card(0, "TEST", _seeded_store(), journal, NOW, live_models=True,
-                      env=dict(ENV), http_post=_art_stub(log))
-    assert "TEST short" in text and "art " in text
-    assert "needs live models" not in text
-    kinds = [entry.kind for entry in journal.entries()]
-    assert "signal_card" in kinds and "model_receipt" in kinds
-
-
-def test_signal_art_caches_by_prompt():
-    log = []
-    journal = Journal()
-    first = render_signal_art(_card(), journal, NOW, dict(ENV), _art_stub(log))
-    second = render_signal_art(_card(), journal, NOW, dict(ENV), _art_stub(log))
-    assert len(log) == 1
-    assert first and second and first["art_hash"] == second["art_hash"]
-    cached = [e for e in journal.entries() if e.payload.get("cached") is True]
-    assert len(cached) == 1
+    assert "/dashboard?underlying=TEST" in text
 
 
 def test_share_card_needs_profile():
@@ -131,26 +76,7 @@ def test_share_card_index_out_of_range():
         share_card(9, "TEST", _seeded_store(), journal, NOW)
 
 
-def test_share_html_embeds_art():
-    import hashlib
-
-    page = share_html(_card(), art=b"fake-art-bytes", url=None)
-    assert "<img" in page and "data:image/png;base64," in page
+def test_share_html_is_caption_only():
+    page = share_html(_card())
     assert "TEST short" in page
-    assert f"art {hashlib.sha256(b'fake-art-bytes').hexdigest()[:12]}" in page
-    assert "needs live models" not in page
-
-
-def test_milestone_text_signs():
-    assert milestone_text(250.0) == "up $250 today"
-    assert milestone_text(-30.0) == "down $30 today"
-    assert milestone_text(0.0) == "flat today"
-
-
-def test_milestone_art_live_and_skipped():
-    log = []
-    journal = Journal()
-    art = render_milestone_art("up $250 today", journal, NOW, dict(ENV), _art_stub(log))
-    assert art is not None
-    assert "milestone_card" in [entry.kind for entry in journal.entries()]
-    assert render_milestone_art("up $1 today", Journal(), NOW, {}) is None
+    assert "<img alt=\"trade card art\"" not in page

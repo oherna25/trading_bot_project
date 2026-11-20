@@ -18,7 +18,7 @@ from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
 
 
 def _chat_stub(*args):
@@ -266,7 +266,7 @@ def test_meta_stub_success_journals_model_reason():
         env=dict(ENV), http_post=_chat_stub,
     )
     assert [card.reason for card in live] == ["Model says go.", "Model says go."]
-    assert {card.reason_source for card in live} == {"meta"}
+    assert {card.reason_source for card in live} == {"claude"}
     drained = [entry for entry in journal.entries() if entry.kind == "trade_card_reason"]
     assert len(drained) == 4
     assert drained[0].payload["symbol"] == "TEST"
@@ -300,7 +300,7 @@ def test_meta_reason_cached_per_card_stats():
     second = build_trade_cards(entries, None, NOW, journal, env=dict(ENV), http_post=counting)
     assert len(calls) == 2
     assert [card.reason for card in second] == ["Model says go.", "Model says go."]
-    assert {card.reason_source for card in second} == {"meta"}
+    assert {card.reason_source for card in second} == {"claude"}
     assert [e.payload["cached"] for e in journal.entries()] == [True, True]
     clear_reason_cache()
     build_trade_cards(entries, None, NOW, Journal(), env=dict(ENV), http_post=counting)
@@ -353,7 +353,7 @@ def test_reason_worker_generates_off_request_path():
             _entries(_seeded_store()), None, NOW, Journal(),
             env=dict(ENV), http_post=counting,
         )
-        assert {card.reason_source for card in live} == {"meta"}
+        assert {card.reason_source for card in live} == {"claude"}
     finally:
         stop_reason_worker()
 
@@ -410,7 +410,7 @@ def test_missing_env_falls_back_without_calling_http():
     cards = build_trade_cards(_entries(_seeded_store()), None, NOW, journal, env={}, http_post=exploding)
     assert {card.reason_source for card in cards} == {"fallback"}
     payload = journal.entries()[0].payload
-    assert payload["reason"] == "missing META_MODEL_API_KEY"
+    assert payload["reason"] == "missing ANTHROPIC_API_KEY"
 
 
 def test_card_wall_matches_brief_dollar_gex():

@@ -5,34 +5,33 @@ import json
 import os
 import time
 import urllib.request
-import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
+from bot import claude
 from bot.config import read_dotenv as _read_dotenv
 from bot.exposure import compute_gex
 from bot.journal import Journal
 from bot.ledger import reserve_budget, settle_journal_receipts
-from bot.shapes import ChainSnapshot, ImageOptions, ModelReceipt, UserModelConfig
+from bot.shapes import ChainSnapshot, ModelReceipt, UserModelConfig
 
-MODEL_API_BASE_URL = "https://api.meta.ai/v1"
+MODEL_API_BASE_URL = claude.BASE_URL
+MODEL_API_KEY_ENV = claude.API_KEY_ENV
 MODEL_TIMEOUT_SECONDS = 60.0
 MODEL_MAX_TOKENS = 1200
 MODEL_MAX_ROUNDS = 2
 MODEL_REASONING_EFFORT = "low"
-IMAGE_EDIT_ENDPOINT = "/images/edits"
-IMAGE_RESPONSES_ENDPOINT = "/responses"
 
 USER_MODEL_KEY_ENV = "USER_MODEL_API_KEY"
 USER_MODEL_BASE_URL_ENV = "USER_MODEL_BASE_URL"
 USER_MODEL_ID_ENV = "USER_MODEL_ID"
 USER_MODEL_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 USER_MODEL_DEFAULT_MODEL_ID = "gpt-4o-mini"
+PORTABLE_CHAT_ENDPOINT = "/chat/completions"
 
-# Roles any OpenAI-compatible chat API can serve. Grounding (/responses plus
-# web search), voice transcription, and image generation stay on the built-in
-# key because their endpoints are provider-specific.
+# Roles any OpenAI-compatible chat API can serve. Grounding stays on the
+# built-in Claude key because web search is a provider-specific server tool.
 USER_PORTABLE_ROLES = ("analyst", "reviewer")
 
 HttpPost = Callable[..., Any]
@@ -50,14 +49,12 @@ class ModelSpec:
 
 
 MODEL_REGISTRY = {
-    "analyst": ModelSpec("muse-spark-1.3", "/chat/completions", "mtok", 1.25, 4.25, "deterministic flip rule"),
-    "grounding": ModelSpec("muse-spark-1.3", "/responses", "mtok", 1.25, 4.25, "skip grounding"),
+    "analyst": ModelSpec(claude.MODEL_ID, "/messages", "mtok", 4.00, 20.00, "deterministic flip rule"),
+    "grounding": ModelSpec(claude.MODEL_ID, "/messages", "mtok", 4.00, 20.00, "skip grounding"),
     "reviewer": ModelSpec(
-        "muse-wonder-1.0", "/chat/completions", "mtok", 4.00, 20.00, "skip review",
+        claude.MODEL_ID, "/messages", "mtok", 4.00, 20.00, "skip review",
         reasoning_effort="high",
     ),
-    "transcriber": ModelSpec("muse-voice-transcribe-1.0", "/asr/transcribe", "minute", 0.003, 0.0, "reject voice"),
-    "artist": ModelSpec("muse-image-1.0", "/images/generations", "image", 0.01, 0.0, "skip card"),
 }
 
 
@@ -65,8 +62,6 @@ RESERVE_ESTIMATE_USD = {
     "analyst": 0.05,
     "grounding": 0.05,
     "reviewer": 0.10,
-    "transcriber": 0.01,
-    "artist": 0.02,
 }
 RESERVE_ESTIMATE_DEFAULT_USD = 0.05
 
@@ -76,7 +71,7 @@ def _read_model_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
         return dict(env)
     file_values = _read_dotenv()
     out: dict[str, str] = {}
-    for name in ("META_MODEL_API_KEY", "MODEL_DAY_BUDGET_USD", "LEDGER_DIR"):
+    for name in (MODEL_API_KEY_ENV, "MODEL_DAY_BUDGET_USD", "LEDGER_DIR"):
         value = os.environ.get(name) or file_values.get(name)
         if value:
             out[name] = value
@@ -84,7 +79,8 @@ def _read_model_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
 
 
 def model_api_key(env: Mapping[str, str] | None = None) -> str:
-    return _read_model_env(env).get("META_MODEL_API_KEY", "")
+    return _read_model_env(env).get(MODEL_API_KEY_ENV, "")
+
 
 
 def validate_user_model(
@@ -231,7 +227,9 @@ def chat_spec(role: str, env: Mapping[str, str] | None = None) -> ModelSpec:
     config, _, _ = portable_config(env)
     if config is None:
         return spec
-    return replace(spec, model_id=config.model_id, price_in=0.0, price_out=0.0)
+    return replace(
+        spec, model_id=config.model_id, endpoint=PORTABLE_CHAT_ENDPOINT, price_in=0.0, price_out=0.0
+    )
 
 
 def chat_api_key(role: str, env: Mapping[str, str] | None = None) -> str:
@@ -271,12 +269,12 @@ def spend_today(journal: Journal, now: datetime) -> float:
     return total
 
 
-def meta_budget_reason(
+def claude_budget_reason(
     journal: Journal, now: datetime, env: Mapping[str, str] | None = None
 ) -> str:
     values = _read_model_env(env)
-    if not values.get("META_MODEL_API_KEY"):
-        return "missing META_MODEL_API_KEY"
+    if not values.get(MODEL_API_KEY_ENV):
+        return f"missing {MODEL_API_KEY_ENV}"
     budget = _day_budget_usd(values)
     if budget is None or budget <= 0:
         return "missing MODEL_DAY_BUDGET_USD"
@@ -300,7 +298,7 @@ def select_backend(
             return source, ""
         if error:
             return "fallback", error
-    reason = meta_budget_reason(journal, now, env)
+    reason = claude_budget_reason(journal, now, env)
     if reason:
         return "fallback", reason
     values = _read_model_env(env)
@@ -353,269 +351,6 @@ def _urllib_post(url: str, headers: dict[str, str], payload: dict[str, Any], tim
         return json.loads(response.read().decode("utf-8"))
 
 
-HttpPostMultipart = Callable[..., Any]
-
-
-def _urllib_post_multipart(
-    url: str, headers: dict[str, str], parts: list[tuple[str, str, str | None, bytes]], timeout: float
-) -> Any:
-    boundary = "----bot" + uuid.uuid4().hex
-    buf = b""
-    for name, content_type, filename, data in parts:
-        buf += f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"'.encode()
-        if filename is not None:
-            buf += f'; filename="{filename}"'.encode()
-        buf += f"\r\nContent-Type: {content_type}\r\n\r\n".encode() + data + b"\r\n"
-    buf += f"--{boundary}--\r\n".encode()
-    merged = dict(headers)
-    merged["Content-Type"] = "multipart/form-data; boundary=" + boundary
-    request = urllib.request.Request(url, data=buf, headers=merged)
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def transcribe_audio(
-    spec: ModelSpec,
-    api_key: str,
-    audio_wav: bytes,
-    http_post_multipart: HttpPostMultipart | None = None,
-    timeout: float = MODEL_TIMEOUT_SECONDS,
-) -> tuple[Any, float]:
-    post = http_post_multipart or _urllib_post_multipart
-    request_json = json.dumps({"mode": "DIARIZATION", "model": spec.model_id, "audioEncoding": "WAV"})
-    parts = [
-        ("request", "application/json", None, request_json.encode("utf-8")),
-        ("audio", "audio/wav", "voice.wav", audio_wav),
-    ]
-    started = time.monotonic()
-    body = post(
-        MODEL_API_BASE_URL + spec.endpoint,
-        {"Authorization": f"Bearer {api_key}"},
-        parts,
-        timeout,
-    )
-    return body, (time.monotonic() - started) * 1000.0
-
-
-def image_cost_usd(spec: ModelSpec, options: ImageOptions | None = None) -> float:
-    count = options.n if options is not None else 1
-    return spec.price_in * count
-
-
-def _validate_image_options(options: ImageOptions) -> None:
-    if options.n < 1 or options.n > 10:
-        raise ValueError(f"invalid n {options.n} (needs 1-10)")
-    if options.size is not None and options.size != "auto":
-        parts = options.size.lower().split("x")
-        if len(parts) != 2 or not all(part.isdigit() for part in parts):
-            raise ValueError(f"invalid size {options.size!r} (needs WxH or auto)")
-        width, height = int(parts[0]), int(parts[1])
-        if width <= 0 or height <= 0:
-            raise ValueError(f"invalid size {options.size!r} (needs WxH or auto)")
-        ratio = max(width, height) / min(width, height)
-        if ratio > 16:
-            raise ValueError(f"invalid size {options.size!r} (aspect beyond 16:1)")
-    if options.response_format is not None and options.response_format not in ("b64_json", "url"):
-        raise ValueError(f"invalid response_format {options.response_format!r}")
-    if options.output_format is not None and options.output_format not in ("webp", "png", "jpeg"):
-        raise ValueError(f"invalid output_format {options.output_format!r}")
-    if options.reasoning_strength is not None and options.reasoning_strength not in ("high", "low"):
-        raise ValueError(f"invalid reasoning_strength {options.reasoning_strength!r}")
-
-
-def _image_payload(model_id: str, prompt: str, options: ImageOptions | None) -> dict[str, Any]:
-    if not prompt.strip():
-        raise ValueError("image prompt must be a non-empty string")
-    payload: dict[str, Any] = {"model": model_id, "prompt": prompt, "n": 1}
-    if options is None:
-        return payload
-    _validate_image_options(options)
-    payload["n"] = options.n
-    if options.size is not None and options.size != "auto":
-        payload["size"] = options.size
-    if options.response_format is not None:
-        payload["response_format"] = options.response_format
-    if options.output_format is not None:
-        payload["output_format"] = options.output_format
-    if options.reasoning_strength is not None:
-        payload["reasoning_strength"] = options.reasoning_strength
-    tool_enablement = {
-        name: value
-        for name, value in (
-            ("enable_image_search", options.enable_image_search),
-            ("enable_web_search", options.enable_web_search),
-            ("enable_shell", options.enable_shell),
-        )
-        if value is not None
-    }
-    if tool_enablement:
-        payload["tool_enablement"] = tool_enablement
-    if options.user is not None:
-        payload["user"] = options.user
-    return payload
-
-
-def generate_image(
-    spec: ModelSpec,
-    api_key: str,
-    prompt: str,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-    timeout: float = MODEL_TIMEOUT_SECONDS,
-) -> tuple[Any, float]:
-    post = http_post or _urllib_post
-    started = time.monotonic()
-    body = post(
-        MODEL_API_BASE_URL + spec.endpoint,
-        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        _image_payload(spec.model_id, prompt, options),
-        timeout,
-    )
-    return body, (time.monotonic() - started) * 1000.0
-
-
-def _normalize_edit_images(images: Any) -> list[dict[str, Any]]:
-    if not isinstance(images, (list, tuple)) or not 1 <= len(images) <= 10:
-        raise ValueError("edit needs 1-10 input images")
-    normalized: list[dict[str, Any]] = []
-    for item in images:
-        if isinstance(item, str):
-            if not item.strip():
-                raise ValueError("edit image_url must be a non-empty string")
-            normalized.append({"image_url": item})
-        elif isinstance(item, Mapping):
-            has_url = "image_url" in item and item["image_url"]
-            has_file = "file_id" in item and item["file_id"]
-            if bool(has_url) == bool(has_file):
-                raise ValueError("each edit image needs exactly one of image_url or file_id")
-            normalized.append(dict(item))
-        else:
-            raise ValueError("each edit image must be a URL string or mapping")
-    return normalized
-
-
-def edit_image(
-    spec: ModelSpec,
-    api_key: str,
-    prompt: str,
-    images: list[str] | list[dict[str, Any]] | tuple[Any, ...],
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-    timeout: float = MODEL_TIMEOUT_SECONDS,
-) -> tuple[Any, float]:
-    if not prompt.strip():
-        raise ValueError("image prompt must be a non-empty string")
-    if options is not None:
-        _validate_image_options(options)
-    payload = _image_payload(spec.model_id, prompt, options)
-    payload["images"] = _normalize_edit_images(images)
-    post = http_post or _urllib_post
-    started = time.monotonic()
-    body = post(
-        MODEL_API_BASE_URL + IMAGE_EDIT_ENDPOINT,
-        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload,
-        timeout,
-    )
-    return body, (time.monotonic() - started) * 1000.0
-
-
-def _responses_image_tool(options: ImageOptions | None) -> list[dict[str, Any]]:
-    if options is None:
-        return []
-    tool: dict[str, Any] = {"type": "image_generation"}
-    if options.enable_image_search is not None:
-        tool["enable_image_search"] = options.enable_image_search
-    if options.enable_web_search is not None:
-        tool["enable_web_search"] = options.enable_web_search
-    if options.enable_shell is not None:
-        tool["enable_shell"] = options.enable_shell
-    if options.reasoning_strength is not None:
-        tool["reasoning_strength"] = options.reasoning_strength
-    if options.size is not None and options.size != "auto":
-        tool["size"] = options.size
-    if options.output_format is not None:
-        tool["output_format"] = options.output_format
-    if len(tool) == 1:
-        return []
-    return [tool]
-
-
-def refine_image(
-    spec: ModelSpec,
-    api_key: str,
-    prompt: str,
-    previous_response_id: str | None = None,
-    reference_images: list[str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-    store: bool = True,
-    timeout: float = MODEL_TIMEOUT_SECONDS,
-) -> tuple[Any, float]:
-    if not prompt.strip():
-        raise ValueError("image prompt must be a non-empty string")
-    if options is not None:
-        _validate_image_options(options)
-    if previous_response_id is not None and not previous_response_id.strip():
-        raise ValueError("previous_response_id must be a non-empty string")
-    payload: dict[str, Any] = {"model": spec.model_id, "store": store}
-    if previous_response_id is not None and store:
-        payload["previous_response_id"] = previous_response_id
-        payload["input"] = prompt
-    elif reference_images:
-        content: list[dict[str, Any]] = []
-        for url in reference_images:
-            content.append({"type": "input_text", "text": "reference image:"})
-            content.append({"type": "input_image", "image_url": url})
-        content.append({"type": "input_text", "text": prompt})
-        payload["input"] = [{"role": "user", "content": content}]
-    else:
-        payload["input"] = prompt
-    tools = _responses_image_tool(options)
-    if tools:
-        payload["tools"] = tools
-    post = http_post or _urllib_post
-    started = time.monotonic()
-    body = post(
-        MODEL_API_BASE_URL + IMAGE_RESPONSES_ENDPOINT,
-        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload,
-        timeout,
-    )
-    return body, (time.monotonic() - started) * 1000.0
-
-
-def parse_responses_image(body: Any) -> dict[str, Any | None]:
-    result: dict[str, Any | None] = {
-        "b64": None,
-        "response_id": None,
-        "call_id": None,
-        "reasoning": None,
-    }
-    if not isinstance(body, dict):
-        return result
-    if isinstance(body.get("id"), str):
-        result["response_id"] = body["id"]
-    for item in body.get("output", []) or []:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "image_generation_call" and result["b64"] is None:
-            if isinstance(item.get("result"), str):
-                result["b64"] = item["result"]
-            if isinstance(item.get("id"), str):
-                result["call_id"] = item["id"]
-        if item.get("type") == "reasoning" and result["reasoning"] is None:
-            summaries = item.get("summary", []) or []
-            texts = [
-                part.get("text", "") or part.get("summary_text", "")
-                for part in summaries
-                if isinstance(part, dict) and (part.get("text") or part.get("summary_text"))
-            ]
-            if texts:
-                result["reasoning"] = " ".join(texts)
-    return result
-
-
 def run_responses(
     spec: ModelSpec,
     api_key: str,
@@ -626,7 +361,6 @@ def run_responses(
     http_post: HttpPost | None = None,
     timeout: float = MODEL_TIMEOUT_SECONDS,
 ) -> tuple[str, ModelReceipt]:
-    post = http_post or _urllib_post
     payload: dict[str, Any] = {
         "model": spec.model_id,
         "input": input_text,
@@ -635,12 +369,15 @@ def run_responses(
     if tools:
         payload["tools"] = tools
     started = time.monotonic()
-    body = post(
-        MODEL_API_BASE_URL + spec.endpoint,
-        {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        payload,
-        timeout,
-    )
+    if http_post is None:
+        body = claude.grounded(api_key, spec.model_id, input_text, tools, MODEL_REASONING_EFFORT, timeout)
+    else:
+        body = http_post(
+            MODEL_API_BASE_URL + spec.endpoint,
+            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            payload,
+            timeout,
+        )
     latency_ms = (time.monotonic() - started) * 1000.0
     usage = body.get("usage", {}) or {}
     tokens_in = int(usage.get("input_tokens", 0) or 0)
@@ -697,7 +434,9 @@ def run_analyst(
     base_url: str = MODEL_API_BASE_URL,
     role_name: str = "analyst",
 ) -> tuple[str, list[ModelReceipt]]:
-    post = http_post or _urllib_post
+    # Claude goes through the SDK; every other backend is OpenAI-compatible
+    # HTTP. An injected http_post replaces either transport.
+    on_claude = base_url == claude.BASE_URL
     current = list(messages)
     receipts: list[ModelReceipt] = []
     text = ""
@@ -705,24 +444,31 @@ def run_analyst(
         payload: dict[str, Any] = {
             "model": spec.model_id,
             "messages": current,
-            "max_tokens": MODEL_MAX_TOKENS,
-            "temperature": 0,
+            "max_tokens": claude.MAX_TOKENS if on_claude else MODEL_MAX_TOKENS,
             "reasoning_effort": reasoning_effort if reasoning_effort is not None else spec.reasoning_effort,
         }
+        if not on_claude:
+            # Claude rejects sampling parameters.
+            payload["temperature"] = 0
         if tools:
             payload["tools"] = tools
         started = time.monotonic()
-        body = post(
-            base_url + spec.endpoint,
-            {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            payload,
-            timeout,
-        )
+        if on_claude and http_post is None:
+            body = claude.chat(api_key, payload, timeout)
+        else:
+            body = (http_post or _urllib_post)(
+                base_url + spec.endpoint,
+                {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                payload,
+                timeout,
+            )
         latency_ms = (time.monotonic() - started) * 1000.0
         usage = body.get("usage", {}) or {}
+        # A refusal fallback can answer on another model; record the one that ran.
+        served_by = (body.get("model") if on_claude else None) or spec.model_id
         receipts.append(
             ModelReceipt(
-                model_id=spec.model_id,
+                model_id=served_by,
                 role_name=role_name,
                 prompt_hash=prompt_hash(prompt_text),
                 tokens_in=int(usage.get("prompt_tokens", 0) or 0),

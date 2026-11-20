@@ -12,7 +12,7 @@ from bot.shapes import Bar
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 
 
 def _bar(close):
@@ -190,7 +190,7 @@ def test_spark_assist_translates_unknown():
 
     def post(url, headers, payload, timeout):
         log.append(payload)
-        assert payload["model"] == "muse-wonder-1.0"
+        assert payload["model"] == "claude-opus-5-5"
         assert payload["reasoning_effort"] == "high"
         return bodies[len(log) - 1]
 

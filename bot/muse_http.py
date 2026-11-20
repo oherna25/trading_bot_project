@@ -14,10 +14,10 @@ from urllib.parse import parse_qs
 
 from bot.charts import gamma_chart_html, regime_board_html
 from bot.config import env_value as _env_value
-from bot.demo import demo_html
 from bot.exposure import compute_gex
 from bot.feeds import feed_health, feed_health_html
 from bot.journal import Journal
+from bot.claude import sdk_available as claude_sdk_available
 from bot.models import user_model_form_defaults, user_model_status
 from bot.research import (
     paper_pnl_text,
@@ -133,7 +133,7 @@ def openapi_spec() -> dict:
         "paths": {
             "/chat": {
                 "post": {
-                    "summary": "Chat with Muse",
+                    "summary": "Chat with Claude",
                     "requestBody": {"required": True},
                     "responses": {"200": {"description": "Chat reply"}},
                 }
@@ -203,7 +203,7 @@ def openapi_spec() -> dict:
             },
             "/docread": {
                 "post": {
-                    "summary": "Segment and read a document screenshot",
+                    "summary": "Read a document screenshot",
                     "requestBody": {"required": True},
                     "responses": {"200": {"description": "Document reading"}},
                 }
@@ -300,14 +300,8 @@ def openapi_spec() -> dict:
             },
             "/chart": {
                 "get": {
-                    "summary": "Gamma chart",
+                    "summary": "Exposure charts: GEX ladder, heatmap, VEX, DEX, charm, vanna (view parameter)",
                     "responses": {"200": {"description": "Chart page"}},
-                }
-            },
-            "/demo": {
-                "get": {
-                    "summary": "Demo brief",
-                    "responses": {"200": {"description": "Demo page"}},
                 }
             },
             "/shock": {
@@ -379,7 +373,8 @@ def health_detail(
         "quote_age_seconds": quote_age_seconds,
         "underlyings": store.list_underlyings(),
         "push_providers": providers,
-        "model_key_set": bool(_env_value("META_MODEL_API_KEY", "", env)),
+        "model_key_set": bool(_env_value("ANTHROPIC_API_KEY", "", env)),
+        "claude_sdk": claude_sdk_available(),
         "user_key_set": bool(_env_value("USER_MODEL_API_KEY", "", env)),
         "baseten_key_set": bool(_env_value("BASETEN_API_KEY", "", env)),
         "user_model": user_model_status(env).get("user_model"),
@@ -436,12 +431,12 @@ ACTION_POST_ONLY = frozenset({
 ACTION_ARG_KEYS = (
     "query", "command", "question", "symbol", "symbols", "count", "index",
     "snapshot", "shock_pct", "percent", "pct", "text", "holdings", "answer",
-    "live_models", "grounding", "cards", "paper_trade",
+    "live_models", "grounding", "paper_trade",
     "commission", "commission_per_fill", "slippage_bps", "slippage",
     "rule", "rule_id", "id",
 )
 
-ACTION_FLAG_KEYS = frozenset({"live_models", "grounding", "cards", "paper_trade"})
+ACTION_FLAG_KEYS = frozenset({"live_models", "grounding", "paper_trade"})
 
 
 def _action_args(params: Mapping[str, Any]) -> dict[str, Any]:
@@ -637,28 +632,6 @@ def route_http(
             return _fail(400, str(exc))
         reply = handle_chat(request, store, journal, config, now)
         return HttpResponse.json(200, {"ok": reply.ok, "reply": reply.reply, "error": reply.error})
-    if method == "POST" and clean == "/voice":
-        from bot.voice import handle_voice_note
-
-        if not isinstance(payload, (bytes, bytearray)) or not payload:
-            return _fail(400, "voice needs raw audio bytes")
-        query_string = path.split("?", 1)[1] if "?" in path else ""
-        params = parse_qs(query_string)
-        underlying = (params.get("underlying", ["SPY"])[0] or "SPY").strip() or "SPY"
-
-        def _flag(name: str, default: bool) -> bool:
-            raw_flag = (params.get(name, [""])[0] or "").strip().lower()
-            if not raw_flag:
-                return default
-            return raw_flag not in ("0", "false", "no", "off")
-
-        voice_text = handle_voice_note(
-            bytes(payload), underlying, store, journal, now,
-            live_models=_flag("live_models", True),
-            grounding=_flag("grounding", False),
-            cards=_flag("cards", False),
-        )
-        return HttpResponse.json(200, {"ok": True, "reply": voice_text})
     if method == "POST" and clean in ("/chartread", "/docread"):
         if not isinstance(payload, (bytes, bytearray)) or not payload:
             return _fail(400, "image endpoint needs raw png or jpeg bytes")
@@ -711,7 +684,6 @@ def route_http(
             underlying,
             live_models=_session_flag("live_models", False),
             grounding=_session_flag("grounding", False),
-            cards=_session_flag("cards", False),
             now=now,
             paper_trade=_session_flag("paper_trade", True),
         )
@@ -785,6 +757,7 @@ def route_http(
         return _store_response(response_key, text.encode("utf-8"), "text/html; charset=utf-8", if_none_match)
     if method == "GET" and clean == "/chart":
         underlying = _page_underlying(path, store)
+        view = (parse_qs(path.split("?", 1)[1] if "?" in path else "").get("view", [""])[0] or "").strip()
         found = store.read_latest(underlying)
         if found is None:
             return HttpResponse.html(400, _cards_error_html(need_snapshot_text(underlying, store)))
@@ -795,7 +768,7 @@ def route_http(
             200,
             gamma_chart_html(
                 underlying, snapshot, profile, bar, now, store.read_settings(),
-                symbols=store.list_underlyings(),
+                symbols=store.list_underlyings(), view=view,
             ),
         )
     if method == "GET" and clean == "/board":
@@ -945,24 +918,6 @@ def route_http(
         from bot.dashboard import dashboard_html
 
         return HttpResponse.html(200, dashboard_html(store, journal, now))
-    if method == "GET" and clean == "/demo":
-        underlying = _page_underlying(path, store)
-        found = store.read_latest(underlying)
-        if found is None:
-            return HttpResponse.html(400, _cards_error_html(need_snapshot_text(underlying, store)))
-        snapshot_id, snapshot = found
-        demo_key = (
-            f"demo:{clean}:{underlying}:{snapshot_id}:{chain_fingerprint(snapshot)}:"
-            f"{bar_signature(store.read_latest_bar(underlying))}:"
-            f"{store.read_profile()!r}:{store.read_settings()!r}:{_minute_bucket(now)}"
-        )
-        hit = _cached_response(demo_key, if_none_match)
-        if hit is not None:
-            return hit
-        return _store_response(
-            demo_key, demo_html(underlying, store, journal, now).encode("utf-8"),
-            "text/html; charset=utf-8", if_none_match,
-        )
     if method == "GET" and clean == "/card":
         from bot.demo import demo_cards
         query_string = path.split("?", 1)[1] if "?" in path else ""
@@ -998,7 +953,7 @@ def route_http(
             )
         return HttpResponse.html(200, page)
     if method == "GET" and clean == "/share":
-        from bot.cards import render_signal_art, share_html
+        from bot.cards import share_html
         from bot.demo import demo_cards
 
         query_string = path.split("?", 1)[1] if "?" in path else ""
@@ -1021,15 +976,7 @@ def route_http(
             return HttpResponse.html(400, _cards_error_html(f"no cards for {underlying} snapshot {snapshot_id}"))
         if index < 0 or index >= len(cards):
             return HttpResponse.html(400, _cards_error_html(f"index {index} out of range (0-{len(cards) - 1})"))
-        art = url = art_hash = None
-        if (params.get("live_models", [""])[0] or "").strip() == "1":
-            rendered = render_signal_art(cards[index], journal, now)
-            if rendered is not None:
-                art, url, art_hash = rendered["art"], rendered["url"], rendered["art_hash"]
-        return HttpResponse.html(
-            200, share_html(cards[index], art=art, url=url, art_hash=art_hash,
-                            settings=store.read_settings())
-        )
+        return HttpResponse.html(200, share_html(cards[index], settings=store.read_settings()))
     if method == "GET" and clean == "/action":
         query_string = path.split("?", 1)[1] if "?" in path else ""
         params = parse_qs(query_string)
@@ -1160,6 +1107,6 @@ def _cards_error_html(message: str) -> str:
         "<input type=\"hidden\" name=\"tool\" value=\"load_snapshot\">"
         "<label class=\"field\">symbol<input name=\"symbol\" value=\"SPY\" size=\"8\"></label>"
         "<button class=\"solid\" type=\"submit\">Load snapshot</button></form>"
-        "<div class=\"hero-row\"><a class=\"btn\" href=\"/demo\">Open the demo</a>"
-        "<a class=\"btn\" href=\"/dashboard\">Dashboard</a></div></section></div></body></html>"
+        "<div class=\"hero-row\"><a class=\"btn\" href=\"/dashboard\">Dashboard</a></div>"
+        "</section></div></body></html>"
     )

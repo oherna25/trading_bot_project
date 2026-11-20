@@ -31,7 +31,6 @@ def parse_chat_payload(raw: dict) -> MuseChatRequest:
         underlying=underlying,
         live_models=bool(raw.get("live_models", False)),
         grounding=bool(raw.get("grounding", False)),
-        cards=bool(raw.get("cards", False)),
         llm_router=bool(raw.get("llm_router", False)),
     )
 
@@ -53,7 +52,7 @@ def llm_route(
 ) -> tuple[str, dict[str, Any], str]:
     backend, reason = select_backend("analyst", journal, now, env)
     if backend not in ("model", "user", "baseten"):
-        raise ValueError(reason or "missing META_MODEL_API_KEY")
+        raise ValueError(reason or "missing ANTHROPIC_API_KEY")
     catalog = "\n".join(f"- {name}: {tool.description}" for name, tool in TOOL_REGISTRY.items())
     prompt = f"Request: {text}\nDefault underlying: {underlying}\nTools:\n{catalog}"
     messages = [
@@ -114,7 +113,6 @@ def handle_chat(
             now,
             live_models=request.live_models,
             grounding=request.grounding,
-            cards=request.cards,
         )
     except ValueError as exc:
         return MuseChatReply(ok=False, reply=str(exc), error=str(exc))

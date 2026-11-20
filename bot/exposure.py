@@ -8,6 +8,7 @@ from bot.shapes import (
     ChainSnapshot,
     CharmProfile,
     DexProfile,
+    ExposureGrid,
     GexProfile,
     OptionContract,
     VannaProfile,
@@ -242,3 +243,32 @@ def compute_vanna(
     if cached is not None:
         return cached  # type: ignore[return-value]
     return compute_exposures(snapshot, snapshot_id, multiplier)[4]
+
+
+def compute_gex_grid(
+    snapshot: ChainSnapshot,
+    snapshot_id: str,
+    spot: float | None = None,
+    multiplier: float = DEFAULT_CONTRACT_MULTIPLIER,
+) -> ExposureGrid:
+    scale = spot * spot * ONE_PERCENT_MOVE if spot else 1.0
+    strikes: set[float] = set()
+    expiries: set[str] = set()
+    cells: dict[tuple[float, str], float] = {}
+    for contract in snapshot.contracts_list:
+        side = _normalize_side(contract.call_or_put)
+        if side is None:
+            continue
+        strikes.add(contract.strike)
+        if contract.gamma is None:
+            continue
+        expiries.add(contract.expiry)
+        key = (contract.strike, contract.expiry)
+        exposure = _signed_exposure(side, contract.gamma, contract.open_interest, multiplier)
+        cells[key] = cells.get(key, 0.0) + exposure
+    return ExposureGrid(
+        snapshot_id=snapshot_id,
+        strikes=tuple(sorted(strikes)),
+        expiries=tuple(sorted(expiries)),
+        cells={key: value * scale for key, value in cells.items()},
+    )

@@ -24,7 +24,7 @@ OPT_OUT = "profile: risk_tolerance=moderate, portfolio_size=50000, knowledge=int
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
@@ -185,13 +185,11 @@ def test_card_routes_require_profile():
     assert PROFILE_REQUIRED in card.body.decode("utf-8")
 
 
-def test_shock_debate_demo_dashboard_require_profile():
+def test_shock_debate_dashboard_require_profile():
     from bot.dashboard import dashboard_html
     from bot.debate import card_debate
-    from bot.demo import demo_html
     from bot.shock import shock_text
 
     assert PROFILE_REQUIRED in shock_text("TEST", _snapshotted_store(), Journal(), NOW, -2.0)
     assert card_debate("TEST", _snapshotted_store(), Journal(), NOW) == PROFILE_REQUIRED
-    assert PROFILE_REQUIRED in demo_html("TEST", _snapshotted_store(), Journal(), NOW)
     assert PROFILE_REQUIRED in dashboard_html(_snapshotted_store(), Journal(), NOW, "TEST")

@@ -7,7 +7,7 @@ from bot.research import advisory_review
 from bot.shapes import PaperEvidence
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-FULL_ENV = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+FULL_ENV = {"ANTHROPIC_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
 EVIDENCE = PaperEvidence(clean_days=8, clean_days_target=10, max_drawdown=0.02,
                          drawdown_bound=0.05, halt_drills_passed=True)
 
@@ -48,11 +48,11 @@ def test_review_returns_note_and_journals_receipt():
     note = advisory_review(EVIDENCE, journal, NOW, live_models=True, env=FULL_ENV, http_post=http_post)
     assert "VERDICT: not-ready" in note
     assert http_post.log[0]["reasoning_effort"] == "high"
-    assert http_post.log[0]["model"] == "muse-wonder-1.0"
+    assert http_post.log[0]["model"] == "claude-opus-5-5"
     assert '"clean_days": 8' in http_post.log[0]["messages"][1]["content"]
     receipts = [e for e in journal.entries() if e.kind == "model_receipt"]
     assert len(receipts) == 1
-    assert receipts[0].payload["model_id"] == "muse-wonder-1.0"
+    assert receipts[0].payload["model_id"] == "claude-opus-5-5"
     assert receipts[0].payload["cost_usd"] == pytest.approx(400 / 1e6 * 4.00 + 100 / 1e6 * 20.00)
     stored = next(e for e in journal.entries() if e.kind == "review_note")
     assert stored.payload["note"] == note
@@ -73,7 +73,7 @@ def test_review_missing_key_skips_without_network():
 
     journal = Journal()
     assert advisory_review(EVIDENCE, journal, NOW, live_models=True, env={}, http_post=explode) == ""
-    assert journal.entries()[-1].payload["reason"] == "missing META_MODEL_API_KEY"
+    assert journal.entries()[-1].payload["reason"] == "missing ANTHROPIC_API_KEY"
 
 
 def test_review_http_error_skips():

@@ -16,7 +16,7 @@ python -m venv .venv
 ```
 
 Installs on Windows, macOS, and Linux (Python 3.11+): `pip install .`
-provides `marketwingman`, `marketwingman-demo`, and `marketwingman-session`.
+provides `marketwingman` and `marketwingman-session`.
 On Windows use `py -m venv .venv` and `.venv\Scripts\python` in place of
 `.venv/bin/python`.
 
@@ -49,7 +49,8 @@ market APIs -> feeds -> store -> exposure -> research -> risk -> paper venue
 | Types | `bot/shapes.py` | Frozen dataclasses. Start here for any data shape |
 | Feeds | `bot/feeds.py` | `FEED_REGISTRY`, `ingest_chain`, `ingest_bars`, `live_context` |
 | Store | `bot/store.py` | `SnapshotStore`, `read_latest`, `prune`, `restore` |
-| Exposure | `bot/exposure.py` | `compute_gex`, `compute_vex`, `compute_dex`, `compute_charm`, `compute_vanna` (one `compute_exposures` pass) |
+| Exposure | `bot/exposure.py` | `compute_gex`, `compute_vex`, `compute_dex`, `compute_charm`, `compute_vanna` (one `compute_exposures` pass), `compute_gex_grid` (strike by expiry; sums to the per-strike GEX) |
+| Greeks | `bot/greeks.py` | `fill_greeks`, `bs_greeks`, `implied_spot` (Black-Scholes Greeks from quote mids; sets `OptionContract.greeks_modelled`) |
 | Research | `bot/research.py` (facade) | `route_chat`, `handle_chat_query`, `live_brief`, `scheduled_brief` |
 | Research libs | `bot/research_analyst.py`, `research_formatters.py`, `research_paper.py`, `research_ingest.py` | Analyst backends, brief formatting, paper trading, ingest |
 | Risk | `bot/risk.py` | `build_intent`, `review_intent` (runs inside both submits), `submit_paper`, `IntentRejectedError`, `PaperAccount` |
@@ -60,20 +61,20 @@ market APIs -> feeds -> store -> exposure -> research -> risk -> paper venue
 | Deployments | `bot/deployments.py`, `bot/optionbook.py`, `bot/capital.py` | `STRATEGY_REGISTRY`, `create_deployment`, `run_deployments` (scheduled premium selling with lifecycle, capital ledger, feedback) |
 | Replay | `bot/replay.py` | `replay_week`, `paper_evidence_from_journal` |
 | Persist/job | `bot/persist.py`, `bot/schedule.py` | `save_bundle`, `load_bundle`, `run_scheduled_session` |
-| Models | `bot/models.py`, `bot/tiers.py`, `bot/localmodels.py` | `MODEL_REGISTRY`, `select_model_tier`, `run_local` |
+| Models | `bot/models.py`, `bot/claude.py`, `bot/tiers.py`, `bot/localmodels.py` | `MODEL_REGISTRY`, `claude.chat`, `select_model_tier`, `run_local` |
 
-Single-purpose surfaces: `charts`, `alerts`, `customalerts`, `dashboard`,
-`debate`, `coach`, `commands`, `voice`, `cards`, `news`, `holdings`, `shock`,
+Single-purpose surfaces: `charts` (`CHART_VIEWS` registry behind `/chart?view=`), `alerts`, `customalerts`, `dashboard`,
+`debate`, `coach`, `commands`, `cards`, `news`, `holdings`, `shock`,
 `diff`, `video`, `profile`, `slash`, `venue`, `config`, `journal`,
 `metareason`, `morning`, `earnings`, `explain`, `onboarding`, `trackrecord`,
-`theme`, `ledger`. `agent` plus `baseten` run the graded candidate
-proposal: Baseten Muse Spark Open picks or skips among deterministic
-deployment candidates, local code validates, sizes, and gates.
+`theme`, `ledger`. `agent` runs the graded candidate proposal: Baseten
+(when keyed) or Claude picks or skips among deterministic deployment
+candidates, local code validates, sizes, and gates.
 
 Program entry points: `run_app.py` (brief once, then serve HTTP),
 `run_session.py` (one scheduled session). Library server: `bot.muse.serve`.
-Docker: one image (`Dockerfile`, demo default) plus `docker-compose.yml`
-services `app` (full app), `demo`, and `session` (one-shot, `jobs` profile);
+Docker: one image (`Dockerfile`, full app by default) plus `docker-compose.yml`
+services `app` (full app) and `session` (one-shot, `jobs` profile);
 all state in the `/data` volume, health on `/healthz`.
 
 ## Conventions
@@ -81,8 +82,11 @@ all state in the `/data` volume, health on `/healthz`.
 - Shared types are frozen dataclasses in `bot/shapes.py`. Add new shared
   types there, never inline.
 - Registries over branching: `FEED_REGISTRY`, `MODEL_REGISTRY`,
-  `TOOL_REGISTRY`, `SLASH_COMMANDS`.
-- Chat and tools take `live_models`/`grounding`/`cards` flags, all default
+  `TOOL_REGISTRY`, `SLASH_COMMANDS`, `CHART_VIEWS`.
+- Charts carry no hard-coded colors. SVG uses the chart classes in
+  `bot/theme.py` (`.cx .pos`, `.cx .neg`, ...), which bind to the theme
+  variables. A standalone page (`bot/video.py`) inlines `chart_stylesheet()`.
+- Chat and tools take `live_models`/`grounding` flags, both default
   `False`. The offline deterministic path must always work.
 - Trade cards need a saved operator profile. Without one every card
   surface asks for profile setup.
@@ -90,6 +94,13 @@ all state in the `/data` volume, health on `/healthz`.
   need `options_ok` in the profile.
 - Every model call journals a `ModelReceipt` and honors the day budget.
   Missing keys, budget, or weights select the deterministic fallback.
+- Claude (`ANTHROPIC_API_KEY`, `bot/claude.py`) is the built-in model for
+  text, vision, and web search. It goes through the `anthropic` SDK, an
+  optional extra (`pip install ".[claude]"`) imported lazily; the base
+  install stays standard library only. Nothing calls a Meta endpoint:
+  voice notes, generated card art, and document segmentation were removed.
+- Tests never reach the SDK: inject `http_post`, or a fake client as in
+  `tests/test_claude.py`.
 - Deployments (`STRATEGY_REGISTRY`) run inside every scheduled session.
   Paper is the default mode. Live deployments only submit through the
   armed `submit_live` path when a venue is supplied to the runner.
@@ -98,7 +109,7 @@ all state in the `/data` volume, health on `/healthz`.
 
 - Mirror module names: `tests/test_<module>.py`.
 - Focused run: `.venv/bin/python -m pytest tests/test_risk.py -q`.
-- Full suite is about 940 tests in about 10 seconds.
+- Full suite is about 1000 tests in about 10 seconds.
 
 ## Docs map
 
@@ -112,7 +123,7 @@ all state in the `/data` volume, health on `/healthz`.
 
 - `live_brief` raises `FeedUnavailableError` when every chain feed fails.
   Bars are best effort.
-- Sandbox Tradier chains are delayed about 15 minutes and carry no Greeks.
+- Sandbox Tradier chains are delayed about 15 minutes and the vendor sends no Greeks. `ingest_chain` fills them locally (`fill_greeks`) when the chain has bid/ask; contracts with no usable quote stay at no Greeks, which reads as unknown, not flat.
 - Ideas expire at least one day out. No 0DTE.
 - Naming a ticker with no stored snapshot errors instead of falling back.
 - Feed fallback order is fixed. Chains try Tradier then Market Data. Bars

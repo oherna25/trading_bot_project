@@ -33,7 +33,6 @@ class MuseChatRequest:
     underlying: str = "SPY"
     live_models: bool = False
     grounding: bool = False
-    cards: bool = False
     llm_router: bool = False
 
 
@@ -110,7 +109,7 @@ def _spark_audit_handler(
     live = args.get("live_models", False) if isinstance(args, dict) else False
     grounding = args.get("grounding", False) if isinstance(args, dict) else False
     return spark_audit_response(
-        str(query or "spark audit"), underlying, store, journal, now,
+        str(query or "claude audit"), underlying, store, journal, now,
         live_models=bool(live), grounding=bool(grounding),
     )
 
@@ -314,7 +313,6 @@ def _session_run_handler(
         underlying,
         live_models=bool(flags.get("live_models", False)),
         grounding=bool(flags.get("grounding", False)),
-        cards=bool(flags.get("cards", False)),
         now=now,
         paper_trade=bool(flags.get("paper_trade", True)),
     )
@@ -417,11 +415,9 @@ def _share_tool_handler(
     except (TypeError, ValueError):
         raise ValueError("index must be an integer") from None
     snapshot = args.get("snapshot")
-    live = bool(args.get("live_models", False)) if isinstance(args, dict) else False
     return share_card(
         index, underlying, store, journal, now,
         snapshot_id=str(snapshot) if snapshot else None,
-        live_models=live,
     )
 
 
@@ -875,7 +871,7 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
     "get_vex_brief": MuseTool("get_vex_brief", "Read the computed VEX brief for an underlying", _vex_brief_handler),
     "get_dex_brief": MuseTool("get_dex_brief", "Read the computed DEX brief for an underlying", _dex_brief_handler),
     "get_spark_audit": MuseTool(
-        "get_spark_audit", "Muse Spark audit: model thesis checked against the engine", _spark_audit_handler
+        "get_spark_audit", "Claude audit: model thesis checked against the engine", _spark_audit_handler
     ),
     "journal_tail": MuseTool("journal_tail", "Read the tail of the journal", _journal_tail_handler),
     "paper_pnl": MuseTool("paper_pnl", "Report paper P&L from journaled fills", _paper_pnl_handler),
@@ -904,10 +900,10 @@ TOOL_REGISTRY: dict[str, MuseTool] = {
         "read_chart_image", "Read a chart screenshot against engine positioning", _chart_image_handler
     ),
     "read_document": MuseTool(
-        "read_document", "Segment and read a document screenshot with SAM plus Spark", _document_handler
+        "read_document", "Read a document screenshot against engine walls", _document_handler
     ),
     "share_card": MuseTool(
-        "share_card", "Shareable trade card caption with art", _share_tool_handler
+        "share_card", "Shareable trade card caption", _share_tool_handler
     ),
     "get_narrated_alerts": MuseTool(
         "get_narrated_alerts", "Current alerts with one-line reasons", _narrated_alerts_handler

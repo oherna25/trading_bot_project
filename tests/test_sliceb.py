@@ -15,7 +15,7 @@ CONFIG = default_operator_config()
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
@@ -290,7 +290,7 @@ def test_registries_pin_new_tools_without_new_model():
 
     assert "explain_position" in TOOL_REGISTRY
     assert "onboarding_step" in TOOL_REGISTRY
-    assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "transcriber", "artist", "grounding"}
+    assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "grounding"}
 
 
 def test_explain_position_prose_has_no_duplicated_regime_clause():

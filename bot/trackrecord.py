@@ -11,8 +11,6 @@ from bot.store import SnapshotStore
 
 EQUITY_WIDTH = 920
 EQUITY_HEIGHT = 260
-LINE_COLOR = "#4493f8"
-AXIS_COLOR = "#57606a"
 
 
 def _paper_fills(journal: Journal) -> list[tuple[datetime, dict[str, Any]]]:
@@ -285,8 +283,8 @@ def equity_svg(points: list[tuple[datetime, float]]) -> str:
     plot_height = height - top - bottom
     if not points:
         return (
-            f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
-            f'<text x="{left}" y="{top + 20}" font-size="13" fill="{AXIS_COLOR}">'
+            f'<svg class="cx" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+            f'<text class="dim" x="{left}" y="{top + 20}" font-size="13">'
             "no paper fills yet</text></svg>"
         )
     values = [value for _, value in points]
@@ -304,9 +302,7 @@ def equity_svg(points: list[tuple[datetime, float]]) -> str:
         return top + (high - value) / span * plot_height
 
     parts = [
-        f'<svg width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
-        'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif" '
-        'style="font-variant-numeric:tabular-nums">'
+        f'<svg class="cx" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
     ]
     for value, label in (
         (high, signed_dollars(high)),
@@ -315,21 +311,20 @@ def equity_svg(points: list[tuple[datetime, float]]) -> str:
     ):
         y = y_of(value)
         parts.append(
-            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" '
-            f'stroke="{AXIS_COLOR}" stroke-width="{1.5 if value == 0 else 0.5}" opacity="0.5"/>'
+            f'<line class="{"zero" if value == 0 else "grid"}" x1="{left}" y1="{y:.1f}" '
+            f'x2="{width - right}" y2="{y:.1f}"/>'
         )
         parts.append(
-            f'<text x="{left - 8}" y="{y + 4:.1f}" text-anchor="end" font-size="12" '
-            f'fill="{AXIS_COLOR}">{label}</text>'
+            f'<text class="dim" x="{left - 8}" y="{y + 4:.1f}" text-anchor="end" font-size="12">{label}</text>'
         )
     path = " ".join(f"{x_of(i):.1f},{y_of(v):.1f}" for i, (_, v) in enumerate(points))
     parts.append(
-        f'<polyline points="{path}" fill="none" stroke="{LINE_COLOR}" stroke-width="2"/>'
+        f'<polyline class="line" points="{path}"/>'
     )
     for i in (0, len(points) - 1):
         stamp, value = points[i]
         parts.append(
-            f'<circle cx="{x_of(i):.1f}" cy="{y_of(value):.1f}" r="3" fill="{LINE_COLOR}">'
+            f'<circle class="dot" cx="{x_of(i):.1f}" cy="{y_of(value):.1f}" r="3">'
             f"<title>{stamp.isoformat()} {signed_dollars(value)}</title></circle>"
         )
     parts.append("</svg>")

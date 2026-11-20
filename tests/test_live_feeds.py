@@ -620,7 +620,7 @@ def test_live_brief_tolerates_bar_failure():
 
     reply = live_brief("SPY", store, journal, NOW, context_factory=factory)
     assert "total exposure:" in reply
-    assert "direction: flat" in reply
+    assert "spot unknown" in reply
 
 
 def test_live_brief_journals_signal_after_snapshot():

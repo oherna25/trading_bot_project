@@ -446,7 +446,7 @@ def test_fetch_earnings_parses_earliest_per_symbol():
 
 
 def test_route_chat_cards_stay_before_ideas(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     reply = route_chat("card idea", "TEST", store, Journal(), CONFIG, NOW)

@@ -8,11 +8,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
 from bot.config import env_value, read_dotenv as _read_dotenv
+from bot.greeks import fill_greeks
 from bot.journal import Journal
 from bot.shapes import Bar, ChainSnapshot, DashboardSettings, OptionContract
 from bot.store import SnapshotStore
@@ -731,11 +732,19 @@ def ingest_chain(
             for c in raw["contracts"]
         ),
     )
+    latest_bar = store.read_latest_bar(raw["underlying"])
+    modelled_contracts, modelled = fill_greeks(
+        snapshot.contracts_list, snapshot.timestamp_utc, latest_bar.close if latest_bar is not None else None
+    )
+    snapshot = replace(snapshot, contracts_list=modelled_contracts)
     snapshot_id = store.save(snapshot)
     journal.append(
         snapshot.timestamp_utc,
         "snapshot_ingested",
-        {"snapshot_id": snapshot_id, "source_name": feed_name, "latency_ms": latency_ms},
+        {
+            "snapshot_id": snapshot_id, "source_name": feed_name, "latency_ms": latency_ms,
+            "modelled_greeks": modelled,
+        },
     )
     ivs = [c.iv for c in snapshot.contracts_list if c.iv is not None]
     if ivs:

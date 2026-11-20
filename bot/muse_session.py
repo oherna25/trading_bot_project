@@ -137,7 +137,6 @@ class SessionController:
         underlying: str | Sequence[str] = "SPY",
         live_models: bool = False,
         grounding: bool = False,
-        cards: bool = False,
         now: datetime | None = None,
         paper_trade: bool = True,
     ) -> tuple[str, list[str]]:
@@ -155,7 +154,6 @@ class SessionController:
                 self.context_factory,
                 live_models,
                 grounding,
-                cards,
                 paper_trade,
             )
         with self.lock:

@@ -18,7 +18,7 @@ PNG = b"\x89PNG\r\n\x1a\n" + b"pixels" * 100
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
@@ -88,7 +88,7 @@ def test_chat_chart_and_doc_usage():
 
 def test_chat_share_card():
     reply = route_chat("share card 0", "TEST", _seeded_store(), Journal(), CONFIG, NOW)
-    assert "TEST short" in reply and "art: needs live models" in reply
+    assert "TEST short" in reply
 
 
 def test_chat_tier_status():
@@ -191,7 +191,7 @@ def test_http_share_page_and_errors():
                           Journal(), CONFIG, NOW)
     assert response.status == 200
     assert '<img alt="trade card art"' not in response.body.decode("utf-8")
-    assert "needs live models" in response.body.decode("utf-8")
+    assert "TEST short" in response.body.decode("utf-8")
     store = SnapshotStore()
     response = route_http("GET", "/share?underlying=TEST&index=0", {}, store, Journal(),
                           CONFIG, NOW)

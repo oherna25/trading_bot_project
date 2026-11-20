@@ -8,9 +8,18 @@ from typing import Any, Mapping
 from bot import baseten
 from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
-from bot.models import MODEL_API_BASE_URL, MODEL_REGISTRY, HttpPost, chat_spec, effective_user_model, meta_budget_reason, run_analyst
+from bot.models import (
+    MODEL_API_BASE_URL,
+    MODEL_API_KEY_ENV,
+    MODEL_REGISTRY,
+    HttpPost,
+    chat_spec,
+    claude_budget_reason,
+    effective_user_model,
+    run_analyst,
+)
 
-API_KEY_ENV = "META_MODEL_API_KEY"
+API_KEY_ENV = MODEL_API_KEY_ENV
 REASON_TIMEOUT_SECONDS = 60.0
 REASON_SYSTEM_PROMPT = (
     "Write one sentence stating why this options trade is a good trade. "
@@ -18,7 +27,7 @@ REASON_SYSTEM_PROMPT = (
 )
 
 
-def _read_meta_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
+def _read_claude_env(env: Mapping[str, str] | None = None) -> dict[str, str]:
     if env is not None:
         return dict(env)
     file_values = _read_dotenv()
@@ -40,13 +49,13 @@ def select_reason_backend(
     baseten_backend, _ = baseten.select_reason_backend(journal, now, env)
     if baseten_backend == "baseten":
         return "baseten", ""
-    values = _read_meta_env(env)
+    values = _read_claude_env(env)
     if not values.get(API_KEY_ENV):
         return "fallback", f"missing {API_KEY_ENV}"
-    reason = meta_budget_reason(journal, now, env)
+    reason = claude_budget_reason(journal, now, env)
     if reason:
         return "fallback", reason
-    return "meta", ""
+    return "claude", ""
 
 
 def generate_reason(
@@ -61,7 +70,7 @@ def generate_reason(
     if user is not None:
         spec, key, base_url = chat_spec("analyst", env), user.api_key, user.base_url
     else:
-        values = _read_meta_env(env)
+        values = _read_claude_env(env)
         key = values.get(API_KEY_ENV, "")
         if not key:
             raise ValueError(f"missing {API_KEY_ENV}")

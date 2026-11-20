@@ -2,7 +2,14 @@ from datetime import datetime, timezone
 
 import pytest
 
-from bot.exposure import compute_charm, compute_dex, compute_gex, compute_vanna, compute_vex
+from bot.exposure import (
+    compute_charm,
+    compute_dex,
+    compute_gex,
+    compute_gex_grid,
+    compute_vanna,
+    compute_vex,
+)
 from bot.shapes import ChainSnapshot, OptionContract
 
 STAMP = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
@@ -199,3 +206,60 @@ def test_gex_recomputes_after_mutable_sequence_change():
     )
     second = compute_gex(snapshot, "TEST:mut-2")
     assert second.total_exposure == pytest.approx(10000.0)
+
+
+def _multi_expiry_snapshot() -> ChainSnapshot:
+    contracts = [
+        OptionContract(strike=100.0, expiry="2026-12-18", call_or_put="call", open_interest=500.0, gamma=0.04),
+        OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call", open_interest=1000.0, gamma=0.05),
+        OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="put", open_interest=700.0, gamma=0.06),
+        OptionContract(strike=100.0, expiry="2026-11-27", call_or_put="P", open_interest=300.0, gamma=0.02),
+        OptionContract(strike=105.0, expiry="2026-11-27", call_or_put="call", open_interest=800.0, gamma=0.03),
+        OptionContract(strike=95.0, expiry="2026-11-20", call_or_put="put", open_interest=900.0, gamma=0.07),
+        OptionContract(strike=110.0, expiry="2027-01-15", call_or_put="call", open_interest=400.0, gamma=None),
+        OptionContract(strike=120.0, expiry="2026-11-20", call_or_put="straddle", open_interest=400.0, gamma=0.1),
+    ]
+    return ChainSnapshot("TEST", STAMP, "tradier_sandbox", 12.5, tuple(contracts))
+
+
+@pytest.mark.parametrize("spot", [None, 100.0])
+def test_gex_grid_sums_over_expiries_to_the_per_strike_profile(spot):
+    snapshot = _multi_expiry_snapshot()
+    profile = compute_gex(snapshot, "TEST:snap-1", spot=spot)
+    grid = compute_gex_grid(snapshot, "TEST:snap-1", spot=spot)
+    assert set(grid.strikes) == set(profile.per_strike_exposure)
+    for strike in grid.strikes:
+        row = sum(grid.cells.get((strike, expiry), 0.0) for expiry in grid.expiries)
+        assert row == pytest.approx(profile.per_strike_exposure[strike])
+    assert sum(grid.cells.values()) == pytest.approx(profile.total_exposure)
+
+
+def test_gex_grid_orders_axes_and_signs_cells_by_side():
+    grid = compute_gex_grid(_multi_expiry_snapshot(), "TEST:snap-1")
+    assert grid.snapshot_id == "TEST:snap-1"
+    assert grid.strikes == (95.0, 100.0, 105.0, 110.0)
+    assert grid.expiries == ("2026-11-20", "2026-11-27", "2026-12-18")
+    assert grid.cells[(100.0, "2026-11-20")] == pytest.approx(0.05 * 1000.0 * 100 - 0.06 * 700.0 * 100)
+    assert grid.cells[(100.0, "2026-11-27")] < 0
+    assert grid.cells[(105.0, "2026-11-27")] > 0
+    assert (110.0, "2027-01-15") not in grid.cells
+    assert "2027-01-15" not in grid.expiries
+
+
+def test_gex_grid_scales_dollars_per_one_percent_move():
+    snapshot = _multi_expiry_snapshot()
+    raw = compute_gex_grid(snapshot, "TEST:snap-1")
+    scaled = compute_gex_grid(snapshot, "TEST:snap-1", spot=200.0)
+    for key, value in raw.cells.items():
+        assert scaled.cells[key] == pytest.approx(value * 200.0 * 200.0 * 0.01)
+
+
+def test_gex_grid_handles_a_chain_without_gamma():
+    snapshot = ChainSnapshot(
+        "TEST", STAMP, "tradier_sandbox", 1.0,
+        (OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call", open_interest=10.0),),
+    )
+    grid = compute_gex_grid(snapshot, "TEST:snap-1")
+    assert grid.strikes == (100.0,)
+    assert grid.expiries == ()
+    assert grid.cells == {}

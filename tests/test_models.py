@@ -20,7 +20,7 @@ from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-FULL_ENV = {"META_MODEL_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
+FULL_ENV = {"ANTHROPIC_API_KEY": "test-key", "MODEL_DAY_BUDGET_USD": "5"}
 USER_ENV = {"USER_MODEL_API_KEY": "user-secret-1", "USER_MODEL_BASE_URL": "https://llm.example/v1",
             "USER_MODEL_ID": "anything-llm"}
 BASETEN_ENV = {"BASETEN_API_KEY": "bt-key"}
@@ -100,11 +100,11 @@ def _final_leg(content):
 
 
 def test_registry_pins_models_and_fallbacks():
-    assert MODEL_REGISTRY["analyst"].model_id == "muse-spark-1.3"
+    assert MODEL_REGISTRY["analyst"].model_id == "claude-opus-5-5"
     assert MODEL_REGISTRY["analyst"].reasoning_effort == "low"
-    assert MODEL_REGISTRY["reviewer"].model_id == "muse-wonder-1.0"
+    assert MODEL_REGISTRY["reviewer"].model_id == "claude-opus-5-5"
     assert MODEL_REGISTRY["reviewer"].reasoning_effort == "high"
-    assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "transcriber", "artist", "grounding"}
+    assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "grounding"}
     assert all(spec.fallback for spec in MODEL_REGISTRY.values())
 
 
@@ -117,11 +117,11 @@ def test_select_backend_unknown_role_falls_back():
 def test_select_backend_missing_key_falls_back():
     backend, reason = select_backend("analyst", Journal(), NOW, {})
     assert backend == "fallback"
-    assert reason == "missing META_MODEL_API_KEY"
+    assert reason == "missing ANTHROPIC_API_KEY"
 
 
 def test_select_backend_missing_budget_falls_back():
-    backend, reason = select_backend("analyst", Journal(), NOW, {"META_MODEL_API_KEY": "k"})
+    backend, reason = select_backend("analyst", Journal(), NOW, {"ANTHROPIC_API_KEY": "k"})
     assert backend == "fallback"
     assert reason == "missing MODEL_DAY_BUDGET_USD"
 
@@ -182,13 +182,13 @@ def test_baseten_deployed_model_id_stays_off_chat():
 def test_select_backend_baseten_ignored_for_provider_roles():
     backend, reason = select_backend("grounding", Journal(), NOW, dict(BASETEN_ENV))
     assert backend == "fallback"
-    assert reason == "missing META_MODEL_API_KEY"
+    assert reason == "missing ANTHROPIC_API_KEY"
 
 
 def test_select_backend_user_key_ignored_for_provider_roles():
     backend, reason = select_backend("grounding", Journal(), NOW, dict(USER_ENV))
     assert backend == "fallback"
-    assert reason == "missing META_MODEL_API_KEY"
+    assert reason == "missing ANTHROPIC_API_KEY"
 
 
 def test_select_backend_invalid_user_url_fails_loud():
@@ -244,8 +244,8 @@ def test_chat_spec_uses_user_model_with_zero_price():
     assert spec.price_in == 0.0 and spec.price_out == 0.0
     assert chat_api_key("analyst", dict(USER_ENV)) == "user-secret-1"
     assert chat_base_url("analyst", dict(USER_ENV)) == "https://llm.example/v1"
-    assert chat_spec("analyst", dict(FULL_ENV)).model_id == "muse-spark-1.3"
-    assert chat_base_url("analyst", dict(FULL_ENV)) == "https://api.meta.ai/v1"
+    assert chat_spec("analyst", dict(FULL_ENV)).model_id == "claude-opus-5-5"
+    assert chat_base_url("analyst", dict(FULL_ENV)) == "https://api.anthropic.com/v1"
 
 
 def test_analyst_backend_user_key_hits_user_endpoint():
@@ -336,10 +336,10 @@ def test_backend_runs_tool_loop_and_journals_receipts():
     assert signal.snapshot_id == snapshot_id
     receipts = [e for e in journal.entries() if e.kind == "model_receipt"]
     assert len(receipts) == 2
-    assert receipts[0].payload["model_id"] == "muse-wonder-1.0"
+    assert receipts[0].payload["model_id"] == "claude-opus-5-5"
     assert receipts[0].payload["role_name"] == "reviewer"
     assert receipts[0].payload["cost_usd"] == pytest.approx(100 / 1e6 * 4.00 + 20 / 1e6 * 20.00)
-    assert http_post.log[0]["model"] == "muse-wonder-1.0"
+    assert http_post.log[0]["model"] == "claude-opus-5-5"
     assert http_post.log[0]["reasoning_effort"] == "high"
     assert len(receipts[0].payload["prompt_hash"]) == 64
     assert receipts[0].payload["snapshot_id"] == snapshot_id
@@ -402,13 +402,13 @@ def test_backend_missing_key_falls_back_without_network():
     signal = analyst_backend("brief", snapshot_id, snapshot, profile, bar, journal, NOW,
                              live_models=True, env={}, http_post=explode)
     assert signal.thesis.startswith("analyst read on TEST")
-    assert journal.entries()[-1].payload["reason"] == "missing META_MODEL_API_KEY"
+    assert journal.entries()[-1].payload["reason"] == "missing ANTHROPIC_API_KEY"
 
 
 def test_backend_http_error_falls_back_without_leaking_key():
     store = _seeded_store()
     snapshot_id, snapshot, profile, bar = _snapshot_parts(store)
-    env = {"META_MODEL_API_KEY": "secret-key-123", "MODEL_DAY_BUDGET_USD": "5"}
+    env = {"ANTHROPIC_API_KEY": "secret-key-123", "MODEL_DAY_BUDGET_USD": "5"}
     journal = Journal()
     signal = analyst_backend("brief", snapshot_id, snapshot, profile, bar, journal, NOW,
                              live_models=True, env=env, http_post=_canned_post([RuntimeError("down")]))

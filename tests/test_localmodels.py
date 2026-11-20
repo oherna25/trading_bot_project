@@ -287,7 +287,7 @@ def test_analyst_backend_rescues_spark_failure_with_local(tmp_path):
     def down(*args, **kwargs):
         raise RuntimeError("spark down")
 
-    env = {"META_MODEL_API_KEY": "k", "MODEL_DAY_BUDGET_USD": "5.0",
+    env = {"ANTHROPIC_API_KEY": "k", "MODEL_DAY_BUDGET_USD": "5.0",
            "GLIMMER_GGUF_PATH": _weights(tmp_path)}
     journal = Journal()
     snapshot_id, snapshot, profile, bar = _seeded_parts()

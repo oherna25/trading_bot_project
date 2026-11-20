@@ -83,7 +83,7 @@ def builder_html(
     return page(
         "strategy builder", "strategy builder, from stored snapshots",
         f"{len(underlyings)} underlyings, limit {ideas_limit()} ideas",
-        body, defaults["underlying"], "dashboard", settings, "/builder",
+        body, defaults["underlying"], "builder", settings, "/builder",
     )
 
 

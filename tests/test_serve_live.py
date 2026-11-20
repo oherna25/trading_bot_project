@@ -13,6 +13,8 @@ from bot.shapes import Bar, ChainSnapshot, OperatorConfig, OperatorProfile, Opti
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
+# The live server reads the real clock, so the fixture expiry must stay ahead of it.
+EXPIRY = (datetime.now(timezone.utc).date() + timedelta(days=21)).isoformat()
 
 CONFIG = OperatorConfig(
     max_day_loss=1000.0,
@@ -31,7 +33,7 @@ def _seeded_store() -> SnapshotStore:
             latency_ms=9.0,
             contracts_list=(
                 OptionContract(
-                    strike=100.0, expiry="2026-11-20", call_or_put="call", open_interest=1000.0,
+                    strike=100.0, expiry=EXPIRY, call_or_put="call", open_interest=1000.0,
                     gamma=0.05, price=2.50, bid=2.40, ask=2.60, iv=0.30,
                 ),
             ),
@@ -91,7 +93,7 @@ def _status_of(call):
 
 
 def test_serve_cards_health_and_chat_over_socket(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     journal = Journal()
@@ -128,7 +130,7 @@ def test_serve_cards_health_and_chat_over_socket(monkeypatch):
 
 
 def test_serve_enforces_bearer_token_over_socket(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     with LiveServer(_seeded_store(), Journal(), token="secret") as live:
         status, _ = _status_of(lambda: live.get("/cards?underlying=TEST"))
@@ -165,7 +167,7 @@ def test_serve_reloads_bundle_written_by_another_process(tmp_path):
                 source_name="marketdata_eod",
                 latency_ms=9.0,
                 contracts_list=(
-                    OptionContract(strike=100.0, expiry="2026-11-20", call_or_put="call",
+                    OptionContract(strike=100.0, expiry=EXPIRY, call_or_put="call",
                                    open_interest=500.0, gamma=0.05),
                 ),
             )

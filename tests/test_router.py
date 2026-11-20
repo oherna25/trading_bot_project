@@ -9,7 +9,7 @@ from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 CONFIG = OperatorConfig(max_day_loss=1000.0, day_profit_target=500.0, max_trade_size=5000.0)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
 
 
 def _seeded_store() -> SnapshotStore:
@@ -39,7 +39,7 @@ def _seeded_store() -> SnapshotStore:
 
 def _stub(content):
     def post(url, headers, payload, timeout):
-        assert payload["model"] == "muse-spark-1.3"
+        assert payload["model"] == "claude-opus-5-5"
         return {
             "choices": [{"message": {"content": content}}],
             "usage": {"prompt_tokens": 100, "completion_tokens": 20},
@@ -75,12 +75,12 @@ def test_llm_route_rejects_garbage_unknown_tool_and_missing_key():
     def exploding(*args):
         raise AssertionError("must not call http without a key")
 
-    with pytest.raises(ValueError, match="META_MODEL_API_KEY"):
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
         llm_route("hi", "TEST", Journal(), NOW, {}, exploding)
 
 
 def test_handle_chat_llm_router_dispatches_tool(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     journal = Journal()
     request = MuseChatRequest(text="anything at all", underlying="TEST", llm_router=True)

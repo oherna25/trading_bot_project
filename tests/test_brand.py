@@ -14,7 +14,7 @@ CONFIG = default_operator_config()
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
@@ -47,17 +47,16 @@ def test_brand_constant_is_equalizer():
     assert BRAND == "MarketWingMan"
 
 
-def test_brand_marks_page_title_nav_and_demo_heading():
+def test_brand_marks_page_title_and_nav():
     from bot.theme import BRAND
 
-    response = route_http("GET", "/demo?underlying=TEST", {}, _seeded_store(),
+    response = route_http("GET", "/dashboard?underlying=TEST", {}, _seeded_store(),
                           Journal(), CONFIG, NOW)
     assert response.status == 200
     body = response.body.decode("utf-8")
-    assert f"<title>TEST demo | {BRAND}</title>" in body
-    assert "TEST demo" in body
-    assert BRAND in body.split("<h1>")[1].split("</h1>")[0]
+    assert f"<title>TEST dashboard | {BRAND}</title>" in body
     assert f">{BRAND}</a>" in body
+    assert 'href="/demo' not in body
 
 
 def test_openapi_title_uses_brand():
@@ -81,7 +80,7 @@ def test_icon_route_serves_project_icon():
 
 
 def test_page_carries_icon_favicon_and_brand_mark():
-    response = route_http("GET", "/demo?underlying=TEST", {}, _seeded_store(),
+    response = route_http("GET", "/dashboard?underlying=TEST", {}, _seeded_store(),
                           Journal(), CONFIG, NOW)
     assert response.status == 200
     body = response.body.decode("utf-8")
@@ -168,8 +167,8 @@ def test_cards_page_offers_one_tap_paper_trade():
     assert 'name="tool" value="take_paper_trade"' in body
 
 
-def test_demo_top_card_offers_one_tap_paper_trade():
-    response = route_http("GET", "/demo?underlying=TEST", {}, _seeded_store(),
+def test_dashboard_top_card_offers_one_tap_paper_trade():
+    response = route_http("GET", "/dashboard?underlying=TEST", {}, _seeded_store(),
                           Journal(), CONFIG, NOW)
     assert response.status == 200
     body = response.body.decode("utf-8")
@@ -222,7 +221,7 @@ def test_take_paper_trade_rejects_bad_index_loudly():
     assert "next:" in reply.error
 
 
-def test_share_page_carries_brand_trade_and_demo_link():
+def test_share_page_carries_brand_trade_and_desk_link():
     from bot.theme import BRAND
 
     response = route_http("GET", "/share?underlying=TEST&index=0", {}, _seeded_store(),
@@ -231,17 +230,17 @@ def test_share_page_carries_brand_trade_and_demo_link():
     body = response.body.decode("utf-8")
     assert BRAND in body
     assert "TEST short" in body
-    assert 'href="/demo?underlying=TEST"' in body
+    assert 'href="/dashboard?underlying=TEST"' in body
 
 
-def test_share_text_carries_brand_and_demo_link():
+def test_share_text_carries_brand_and_desk_link():
     from bot.cards import share_card
     from bot.theme import BRAND
 
     text = share_card(0, "TEST", _seeded_store(), Journal(), NOW)
     assert BRAND in text
     assert "TEST short" in text
-    assert "/demo?underlying=TEST" in text
+    assert "/dashboard?underlying=TEST" in text
 
 
 def test_earnings_survive_a_bundle_round_trip(tmp_path):

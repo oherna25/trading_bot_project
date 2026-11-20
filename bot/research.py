@@ -8,7 +8,6 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Callable, Mapping, Optional, Sequence
 
-from bot.cards import render_brief_card
 from bot.diff import snapshot_diff_text
 from bot.exposure import compute_charm, compute_dex, compute_gex, compute_vanna, compute_vex
 from bot.feeds import (
@@ -56,7 +55,6 @@ def handle_chat_query(
     now: datetime,
     live_models: bool = False,
     grounding: bool = False,
-    cards: bool = False,
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
 ) -> tuple[str, Signal]:
@@ -103,10 +101,6 @@ def handle_chat_query(
     migration = wall_migration_text(underlying, store, now)
     if migration:
         reply += f"\n{migration}"
-    if cards:
-        card = render_brief_card(signal, snapshot, profile, journal, now, snapshot_id, env, http_post)
-        if card is not None:
-            reply += f"\ncard: {snapshot_id} {card['regime']} {card['art_hash'][:12]}"
     return reply, signal
 
 
@@ -150,10 +144,9 @@ def scheduled_brief(
     now: datetime,
     live_models: bool = False,
     grounding: bool = False,
-    cards: bool = False,
 ) -> str:
     reply, _ = handle_chat_query(
-        "scheduled session brief", underlying, store, journal, now, live_models, grounding, cards
+        "scheduled session brief", underlying, store, journal, now, live_models, grounding
     )
     alerts = change_alerts(underlying, store, journal, now)
     if alerts:
@@ -319,7 +312,6 @@ def route_chat(
     now: datetime,
     live_models: bool = False,
     grounding: bool = False,
-    cards: bool = False,
 ) -> str:
     if text.strip().startswith("/"):
         from bot.slash import slash_response
@@ -415,7 +407,7 @@ def route_chat(
         match = re.search(r"\bshare\b.*?(\d+)?", lowered)
         index = int(match.group(1)) if match and match.group(1) else 0
         try:
-            return share_card(index, underlying, store, journal, now, live_models=live_models)
+            return share_card(index, underlying, store, journal, now)
         except ValueError as exc:
             return str(exc)
     if re.search(r"\bcards?\b", lowered):
@@ -424,7 +416,7 @@ def route_chat(
         return ideas_response(text, underlying, store, journal, now)
     if re.search(r"\bvex\b", lowered) or "vega exposure" in lowered:
         return vex_brief_response(underlying, store, journal, now)
-    if re.search(r"\bspark audit\b|\bspark check\b|\baudit.*spark\b", lowered):
+    if re.search(r"\b(claude|model|spark) (audit|check)\b|\baudit.*(claude|spark)\b", lowered):
         from bot.spark import spark_audit_response
 
         return spark_audit_response(
@@ -518,7 +510,7 @@ def route_chat(
 
     if onboarding_in_progress(journal) and "brief" not in lowered and "gex" not in lowered:
         return answer_onboarding(text, underlying, store, journal, now)
-    reply, _ = handle_chat_query(text, underlying, store, journal, now, live_models, grounding, cards)
+    reply, _ = handle_chat_query(text, underlying, store, journal, now, live_models, grounding)
     return reply
 
 def live_brief(
@@ -531,7 +523,6 @@ def live_brief(
     context_factory: Callable[[str], FeedContext] = live_context,
     live_models: bool = False,
     grounding: bool = False,
-    cards: bool = False,
     paper_trade: bool = False,
 ) -> str:
     chains = tuple(chain_feeds) if chain_feeds is not None else CHAIN_FEEDS
@@ -569,7 +560,7 @@ def live_brief(
         raise FeedUnavailableError(f"all chain feeds failed for {underlying}")
     backfill_iv_history(store, journal, now)
     reply, signal = handle_chat_query(
-        "live session brief", underlying, store, journal, now, live_models, grounding, cards
+        "live session brief", underlying, store, journal, now, live_models, grounding
     )
     _record_option_iv(underlying, store, journal, now, context_factory)
     if live_models:
@@ -577,7 +568,7 @@ def live_brief(
 
         try:
             audit = spark_audit_response(
-                "live session spark audit", underlying, store, journal, now,
+                "live session claude audit", underlying, store, journal, now,
                 live_models=True, grounding=grounding,
             )
             reply += f"\n{audit}"

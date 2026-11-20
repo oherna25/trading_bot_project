@@ -230,8 +230,10 @@ def test_refresh_loop_tick_does_not_block_locked_reads(tmp_path):
 
 
 def test_refresh_loop_tick_merges_snapshot_and_prunes_live(tmp_path):
+    from bot import feeds
+
     store, journal = SnapshotStore(), Journal()
-    tick_start = datetime.now(timezone.utc)
+    tick_start = feeds._now_utc()
     _seed_snapshots(store, 505, tick_start)
     journal.append(tick_start, "note", {"n": 0})
     stop = threading.Event()

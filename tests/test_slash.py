@@ -34,13 +34,13 @@ PROFILE = OperatorProfile(
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
 @pytest.fixture(autouse=True)
 def _no_ambient_keys(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     monkeypatch.setattr("bot.ideas._read_dotenv", lambda *args, **kwargs: {})
@@ -126,11 +126,10 @@ def test_info_explains_app_features():
     for feature in (
         "briefs:", "cards:", "ideas:", "wheel:", "diff:", "shock:", "replay:",
         "paper:", "alerts:", "holdings:", "debate:", "profile:", "pages:",
-        "voice:", "sessions:",
+        "sessions:",
     ):
         assert feature in reply
     assert "DISCORD_WEBHOOK_URL" in reply
-    assert "META_MODEL_API_KEY" in reply
     assert "POST /session" in reply
 
 
@@ -283,8 +282,9 @@ def test_dashboard_route_returns_all_sections():
     assert "Spot vs flip" in body
     assert "reason:" in body
     assert "/card?underlying=TEST&amp;snapshot=" in body
-    assert 'http-equiv="refresh" content="60"' in body
-    assert "--bg:#070b14" in body
+    assert 'http-equiv="refresh"' not in body
+    assert 'id="chat-form"' in body
+    assert "--bg:#05070b" in body
 
 
 def test_dashboard_route_empty_store_returns_400():

@@ -14,16 +14,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The Claude backend. Without it the deterministic paths answer every page.
+claude = ["anthropic>=2.11"]
 dev = ["pytest", "ruff", "mypy"]
 
 [project.scripts]
 marketwingman = "run_app:console_main"
-marketwingman-demo = "run_demo:console_main"
 marketwingman-session = "run_session:console_main"
 
 [tool.setuptools]
 packages = ["bot"]
-py-modules = ["run_app", "run_demo", "run_session"]
+py-modules = ["run_app", "run_session"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

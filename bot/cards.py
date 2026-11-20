@@ -1,83 +1,15 @@
 from __future__ import annotations
 
-import base64
-import hashlib
 import html
 from datetime import datetime
 from typing import Any, Mapping
 
 from bot.diff import compact_dollars, pct
 from bot.journal import Journal
-from bot.models import (
-    MODEL_REGISTRY,
-    HttpPost,
-    edit_image,
-    generate_image,
-    image_cost_usd,
-    model_api_key,
-    parse_responses_image,
-    prompt_hash,
-    receipt_payload,
-    refine_image,
-    select_backend,
-)
-from bot.shapes import (
-    ChainSnapshot,
-    DashboardSettings,
-    GexProfile,
-    ImageOptions,
-    ModelReceipt,
-    Signal,
-)
+from bot.models import HttpPost
+from bot.shapes import DashboardSettings
 from bot.store import SnapshotStore, need_snapshot_text
 from bot.tradecards import PROFILE_REQUIRED, TradeCard
-
-SHARE_CACHE_MAX = 100
-
-_share_cache: dict[str, dict[str, Any]] = {}
-
-
-def clear_share_cache() -> None:
-    _share_cache.clear()
-
-
-def _share_cache_store(key: str, rendered: dict[str, Any]) -> None:
-    if len(_share_cache) >= SHARE_CACHE_MAX:
-        _share_cache.pop(next(iter(_share_cache)), None)
-    _share_cache[key] = rendered
-
-
-def card_prompt(regime: str, underlying: str) -> str:
-    return (
-        f"minimal dark abstract background card for a {regime} options regime on {underlying}, "
-        "subtle grid, no text, no numbers, no letters, no watermark"
-    )
-
-
-def share_prompt(card: TradeCard) -> str:
-    return (
-        f"bold shareable trading card background for a {card.direction} {card.symbol} "
-        f"{card.spread} idea, {card.regime} regime, vivid gradient, "
-        "no text, no numbers, no letters, no watermark"
-    )
-
-
-def share_numbers(card: TradeCard) -> dict[str, Any]:
-    return {
-        "symbol": card.symbol,
-        "direction": card.direction,
-        "spread": card.spread,
-        "expiry": card.expiry,
-        "confidence": card.confidence,
-        "max_loss": card.max_loss,
-        "breakeven": card.breakeven,
-        "wall_exposure": card.wall_exposure,
-        "regime": card.regime,
-        "spot": card.spot,
-        "flip_point": card.flip_point,
-        "entry": card.entry,
-        "hedge_strike": card.hedge_strike,
-    }
 
 
 def _money(value: Any) -> str:
@@ -87,7 +19,7 @@ def _money(value: Any) -> str:
         return "n/a"
 
 
-def share_text(card: TradeCard, art_hash: str | None = None) -> str:
+def share_text(card: TradeCard) -> str:
     from bot.theme import BRAND
     from bot.tradecards import entry_text, targets_text
 
@@ -100,343 +32,29 @@ def share_text(card: TradeCard, art_hash: str | None = None) -> str:
         f"{entry_text(card)} | {targets_text(card)}",
         f"wall {wall} | regime {card.regime} | spot {spot} vs flip {flip} | {loss}",
         f"why: {card.reason}",
+        f"{BRAND} desk: /dashboard?underlying={card.symbol}",
     ]
-    if art_hash:
-        lines.append(f"art {art_hash[:12]}")
-    else:
-        lines.append("art: needs live models")
-    lines.append(f"{BRAND} live demo: /demo?underlying={card.symbol}")
     return "\n".join(lines)
 
 
-def share_html(
-    card: TradeCard,
-    art: bytes | None = None,
-    url: str | None = None,
-    art_hash: str | None = None,
-    settings: DashboardSettings | None = None,
-) -> str:
+def share_html(card: TradeCard, settings: DashboardSettings | None = None) -> str:
     from urllib.parse import quote as _urlencode
 
     from bot.theme import BRAND, page
 
     resolved = settings or DashboardSettings()
-    if art is not None:
-        body = base64.b64encode(art).decode("ascii")
-        media = f'<img alt="trade card art" src="data:image/png;base64,{body}">'
-        caption_hash = art_hash or hashlib.sha256(art).hexdigest()
-    elif url:
-        media = f'<img alt="trade card art" src="{html.escape(url, quote=True)}">'
-        caption_hash = art_hash or hashlib.sha256(url.encode("utf-8")).hexdigest()
-    else:
-        media = "<p>art: needs live models</p>"
-        caption_hash = None
     title = f"{card.symbol} trade card"
-    demo_href = f"/demo?underlying={_urlencode(card.symbol)}"
+    desk_href = f"/dashboard?underlying={_urlencode(card.symbol)}"
     loop = (
         f"<p>Shared via {html.escape(BRAND)}. "
-        f"<a href=\"{html.escape(demo_href, quote=True)}\">Open the live demo</a>.</p>"
+        f"<a href=\"{html.escape(desk_href, quote=True)}\">Open the {html.escape(card.symbol)} desk</a>.</p>"
     )
-    content = (
-        f"{media}<pre>{html.escape(share_text(card, caption_hash), quote=False)}</pre>{loop}"
-    )
+    content = f"<pre>{html.escape(share_text(card), quote=False)}</pre>{loop}"
     return page(
         title, f"{card.symbol} {card.direction}", f"snapshot {card.snapshot_id}",
         content, card.symbol, "cards", resolved,
         f"/share?underlying={card.symbol}",
     )
-
-
-def milestone_text(day_pnl: float) -> str:
-    if day_pnl > 0:
-        return f"up {_money(day_pnl)} today"
-    if day_pnl < 0:
-        return f"down {_money(-day_pnl)} today"
-    return "flat today"
-
-
-def _art_cache_key(prompt: str, options: ImageOptions | None) -> str:
-    if options is None:
-        return prompt_hash(prompt)
-    return prompt_hash(f"{prompt}|{options!r}")
-
-
-def _receipt_for_artist(
-    spec: Any,
-    prompt: str,
-    options: ImageOptions | None,
-    latency_ms: float,
-) -> ModelReceipt:
-    return ModelReceipt(
-        model_id=spec.model_id,
-        role_name="artist",
-        prompt_hash=_art_cache_key(prompt, options),
-        tokens_in=0,
-        tokens_out=0,
-        cost_usd=image_cost_usd(spec, options),
-        latency_ms=latency_ms,
-    )
-
-
-def _art_from_body(body: Any) -> tuple[bytes | None, str | None]:
-    if not isinstance(body, dict):
-        return None, None
-    items = body.get("data") or []
-    if not items or not isinstance(items[0], dict):
-        return None, None
-    first = items[0]
-    if first.get("b64_json"):
-        try:
-            return base64.b64decode(first["b64_json"]), None
-        except ValueError:
-            return None, None
-    if first.get("url"):
-        return None, str(first["url"])
-    return None, None
-
-
-def render_brief_card(
-    signal: Signal,
-    snapshot: ChainSnapshot,
-    profile: GexProfile,
-    journal: Journal,
-    now: datetime,
-    snapshot_id: str = "",
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    backend, reason = select_backend("artist", journal, now, env)
-    if backend != "model":
-        journal.append(now, "card_skipped", {"reason": reason})
-        return None
-    spec = MODEL_REGISTRY["artist"]
-    regime = "long-gamma" if profile.total_exposure >= 0.0 else "short-gamma"
-    prompt = card_prompt(regime, snapshot.underlying)
-    try:
-        body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post, options)
-    except Exception as exc:
-        journal.append(now, "card_skipped", {"reason": type(exc).__name__})
-        return None
-    art, url = _art_from_body(body)
-    if art is None and url is None:
-        journal.append(now, "card_skipped", {"reason": "empty image result"})
-        return None
-    numbers = {
-        "total_exposure": profile.total_exposure,
-        "flip_point": profile.flip_point,
-        "direction": signal.direction,
-        "confidence": signal.confidence,
-        "trigger": signal.trigger,
-    }
-    art_hash = hashlib.sha256(art).hexdigest() if art is not None else ""
-    receipt = _receipt_for_artist(spec, prompt, options, latency_ms)
-    journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
-    journal.append(
-        now,
-        "brief_card",
-        {
-            "snapshot_id": snapshot_id,
-            "regime": regime,
-            "numbers": numbers,
-            "art_hash": art_hash,
-            "art_bytes": len(art) if art is not None else 0,
-            "art_url": url,
-        },
-    )
-    return {"art": art, "url": url, "regime": regime, "numbers": numbers, "art_hash": art_hash}
-
-
-def _render_art(
-    prompt: str,
-    kind: str,
-    numbers: dict[str, Any],
-    journal: Journal,
-    now: datetime,
-    snapshot_id: str = "",
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    key = _art_cache_key(prompt, options)
-    hit = _share_cache.get(key)
-    if hit is not None:
-        journal.append(
-            now, kind,
-            {"snapshot_id": snapshot_id, "numbers": numbers,
-             "art_hash": hit["art_hash"], "cached": True},
-        )
-        return dict(hit)
-    backend, reason = select_backend("artist", journal, now, env)
-    if backend != "model":
-        journal.append(now, f"{kind}_skipped", {"reason": reason})
-        return None
-    spec = MODEL_REGISTRY["artist"]
-    try:
-        body, latency_ms = generate_image(spec, model_api_key(env), prompt, http_post, options)
-    except Exception as exc:
-        journal.append(now, f"{kind}_skipped", {"reason": type(exc).__name__})
-        return None
-    art, url = _art_from_body(body)
-    if art is None and url is None:
-        journal.append(now, f"{kind}_skipped", {"reason": "empty image result"})
-        return None
-    if art is not None:
-        art_hash = hashlib.sha256(art).hexdigest()
-    elif url:
-        art_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    else:
-        art_hash = ""
-    receipt = _receipt_for_artist(spec, prompt, options, latency_ms)
-    journal.append(now, "model_receipt", receipt_payload(receipt, snapshot_id))
-    journal.append(
-        now, kind,
-        {
-            "snapshot_id": snapshot_id,
-            "numbers": numbers,
-            "art_hash": art_hash,
-            "art_bytes": len(art) if art is not None else 0,
-            "art_url": url,
-        },
-    )
-    rendered = {"art": art, "url": url, "numbers": numbers, "art_hash": art_hash}
-    _share_cache_store(key, rendered)
-    return dict(rendered)
-
-
-def render_signal_art(
-    card: TradeCard,
-    journal: Journal,
-    now: datetime,
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    return _render_art(
-        share_prompt(card), "signal_card", share_numbers(card),
-        journal, now, card.snapshot_id, env, http_post, options,
-    )
-
-
-def render_milestone_art(
-    title: str,
-    journal: Journal,
-    now: datetime,
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    prompt = (
-        f"celebratory trading milestone card background, {title}, "
-        "clean gradient, no text, no numbers, no letters, no watermark"
-    )
-    return _render_art(prompt, "milestone_card", {"title": title}, journal, now, "", env, http_post, options)
-
-
-def grounded_infographic_options() -> ImageOptions:
-    return ImageOptions(
-        reasoning_strength="high",
-        enable_image_search=True,
-        enable_web_search=True,
-        enable_shell=True,
-    )
-
-
-def render_infographic_art(
-    prompt: str,
-    numbers: dict[str, Any],
-    journal: Journal,
-    now: datetime,
-    snapshot_id: str = "",
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    resolved = options if options is not None else grounded_infographic_options()
-    return _render_art(prompt, "infographic_card", numbers, journal, now, snapshot_id, env, http_post, resolved)
-
-
-def retouch_art(
-    prompt: str,
-    images: list[str] | list[dict[str, Any]],
-    numbers: dict[str, Any],
-    journal: Journal,
-    now: datetime,
-    snapshot_id: str = "",
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    backend, reason = select_backend("artist", journal, now, env)
-    if backend != "model":
-        journal.append(now, "retouch_skipped", {"reason": reason})
-        return None
-    spec = MODEL_REGISTRY["artist"]
-    try:
-        body, latency_ms = edit_image(spec, model_api_key(env), prompt, images, http_post, options)
-    except Exception as exc:
-        journal.append(now, "retouch_skipped", {"reason": type(exc).__name__})
-        return None
-    art, url = _art_from_body(body)
-    if art is None and url is None:
-        journal.append(now, "retouch_skipped", {"reason": "empty image result"})
-        return None
-    art_hash = hashlib.sha256(art).hexdigest() if art is not None else hashlib.sha256(str(url).encode()).hexdigest()
-    journal.append(now, "model_receipt", receipt_payload(_receipt_for_artist(spec, prompt, options, latency_ms), snapshot_id))
-    journal.append(
-        now, "retouch_card",
-        {"snapshot_id": snapshot_id, "numbers": numbers, "art_hash": art_hash,
-         "art_bytes": len(art) if art is not None else 0, "art_url": url},
-    )
-    return {"art": art, "url": url, "numbers": numbers, "art_hash": art_hash}
-
-
-def refine_art(
-    prompt: str,
-    numbers: dict[str, Any],
-    journal: Journal,
-    now: datetime,
-    previous_response_id: str | None = None,
-    reference_images: list[str] | None = None,
-    snapshot_id: str = "",
-    env: Mapping[str, str] | None = None,
-    http_post: HttpPost | None = None,
-    options: ImageOptions | None = None,
-) -> dict[str, Any] | None:
-    backend, reason = select_backend("artist", journal, now, env)
-    if backend != "model":
-        journal.append(now, "refine_skipped", {"reason": reason})
-        return None
-    spec = MODEL_REGISTRY["artist"]
-    try:
-        body, latency_ms = refine_image(
-            spec, model_api_key(env), prompt, previous_response_id,
-            reference_images, http_post, options,
-        )
-    except Exception as exc:
-        journal.append(now, "refine_skipped", {"reason": type(exc).__name__})
-        return None
-    parsed = parse_responses_image(body)
-    b64 = parsed.get("b64")
-    art: bytes | None = None
-    if isinstance(b64, str) and b64:
-        try:
-            art = base64.b64decode(b64)
-        except ValueError:
-            art = None
-    if art is None:
-        journal.append(now, "refine_skipped", {"reason": "empty image result"})
-        return None
-    art_hash = hashlib.sha256(art).hexdigest()
-    journal.append(now, "model_receipt", receipt_payload(_receipt_for_artist(spec, prompt, options, latency_ms), snapshot_id))
-    journal.append(
-        now, "refine_card",
-        {"snapshot_id": snapshot_id, "numbers": numbers, "art_hash": art_hash,
-         "art_bytes": len(art), "response_id": parsed.get("response_id"),
-         "call_id": parsed.get("call_id")},
-    )
-    return {"art": art, "url": None, "numbers": numbers, "art_hash": art_hash,
-            "response_id": parsed.get("response_id"), "call_id": parsed.get("call_id")}
 
 
 def share_card(
@@ -446,7 +64,6 @@ def share_card(
     journal: Journal,
     now: datetime,
     snapshot_id: str | None = None,
-    live_models: bool = False,
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
 ) -> str:
@@ -464,9 +81,4 @@ def share_card(
         raise ValueError(f"no cards for {underlying} snapshot {snapshot_id}")
     if index < 0 or index >= len(cards):
         raise ValueError(f"index {index} out of range (0-{len(cards) - 1})")
-    card = cards[index]
-    if not live_models:
-        journal.append(now, "share_skipped", {"reason": "live models off"})
-        return share_text(card)
-    art = render_signal_art(card, journal, now, env, http_post)
-    return share_text(card, art["art_hash"] if art is not None else None)
+    return share_text(cards[index])
