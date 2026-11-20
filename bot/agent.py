@@ -6,7 +6,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from bot import baseten
 from bot.journal import Journal
-from bot.models import HttpPost
+from bot.models import HttpPost, chat_api_key, chat_base_url, chat_spec, receipt_payload, run_analyst, select_backend
 from bot.shapes import AgentProposal, SellCandidate, StrategyDeployment
 
 
@@ -56,6 +56,38 @@ def parse_proposal(raw: Any, candidate_count: int, backend: str, model_id: str) 
     return AgentProposal("open", index, rationale, backend, model_id)
 
 
+def _pick_backend(
+    journal: Journal, now: datetime, env: Mapping[str, str] | None
+) -> tuple[str, str]:
+    """Baseten when the operator keyed it, else the built-in Claude analyst."""
+    if baseten.select_reason_backend(journal, now, env)[0] == "baseten":
+        return "baseten", ""
+    backend, reason = select_backend("analyst", journal, now, env)
+    if backend == "model":
+        return "claude", ""
+    return "fallback", reason or "no agent backend"
+
+
+def _claude_pick(
+    payload: list[dict[str, Any]],
+    journal: Journal,
+    now: datetime,
+    env: Mapping[str, str] | None,
+    http_post: HttpPost | None,
+) -> tuple[AgentProposal, float]:
+    spec = chat_spec("analyst", env)
+    prompt = json.dumps({"candidates": payload})
+    text, receipts = run_analyst(
+        spec, chat_api_key("analyst", env),
+        [{"role": "system", "content": baseten.AGENT_SYSTEM_PROMPT}, {"role": "user", "content": prompt}],
+        [], {}, prompt, http_post, base_url=chat_base_url("analyst", env),
+    )
+    for receipt in receipts:
+        journal.append(now, "model_receipt", receipt_payload(receipt, ""))
+    proposal = parse_proposal(text, len(payload), "claude", spec.model_id)
+    return proposal, sum(receipt.latency_ms for receipt in receipts)
+
+
 def propose_order(
     candidates: Sequence[SellCandidate],
     deployment: StrategyDeployment,
@@ -67,8 +99,8 @@ def propose_order(
     ordered = sorted(candidates, key=lambda item: -item.annualized_return)
     if len(ordered) <= 1:
         return ordered, None
-    backend, reason = baseten.select_reason_backend(journal, now, env)
-    if backend != "baseten":
+    backend, reason = _pick_backend(journal, now, env)
+    if backend == "fallback":
         journal.append(
             now, "agent_fallback",
             {"deployment_id": deployment.id, "symbol": ordered[0].symbol, "reason": reason, "candidates": len(ordered)},
@@ -76,12 +108,15 @@ def propose_order(
         return ordered, None
     payload = [candidate_payload(item, index) for index, item in enumerate(ordered)]
     try:
-        index, rationale, latency_ms, model_id = baseten.generate_pick(payload, env, http_post)
-        proposal = parse_proposal({"index": index, "rationale": rationale}, len(ordered), "baseten", model_id)
+        if backend == "baseten":
+            index, rationale, latency_ms, model_id = baseten.generate_pick(payload, env, http_post)
+            proposal = parse_proposal({"index": index, "rationale": rationale}, len(ordered), "baseten", model_id)
+        else:
+            proposal, latency_ms = _claude_pick(payload, journal, now, env, http_post)
     except Exception as exc:
         journal.append(
             now, "agent_proposal_rejected",
-            {"deployment_id": deployment.id, "symbol": ordered[0].symbol, "reason": type(exc).__name__, "backend": "baseten"},
+            {"deployment_id": deployment.id, "symbol": ordered[0].symbol, "reason": type(exc).__name__, "backend": backend},
         )
         return ordered, None
     journal.append(

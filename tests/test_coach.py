@@ -5,7 +5,7 @@ from bot.journal import Journal
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 
 
 def _storied_journal() -> Journal:
@@ -23,7 +23,7 @@ def _storied_journal() -> Journal:
 def _wonder_stub(seen, note="Keep: journaling. Fix: size down."):
     def post(url, headers, payload, timeout):
         seen.append(payload)
-        assert payload["model"] == "muse-wonder-1.0"
+        assert payload["model"] == "claude-opus-5-5"
         return {
             "choices": [{"message": {"content": note}}],
             "usage": {"prompt_tokens": 300, "completion_tokens": 40},
@@ -67,7 +67,7 @@ def test_coach_live_returns_wonder_note():
     text = coach_review(SnapshotStore(), journal, NOW, live_models=True,
                         env=dict(ENV), http_post=_wonder_stub(seen))
     assert "size down" in text
-    assert "muse-wonder-1.0" in text
+    assert "claude-opus-5-5" in text
     assert "fills" in seen[0]["messages"][1]["content"]
     kinds = [entry.kind for entry in journal.entries()]
     assert "coach_note" in kinds and "model_receipt" in kinds

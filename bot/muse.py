@@ -37,7 +37,7 @@ def resolve_port(explicit: Optional[int]) -> int:
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
-MAX_VOICE_BYTES = 10 * 1024 * 1024
+MAX_BODY_BYTES = 10 * 1024 * 1024
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
@@ -53,10 +53,6 @@ def content_length(headers: Any) -> int:
 
 
 def _body_payload(clean: str, raw: bytes) -> tuple[Any, Optional[HttpResponse]]:
-    if clean == "/voice":
-        if len(raw) > MAX_VOICE_BYTES:
-            return None, _fail(413, "voice audio too large")
-        return raw, None
     if clean in ("/chartread", "/docread"):
         if len(raw) > MAX_IMAGE_BYTES:
             label = "chart image too large" if clean == "/chartread" else "document image too large"
@@ -234,7 +230,7 @@ def create_server(
                 self._send(bad, head_only)
                 self._access(bad.status, started)
                 return
-            if length > MAX_VOICE_BYTES:
+            if length > MAX_BODY_BYTES:
                 too_big = _fail(413, "request body too large")
                 self._send(too_big, head_only)
                 self._access(too_big.status, started)
@@ -342,7 +338,7 @@ class Harness:
 __all__ = [
     "FormData",
     "Harness",
-    "MAX_VOICE_BYTES",
+    "MAX_BODY_BYTES",
     "MuseChatReply",
     "MuseChatRequest",
     "MuseTool",

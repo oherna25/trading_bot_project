@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Sequence
 
-from bot.charts import CALL_COLOR, PUT_COLOR, board_rows, gamma_svg
+from bot.charts import board_rows, gamma_svg
 from bot.diff import compact_dollars, pct
 from bot.exposure import compute_gex
 from bot.ideas import cached_earnings, rank_ideas
@@ -16,6 +16,7 @@ from bot.ivrank import histories_for
 from bot.journal import Journal
 from bot.research import paper_pnl_text
 from bot.store import SnapshotStore, empty_store_text, need_snapshot_text
+from bot.theme import chart_stylesheet
 
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
@@ -205,12 +206,13 @@ def composition_html(brief: VideoBrief, *, storyboard: bool = False) -> str:
         "h1{font-size:2rem;margin:0 0 1rem}h2{font-size:1.5rem;margin:0 0 1rem}"
         ".time{color:#8b949e;font-size:1rem;font-weight:normal}"
         ".stats{color:#8b949e}ul,ol{line-height:1.7}"
-        f".call{{color:{CALL_COLOR}}}.put{{color:{PUT_COLOR}}}"
+        ".call{color:var(--good)}.put{color:var(--bad)}"
         "table{border-collapse:collapse;min-width:60rem}"
         "th,td{border:1px solid #30363d;padding:.4rem .7rem;text-align:right}"
         "td:first-child,th:first-child{text-align:left}"
-        ".chart-panel{background:#fff;border-radius:8px;padding:16px;margin:1rem 0}"
-        ".chart-panel svg{max-width:100%;height:auto}"
+        ".chart-panel{background:var(--panel);border:1px solid var(--border2);border-radius:8px;padding:16px;margin:1rem 0}"
+        ".chart-panel svg{max-width:100%;max-height:420px;height:auto}"
+        f"{chart_stylesheet()}"
     )
     clips = "".join(
         f"<section id=\"{html.escape(scene.scene_id, quote=True)}\" class=\"clip\" "
@@ -282,14 +284,14 @@ def _spark_scene_body(symbol: str, store: SnapshotStore, journal: Journal) -> st
     verdict_cls = {"MATCH": "match", "CONTRADICTION": "contradiction"}.get(status, "off")
     return (
         "<div class=\"duel\">"
-        f"<div class=\"side\"><span>Muse Spark proposes</span><b>{html.escape(model_text)}</b>"
-        "<p>muse-spark-1.3 · DIRECTION + CONFIDENCE, forced tool call</p></div>"
+        f"<div class=\"side\"><span>Claude proposes</span><b>{html.escape(model_text)}</b>"
+        "<p>claude-opus-5-5 · DIRECTION + CONFIDENCE</p></div>"
         "<div class=\"vs\">VS</div>"
         f"<div class=\"side\"><span>Engine disposes</span><b>{html.escape(engine)}</b>"
         f"<p>spot {spot:.2f} vs flip {profile.flip_point:.1f}</p></div></div>"
         if spot is not None and profile.flip_point is not None
         else "<div class=\"duel\">"
-        f"<div class=\"side\"><span>Muse Spark proposes</span><b>{html.escape(model_text)}</b></div>"
+        f"<div class=\"side\"><span>Claude proposes</span><b>{html.escape(model_text)}</b></div>"
         "<div class=\"vs\">VS</div>"
         f"<div class=\"side\"><span>Engine disposes</span><b>{html.escape(engine)}</b></div></div>"
     ) + (
@@ -298,7 +300,7 @@ def _spark_scene_body(symbol: str, store: SnapshotStore, journal: Journal) -> st
         "<span class=\"pill contradiction\">CONTRADICTION — sizing waits</span>"
         f"<span class=\"pill {verdict_cls}\">THIS RUN: {html.escape(status)}</span></div>"
         "<p>Free prose never counts. Only direction vs engine counts — and both sides land in the journal as spark_claim + spark_verdict.</p>"
-        + _caption("Spark proposes. The engine grades it. Deterministic math has the last word.")
+        + _caption("Claude proposes. The engine grades it. Deterministic math has the last word.")
     )
 
 
@@ -318,7 +320,7 @@ def _card_scene_body(symbol: str, store: SnapshotStore, journal: Journal, now: d
         f"<p class=\"big\">{html.escape(card.symbol)} {html.escape(card.direction)} {html.escape(card.spread)} · {html.escape(card.expiry)}</p>"
         f"<p>confidence {pct(card.confidence)} · max loss {loss} · breakeven {be} · regime {html.escape(card.regime)}</p>"
         f"<p>entry: {html.escape(card.entry)}</p><p>why: {html.escape(card.reason)}</p>"
-        + _caption("Same screener in chat, /cards, and /demo — surfaces never disagree.")
+        + _caption("Same screener in chat, /cards, and the symbol dashboard — surfaces never disagree.")
     )
 
 
@@ -391,7 +393,7 @@ def build_submission_brief(
         "hook": (
             "<p class=\"big\">Your AI says long.<br>Your walls say otherwise.</p>"
             "<p>Most tools show you one of those. This desk shows you both — and journals who was right.</p>"
-            + _caption("MarketWingMan — a paper-first options desk with a Muse Spark audit block.")
+            + _caption("MarketWingMan — a paper-first options desk with a Claude audit block.")
         ),
         "engine": _gamma_body(symbol, store)
         + _caption("Home-grown GEX/VEX/DEX/CHARM/VANNA from stored chains. No vendor GEX feed."),
@@ -411,8 +413,8 @@ def build_submission_brief(
         "mcp": _mcp_scene_body(symbol, store, journal, now),
         "wheel": _wheel_scene_body(symbol, store, journal, now),
         "outro": (
-            "<p class=\"big\">Spark proposes.<br>The engine grades it.</p>"
-            "<p>Try it: run the app, open /demo, ask for a spark audit. Live it grades every claim; offline it answers OFF — and still works.</p>"
+            "<p class=\"big\">Claude proposes.<br>The engine grades it.</p>"
+            "<p>Try it: run the app, open /dashboard, ask for a claude audit. Live it grades every claim; offline it answers OFF — and still works.</p>"
             f"<p>{html.escape(paper_pnl_text(journal, store).splitlines()[0] if paper_pnl_text(journal, store).splitlines() else '')}</p>"
             + _caption("Meta Global AI Developer Hackathon · Indie Developer · Build for Your World · Solo build, Oct 27–Nov 4.")
         ),
@@ -420,7 +422,7 @@ def build_submission_brief(
     titles = {
         "hook": "The disagreement problem",
         "engine": f"{symbol} gamma — the tape",
-        "spark-audit": "Muse Spark audit",
+        "spark-audit": "Claude audit",
         "top-card": "Top trade card",
         "safety": "Safety gates",
         "replay": "Replay vs buy-and-hold",
@@ -432,14 +434,14 @@ def build_submission_brief(
     narrations = {
         "hook": "Your AI says long. Your walls say otherwise. This desk shows you both, and journals who was right.",
         "engine": "The engine computes gamma, vega, delta, charm, and vanna exposure from stored option chains. No vendor exposure feed.",
-        "spark-audit": "Muse Spark proposes a direction. The deterministic engine grades it: match, contradiction, unverified, or off. Free prose never counts.",
+        "spark-audit": "Claude proposes a direction. The deterministic engine grades it: match, contradiction, unverified, or off. Free prose never counts.",
         "top-card": "The top trade card is sized and defined-risk, with max loss and breakeven before you ever see a buy button.",
         "safety": "Every submit passes the same risk gate. Live ordering ships disabled, and the kill switch always wins.",
         "replay": "Replay scores the strategy against buy-and-hold on the same bars, with next-bar fills and no lookahead.",
         "shock": "A minus two percent shock reprices every wall and position before any sizing decision.",
         "mcp": "One tool registry, exposed over MCP-style HTTP. Chat, slash commands, and external clients all call the same handlers.",
         "wheel": "The wheel screen ranks cash-secured puts and covered calls by premium return, filtered by delta, open interest, IV rank, and earnings.",
-        "outro": "Spark proposes. The engine grades it. Try the demo, ask for a spark audit, and check the journal.",
+        "outro": "Claude proposes. The engine grades it. Run the zero-key demo, ask for a claude audit, and check the journal.",
     }
     scenes: list[VideoScene] = []
     start = 0
@@ -460,8 +462,8 @@ def build_submission_brief(
 def narration_script(brief: VideoBrief) -> str:
     lines = [
         f"narration script · {brief.composition_id} · {brief.total_seconds}s total",
-        "Voice: record these lines, or draft polished variants with Muse Spark / Muse Wonder chat.",
-        "No Muse text-to-speech endpoint exists in MODEL_REGISTRY (muse-voice-transcribe-1.0 is speech-to-text only), so Muse cannot voice this track in-repo.",
+        "Voice: record these lines, or draft polished variants with Claude chat.",
+        "Claude has no text-to-speech endpoint, so this track cannot be voiced in-repo.",
         "",
     ]
     for scene in brief.scenes:
@@ -484,8 +486,8 @@ def submission_composition_html(brief: VideoBrief, *, storyboard: bool = False) 
         ".caption{margin-top:auto;font-size:28px;font-weight:700;color:#eef2f8;border-top:2px solid #22304a;padding-top:22px}"
         "pre{font-size:26px;line-height:1.55;background:#0d1524;border:1px solid #22304a;border-radius:14px;padding:28px;white-space:pre-wrap}"
         ".chart-panel{background:#101827;border:1px solid #22304a;border-radius:14px;padding:16px;margin:1rem 0}"
-        ".chart-panel svg{max-width:100%;height:auto}"
-        f".call{{color:{CALL_COLOR}}}.put{{color:{PUT_COLOR}}}.stats{{color:#93a1b5}}"
+        ".chart-panel svg{max-width:100%;max-height:420px;height:auto}"
+        ".call{color:var(--good)}.put{color:var(--bad)}.stats{color:#93a1b5}"
         "table{border-collapse:collapse;min-width:60rem}th,td{border:1px solid #22304a;padding:.4rem .7rem;text-align:right;font-size:26px}"
         ".duel{display:grid;grid-template-columns:1fr auto 1fr;gap:24px;margin:12px 0 24px}"
         ".side{border:2px solid #2c3f5f;border-radius:16px;padding:28px;background:#0d1524}"
@@ -495,6 +497,7 @@ def submission_composition_html(brief: VideoBrief, *, storyboard: bool = False) 
         ".pill{font-size:24px;font-weight:800;border:2px solid #2c3f5f;border-radius:999px;padding:10px 20px}"
         ".pill.match{color:#34d399;border-color:#34d399}.pill.contradiction{color:#fb7185;border-color:#fb7185}"
         ".pill.off{color:#f5b83d;border-color:#f5b83d}"
+        f"{chart_stylesheet()}"
     )
     clips = "".join(
         f"<section id=\"{html.escape(scene.scene_id, quote=True)}\" class=\"clip\" "

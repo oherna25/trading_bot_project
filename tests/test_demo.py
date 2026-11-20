@@ -3,7 +3,7 @@ from urllib.parse import quote as urlencode
 
 import pytest
 
-from bot.demo import demo_cards, demo_html
+from bot.demo import demo_cards
 from bot.journal import Journal
 from bot.muse import route_http
 from bot.shapes import Bar, ChainSnapshot, OperatorProfile, OptionContract, default_operator_config
@@ -16,7 +16,7 @@ CONFIG = default_operator_config()
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
@@ -54,31 +54,6 @@ def _seeded_store() -> SnapshotStore:
     return store
 
 
-def test_demo_page_has_one_heading_and_one_paper_trade_form():
-    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
-    assert page.count("<h1>") == 1
-    assert page.count('name="tool" value="take_paper_trade"') == 1
-    assert 'http-equiv="refresh"' not in page
-
-
-def test_demo_page_walks_all_four_sections():
-    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
-    assert page.startswith("<!doctype html>")
-    assert "1. Regime read" in page
-    assert "2. Top card" in page
-    assert "3. Wheel screen" in page
-    assert "4. Replay" in page
-    assert "/card?underlying=TEST" in page
-
-
-def test_demo_page_links_shock_buttons():
-    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
-    assert "5. Shock" in page
-    assert "/shock?underlying=TEST" in page
-    for pct in ("pct=-2", "pct=-1", "pct=1", "pct=2"):
-        assert pct in page
-
-
 def test_shock_route_renders_text_and_buttons():
     response = route_http(
         "GET", "/shock?underlying=TEST&pct=-2", {}, _seeded_store(), Journal(), CONFIG, NOW
@@ -88,7 +63,7 @@ def test_shock_route_renders_text_and_buttons():
     assert "shock -2.0%" in body
     for pct in ("pct=-2", "pct=-1", "pct=1", "pct=2"):
         assert pct in body
-    assert "/demo?underlying=TEST" in body
+    assert "/dashboard?underlying=TEST" in body
 
 
 def test_shock_route_validates_pct_and_underlying():
@@ -98,20 +73,6 @@ def test_shock_route_validates_pct_and_underlying():
     )
     assert bad_pct.status == 400
     missing = route_http("GET", "/shock", {}, store, Journal(), CONFIG, NOW)
-    assert missing.status == 400
-
-
-def test_demo_page_journals_no_fills():
-    journal = Journal()
-    demo_html("TEST", _seeded_store(), journal, NOW)
-    assert [entry.kind for entry in journal.entries()].count("fill") == 0
-
-
-def test_demo_route_serves_and_400_unknown():
-    response = route_http("GET", "/demo?underlying=TEST", {}, _seeded_store(), Journal(), CONFIG, NOW)
-    assert response.status == 200
-    assert "TEST demo" in response.body.decode("utf-8")
-    missing = route_http("GET", "/demo?underlying=NOPE", {}, _seeded_store(), Journal(), CONFIG, NOW)
     assert missing.status == 400
 
 
@@ -163,7 +124,7 @@ def test_demo_cards_honors_passed_reason_env():
         _seeded_store(),
         journal,
         NOW,
-        env={"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"},
+        env={"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"},
         http_post=_reason_stub,
     )
     assert cards
@@ -174,10 +135,10 @@ def test_demo_cards_honors_passed_reason_env():
         _seeded_store(),
         Journal(),
         NOW,
-        env={"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"},
+        env={"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"},
         http_post=_reason_stub,
     )
-    assert {card.reason_source for card in live} == {"meta"}
+    assert {card.reason_source for card in live} == {"claude"}
     assert {card.reason for card in live} == {"Model says go."}
 
 
@@ -188,25 +149,3 @@ def test_demo_cards_pins_old_snapshot_bar():
     assert cards and all(card.snapshot_id == first_id for card in cards)
     bar = bar_at_or_before(store, "TEST", NOW - timedelta(days=1))
     assert bar is not None and bar.timestamp_utc == NOW - timedelta(days=1)
-
-
-def test_demo_page_has_hero_spark_panel_and_chat_box():
-    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
-    assert "Spark proposes. The engine grades it." in page
-    assert "SPARK AUDIT" in page
-    assert "Ask the desk" in page
-    assert 'id="chat-form"' in page
-    assert "Gamma by strike" in page
-
-
-def test_demo_chat_box_sends_live_models_flag(monkeypatch):
-    from bot import models
-    from bot.shapes import UserModelConfig
-
-    monkeypatch.setattr(
-        models, "portable_config",
-        lambda env=None: (UserModelConfig("k", "https://x/v1", "m"), "baseten", ""),
-    )
-    page = demo_html("TEST", _seeded_store(), Journal(), NOW)
-    assert 'id="chat-live" checked' in page
-    assert "live_models:lv.checked" in page

@@ -114,7 +114,7 @@ def test_select_backend_reserves_across_journals(tmp_path):
     from bot.models import select_backend
 
     ledger = str(tmp_path)
-    env = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "0.06", "LEDGER_DIR": ledger}
+    env = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "0.06", "LEDGER_DIR": ledger}
     first, second = Journal(), Journal()
     assert select_backend("analyst", first, NOW, env) == ("model", "")
     assert first.entries()[-1].kind == "budget_reserved"

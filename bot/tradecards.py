@@ -306,7 +306,7 @@ def build_trade_cards(
             "iv_rank": idea.iv_rank,
         }
         reason_source = "fallback"
-        if backend in ("meta", "user", "baseten"):
+        if backend in ("claude", "user", "baseten"):
             cache_key = _reason_cache_key(stats, http_post)
             cached = _reason_cache.get(cache_key)
             if cached is not None:
@@ -411,7 +411,7 @@ def query_trade_cards(
         raise ValueError(need_snapshot_text(underlying, store))
     iv_history = histories_for(store, used)
     cache_key: Optional[str] = None
-    if http_post is None and select_reason_backend(journal, now, env)[0] not in ("meta", "user", "baseten"):
+    if http_post is None and select_reason_backend(journal, now, env)[0] not in ("claude", "user", "baseten"):
         cache_key = trade_cards_cache_key(text, inputs, profile, iv_history, store.all_earnings(), now)
         hit = _card_cache.get(cache_key)
         if hit is not None:
@@ -662,8 +662,8 @@ def confidence_meter_html(confidence: float) -> str:
 
 REASON_SOURCE_LABELS = {
     "fallback": "reason: deterministic (offline)",
-    "meta": "reason: Muse Spark",
-    "baseten": "reason: Muse Spark Open (Baseten)",
+    "claude": "reason: Claude",
+    "baseten": "reason: Baseten",
     "user": "reason: your model",
 }
 
@@ -688,9 +688,9 @@ def spot_flip_gauge_svg(spot: Optional[float], flip: Optional[float]) -> str:
     track_y = top + 16
     if spot is None or flip is None:
         return (
-            f"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
+            f"<svg class=\"cx\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
             "role=\"img\" aria-label=\"spot versus flip unavailable\">"
-            "<text x=\"12\" y=\"32\" font-size=\"12\" fill=\"#8b949e\">"
+            "<text class=\"dim\" x=\"12\" y=\"32\" font-size=\"12\">"
             "spot vs flip n/a</text></svg>"
         )
     center = (spot + flip) / 2.0
@@ -705,19 +705,18 @@ def spot_flip_gauge_svg(spot: Optional[float], flip: Optional[float]) -> str:
     above = spot >= flip
     caption = f"spot {spot:g} {'above' if above else 'below'} flip {flip:g}"
     return (
-        f"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
+        f"<svg class=\"cx\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
         f"role=\"img\" aria-label=\"{html.escape(caption)}\">"
-        f"<rect x=\"{left}\" y=\"{track_y}\" width=\"{width - left - right}\" height=\"8\" "
-        "rx=\"4\" fill=\"#eef1f4\"/>"
-        f"<line x1=\"{flip_x:.1f}\" y1=\"{top}\" x2=\"{flip_x:.1f}\" y2=\"{track_y + 14}\" "
-        "stroke=\"#24292f\" stroke-width=\"2\" stroke-dasharray=\"5 3\">"
+        f"<rect class=\"track\" x=\"{left}\" y=\"{track_y}\" width=\"{width - left - right}\" height=\"8\" "
+        "rx=\"4\"/>"
+        f"<line class=\"ref\" x1=\"{flip_x:.1f}\" y1=\"{top}\" x2=\"{flip_x:.1f}\" y2=\"{track_y + 14}\">"
         f"<title>flip {flip:g}</title></line>"
-        f"<circle cx=\"{spot_x:.1f}\" cy=\"{track_y + 4:.1f}\" r=\"7\" fill=\"#0969da\">"
+        f"<circle class=\"dot\" cx=\"{spot_x:.1f}\" cy=\"{track_y + 4:.1f}\" r=\"7\">"
         f"<title>spot {spot:g}</title></circle>"
-        f"<text x=\"{left}\" y=\"{height - 6}\" font-size=\"11\" fill=\"#57606a\">"
+        f"<text class=\"dim\" x=\"{left}\" y=\"{height - 6}\" font-size=\"11\">"
         f"{html.escape(f'{center - half:g}')}</text>"
-        f"<text x=\"{width - right}\" y=\"{height - 6}\" text-anchor=\"end\" "
-        f"font-size=\"11\" fill=\"#57606a\">{html.escape(f'{center + half:g}')}</text>"
+        f"<text class=\"dim\" x=\"{width - right}\" y=\"{height - 6}\" text-anchor=\"end\" "
+        f"font-size=\"11\">{html.escape(f'{center + half:g}')}</text>"
         "</svg>"
     )
 
@@ -768,22 +767,21 @@ def payoff_svg(card: TradeCard) -> str:
     kink_labels = []
     for mark, label in ((low, f"{low:g}"), (high, f"{high:g}")):
         kink_labels.append(
-            f"<text x=\"{x_of(mark):.1f}\" y=\"{height - 8}\" text-anchor=\"middle\" "
-            f"font-size=\"10\" fill=\"#57606a\">{html.escape(label)}</text>"
+            f"<text class=\"dim\" x=\"{x_of(mark):.1f}\" y=\"{height - 8}\" text-anchor=\"middle\" "
+            f"font-size=\"10\">{html.escape(label)}</text>"
         )
     caption = f"payoff at expiry, max loss {_money(card.max_loss)}"
     if card.breakeven is not None:
         caption += f", breakeven {card.breakeven:g}"
     return (
-        f"<svg width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
+        f"<svg class=\"cx\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" "
         f"role=\"img\" aria-label=\"{html.escape(caption)}\">"
-        f"<line x1=\"{left}\" y1=\"{zero_y:.1f}\" x2=\"{width - right}\" y2=\"{zero_y:.1f}\" "
-        "stroke=\"#57606a\" stroke-width=\"1\" stroke-dasharray=\"4 3\"/>"
-        f"<path d=\"{path}\" fill=\"none\" stroke=\"#0969da\" stroke-width=\"2.5\" "
-        "stroke-linejoin=\"round\" stroke-linecap=\"round\"/>"
-        f"<text x=\"{left}\" y=\"{top + 10}\" font-size=\"10\" fill=\"#1a7f37\">"
+        f"<line class=\"zero\" x1=\"{left}\" y1=\"{zero_y:.1f}\" x2=\"{width - right}\" y2=\"{zero_y:.1f}\" "
+        "stroke-dasharray=\"4 3\"/>"
+        f"<path class=\"line\" d=\"{path}\"/>"
+        f"<text class=\"pos\" x=\"{left}\" y=\"{top + 10}\" font-size=\"10\">"
         f"+{_money(profit)}</text>"
-        f"<text x=\"{left}\" y=\"{height - bottom + 12:.0f}\" font-size=\"10\" fill=\"#cf222e\">"
+        f"<text class=\"neg\" x=\"{left}\" y=\"{height - bottom + 12:.0f}\" font-size=\"10\">"
         f"-{_money(loss)}</text>"
         f"{''.join(kink_labels)}</svg>"
     )

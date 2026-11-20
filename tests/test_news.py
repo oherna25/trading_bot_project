@@ -6,7 +6,7 @@ from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 
 
 def _seeded_store() -> SnapshotStore:
@@ -30,7 +30,7 @@ def _seeded_store() -> SnapshotStore:
 def _grounded_stub(seen):
     def post(url, headers, payload, timeout):
         seen.append(payload)
-        assert payload["tools"] == [{"type": "web_search"}]
+        assert payload["tools"] == [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}]
         return {
             "output": [{"content": [{"type": "output_text", "text": "CPI surprise hit tech (source)."}]}],
             "usage": {"input_tokens": 60, "output_tokens": 15},

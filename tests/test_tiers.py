@@ -6,7 +6,7 @@ from bot.shapes import ModelReceipt
 from bot import tiers
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-HOSTED = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
+HOSTED = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 
 
 def _local_env(tmp_path) -> dict:
@@ -32,21 +32,21 @@ def test_draft_without_anything_reports_hosted_reason():
     journal = Journal()
     decision = tiers.select_model_tier("reason", journal, NOW, {})
     assert decision.tier == "fallback"
-    assert decision.reason == "missing META_MODEL_API_KEY"
+    assert decision.reason == "missing ANTHROPIC_API_KEY"
 
 
 def test_premium_prefers_wonder_over_local(tmp_path):
     journal = Journal()
     decision = tiers.select_model_tier("analyst", journal, NOW, {**HOSTED, **_local_env(tmp_path)})
     assert (decision.tier, decision.role) == ("model", "reviewer")
-    assert decision.model_id == "muse-wonder-1.0"
+    assert decision.model_id == "claude-opus-5-5"
 
 
 def test_portfolio_is_premium_wonder_first():
     journal = Journal()
     decision = tiers.select_model_tier("portfolio", journal, NOW, dict(HOSTED))
     assert (decision.tier, decision.role) == ("model", "reviewer")
-    assert decision.model_id == "muse-wonder-1.0"
+    assert decision.model_id == "claude-opus-5-5"
 
 
 def test_deep_uses_local_when_hosted_missing(tmp_path):
@@ -64,7 +64,7 @@ def test_premium_uses_reviewer():
 def test_spent_budget_blocks_hosted_but_keeps_local(tmp_path):
     journal = Journal()
     receipt = ModelReceipt(
-        model_id="muse-spark-1.3", role_name="analyst", prompt_hash="h",
+        model_id="claude-opus-5-5", role_name="analyst", prompt_hash="h",
         tokens_in=10, tokens_out=10, cost_usd=5.0, latency_ms=1.0,
     )
     journal.append(NOW, "model_receipt", receipt_payload(receipt, ""))
@@ -110,7 +110,7 @@ def test_user_key_wins_over_hosted_and_local(tmp_path):
     journal = Journal()
     local_only = {"USER_MODEL_API_KEY": "u1", **_local_env(tmp_path)}
     assert tiers.select_model_tier("reason", journal, NOW, local_only).tier == "local"
-    env = {"META_MODEL_API_KEY": "k", "MODEL_DAY_BUDGET_USD": "5",
+    env = {"ANTHROPIC_API_KEY": "k", "MODEL_DAY_BUDGET_USD": "5",
            "USER_MODEL_API_KEY": "u1", **_local_env(tmp_path)}
     assert tiers.select_model_tier("analyst", journal, NOW, env).tier == "user"
     assert tiers.select_model_tier("reason", journal, NOW,

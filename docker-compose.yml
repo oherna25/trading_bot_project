@@ -1,6 +1,5 @@
-# Full app (default), zero-key demo (profile: demo), one-shot session (profile: jobs).
+# Full app (default) and one-shot session (profile: jobs).
 #   docker compose up -d app
-#   docker compose --profile demo up demo
 #   docker compose --profile jobs run --rm session
 # Keys come from .env when present (copy .env.example); no key is required.
 # All mutable state lives in the named volumes below, never in the image.
@@ -34,22 +33,6 @@ services:
       - app-data:/data
     restart: unless-stopped
 
-  demo:
-    build: .
-    image: marketwingman
-    profiles: ["demo"]
-    environment:
-      PORT: "8000"
-      TZ: ${TZ:-UTC}
-    env_file:
-      - path: .env
-        required: false
-    ports:
-      - "${HOST_PORT:-8000}:8000"
-    volumes:
-      - demo-data:/data
-    restart: unless-stopped
-
   session:
     build: .
     image: marketwingman
@@ -71,4 +54,3 @@ services:
 
 volumes:
   app-data:
-  demo-data:

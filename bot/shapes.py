@@ -71,6 +71,14 @@ class GexProfile:
 
 
 @dataclass(frozen=True)
+class ExposureGrid:
+    snapshot_id: str
+    strikes: tuple[float, ...]
+    expiries: tuple[str, ...]
+    cells: dict[tuple[float, str], float]
+
+
+@dataclass(frozen=True)
 class VexProfile:
     snapshot_id: str
     per_strike_exposure: dict[float, float]
@@ -155,25 +163,6 @@ class UserModelConfig:
     api_key: str
     base_url: str
     model_id: str
-
-
-@dataclass(frozen=True)
-class ImageOptions:
-    """Tuning knobs for Muse Image one-off generation.
-
-    None means omit the field and keep the server default. Size is an
-    aspect hint such as 1024x1536, or auto for the default aspect.
-    """
-
-    n: int = 1
-    size: Optional[str] = None
-    response_format: Optional[str] = None
-    output_format: Optional[str] = None
-    reasoning_strength: Optional[str] = None
-    enable_image_search: Optional[bool] = None
-    enable_web_search: Optional[bool] = None
-    enable_shell: Optional[bool] = None
-    user: Optional[str] = None
 
 
 @dataclass(frozen=True)

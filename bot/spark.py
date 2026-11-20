@@ -1,6 +1,6 @@
-"""Muse Spark audit block: model proposes, engine disposes.
+"""Claude audit block: model proposes, engine disposes.
 
-Spark is the hero for the Meta hackathon. The analyst model proposes a
+The analyst model (Claude by default) proposes a
 direction and confidence. This module checks that claim against the
 computed GEX profile and journals both sides. Deterministic math always
 has the last word.
@@ -70,9 +70,9 @@ def format_spark_block(
     claim: Optional[SparkClaim], verdict: SparkVerdict, expected: str
 ) -> str:
     if claim is None:
-        return f"spark audit: {verdict.status} -- {verdict.detail}"
+        return f"claude audit: {verdict.status} -- {verdict.detail}"
     lines = [
-        f"spark audit: {verdict.status} (model {claim.direction} vs engine {expected})",
+        f"claude audit: {verdict.status} (model {claim.direction} vs engine {expected})",
         f"model: {claim.model_id} confidence {pct(claim.confidence)}",
         f"thesis: {claim.thesis}",
         f"check: {verdict.detail}",
@@ -114,19 +114,19 @@ def spark_panel_html(store: SnapshotStore, journal: Journal, underlying: str) ->
     status, _expected, model_dir, confidence = latest_spark_audit(journal)
     cls = {"MATCH": "match", "CONTRADICTION": "contradiction"}.get(status, "off")
     if status == OFF or not model_dir:
-        verdict = '<span class="pill verdict off">SPARK AUDIT · OFF</span>'
-        model_side = "<span>Spark (live models)</span><b>not run yet</b><p class=\"sub\">Turn live models on and ask for a spark audit. The deterministic engine still answers offline.</p>"
-        note = "Offline by design: no key, no problem. The engine grades every claim when Spark is on."
+        verdict = '<span class="pill verdict off">CLAUDE AUDIT · OFF</span>'
+        model_side = "<span>Claude (live models)</span><b>not run yet</b><p class=\"sub\">Turn live models on and ask for a claude audit. The deterministic engine still answers offline.</p>"
+        note = "Offline by design: no key, no problem. The engine grades every claim when Claude is on."
     else:
-        verdict = f'<span class="pill verdict {cls}">SPARK AUDIT · {html.escape(status)}</span>'
+        verdict = f'<span class="pill verdict {cls}">CLAUDE AUDIT · {html.escape(status)}</span>'
         conf = f" · confidence {pct(confidence)}" if confidence is not None else ""
         model_id = _spark_claim_model_id(journal) or "model not recorded"
         model_side = (
-            f"<span>Muse Spark proposes</span><b>{html.escape(model_dir)}</b>"
+            f"<span>Model proposes</span><b>{html.escape(model_dir)}</b>"
             f"<p class=\"sub\">{html.escape(model_id)}{html.escape(conf)}</p>"
         )
         note = (
-            "Spark proposed. The engine graded it. Both landed in the journal — free prose never counts, only direction vs engine."
+            "The model proposed. The engine graded it. Both landed in the journal — free prose never counts, only direction vs engine."
             if status == "MATCH"
             else "Disagreement is the product: the model and the tape differ, so sizing waits. Both sides are journaled."
         )
@@ -137,15 +137,15 @@ def spark_panel_html(store: SnapshotStore, journal: Journal, underlying: str) ->
         else f"<span>Engine disposes</span><b>{html.escape(engine)}</b><p class=\"sub\">from total GEX {profile.total_exposure:,.0f}</p>"
     )
     return (
-        "<section class=\"panel spark-panel\" aria-label=\"Muse Spark audit\">"
-        "<span class=\"eyebrow\">Meta · Muse Spark audit</span>"
-        f"<h2 style=\"margin-top:.4rem\">Spark proposes. The engine grades it. {verdict}</h2>"
+        "<section class=\"panel spark-panel\" aria-label=\"Claude audit\">"
+        "<span class=\"eyebrow\">Claude audit</span>"
+        f"<h2 style=\"margin-top:.4rem\">Claude proposes. The engine grades it. {verdict}</h2>"
         f"<div class=\"duel\"><div class=\"side\">{model_side}</div>"
         "<div class=\"vs\">VS</div>"
         f"<div class=\"side\">{engine_side}</div></div>"
         f"<p class=\"sub\">{html.escape(note)}</p>"
         "<p><a class=\"btn\" href=\"/action?tool=get_spark_audit&amp;underlying="
-        f"{html.escape(underlying, quote=True)}\">Run spark audit</a> "
+        f"{html.escape(underlying, quote=True)}\">Run claude audit</a> "
         "<span class=\"sub\">journals spark_claim + spark_verdict</span></p>"
         "</section>"
     )
@@ -175,7 +175,7 @@ def spark_audit_response(
     expected = resolve_direction(bar, profile.flip_point, profile.total_exposure)
 
     signal = analyst_backend(
-        text or f"spark audit on {underlying}",
+        text or f"claude audit on {underlying}",
         snapshot_id,
         snapshot,
         profile,

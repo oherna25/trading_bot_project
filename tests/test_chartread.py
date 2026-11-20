@@ -6,7 +6,7 @@ from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 PNG = b"\x89PNG\r\n\x1a\n" + b"chart-bytes" * 100
 
 
@@ -69,7 +69,7 @@ def test_chart_reads_with_engine_context():
                              live_models=True, env=dict(ENV), http_post=_stub(seen))
     assert "100 wall" in reply
     payload = seen[0]
-    assert payload["model"] == "muse-wonder-1.0"
+    assert payload["model"] == "claude-opus-5-5"
     assert payload["reasoning_effort"] == "high"
     parts = payload["messages"][1]["content"]
     assert parts[1]["type"] == "image_url"
@@ -77,15 +77,6 @@ def test_chart_reads_with_engine_context():
     assert "TEST" in parts[0]["text"] and "flip" in parts[0]["text"]
     kinds = [entry.kind for entry in journal.entries()]
     assert "model_receipt" in kinds and "chart_read" in kinds
-
-
-def test_chart_regions_join_prompt():
-    seen = []
-    journal = Journal()
-    regions = [{"x": 10, "y": 20, "w": 300, "h": 200, "label": "price panel"}]
-    read_chart_image(PNG, "TEST", _seeded_store(), journal, NOW,
-                     live_models=True, env=dict(ENV), http_post=_stub(seen), regions=regions)
-    assert "price panel" in seen[0]["messages"][1]["content"][0]["text"]
 
 
 def test_chart_without_snapshot_still_reads():

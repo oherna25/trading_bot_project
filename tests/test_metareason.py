@@ -7,7 +7,7 @@ from bot.journal import Journal
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
 
-ENV = {"META_MODEL_API_KEY": "key-1"}
+ENV = {"ANTHROPIC_API_KEY": "key-1"}
 
 
 def _chat_body(content):
@@ -19,13 +19,13 @@ def _chat_body(content):
 
 def test_select_reason_backend_names_missing_var():
     backend, reason = select_reason_backend(Journal(), NOW, {})
-    assert (backend, reason) == ("fallback", "missing META_MODEL_API_KEY")
+    assert (backend, reason) == ("fallback", "missing ANTHROPIC_API_KEY")
 
 
 def test_select_reason_backend_meta_when_key_and_budget_set():
-    env = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
+    env = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
     backend, reason = select_reason_backend(Journal(), NOW, env)
-    assert (backend, reason) == ("meta", "")
+    assert (backend, reason) == ("claude", "")
 
 
 def test_select_reason_backend_meta_key_alone_falls_back_without_budget():
@@ -34,7 +34,7 @@ def test_select_reason_backend_meta_key_alone_falls_back_without_budget():
 
 
 def test_select_reason_backend_prefers_baseten_over_meta():
-    env = {"META_MODEL_API_KEY": "key-1", "BASETEN_API_KEY": "key-2"}
+    env = {"ANTHROPIC_API_KEY": "key-1", "BASETEN_API_KEY": "key-2"}
     assert select_reason_backend(Journal(), NOW, env) == ("baseten", "")
 
 
@@ -56,9 +56,9 @@ def test_generate_reason_posts_chat_with_api_key():
 
     reason, latency_ms = generate_reason({"symbol": "SPY"}, dict(ENV), stub)
     assert reason == "Wall holds the tape."
-    assert seen["url"] == "https://api.meta.ai/v1/chat/completions"
+    assert seen["url"] == "https://api.anthropic.com/v1/messages"
     assert seen["headers"] == {"Authorization": "Bearer key-1", "Content-Type": "application/json"}
-    assert seen["payload"]["model"] == "muse-spark-1.3"
+    assert seen["payload"]["model"] == "claude-opus-5-5"
     assert seen["payload"]["messages"][0]["role"] == "system"
     assert seen["payload"]["messages"][1] == {"role": "user", "content": '{"symbol": "SPY"}'}
     assert seen["timeout"] == 60.0
@@ -76,5 +76,5 @@ def test_generate_reason_missing_env_raises_without_calling_http():
     def exploding(*args):
         raise AssertionError("must not call http without env")
 
-    with pytest.raises(ValueError, match="META_MODEL_API_KEY"):
+    with pytest.raises(ValueError, match="ANTHROPIC_API_KEY"):
         generate_reason({"symbol": "SPY"}, {}, exploding)

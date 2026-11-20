@@ -13,6 +13,7 @@ from bot.ideas import (
 from bot.journal import Journal
 from bot.localmodels import LocalRunner, local_available, run_local
 from bot.tiers import select_model_tier
+from bot import claude
 from bot.models import (
     MODEL_REGISTRY,
     HttpPost,
@@ -158,7 +159,8 @@ def spark_signal(
         thesis=thesis,
         confidence=_parse_confidence(reply),
         snapshot_id=snapshot_id,
-        model_id=spec.model_id,
+        # A refusal fallback can answer on another model; name the one that ran.
+        model_id=receipts[-1].model_id if receipts else spec.model_id,
         symbol=snapshot.underlying,
     )
 
@@ -180,7 +182,7 @@ def grounded_note(
             MODEL_REGISTRY["grounding"],
             model_api_key(env),
             question,
-            [{"type": "web_search"}],
+            [dict(claude.WEB_SEARCH_TOOL)],
             question,
             "grounding",
             http_post,

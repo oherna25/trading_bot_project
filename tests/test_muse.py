@@ -68,7 +68,7 @@ def test_chat_brief_carries_profile_numbers():
 
 
 def test_trade_cards_text_returns_cards_with_reasons(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     request = parse_chat_payload({"text": "show me trade cards", "underlying": "TEST"})
@@ -133,7 +133,7 @@ def test_mcp_error_carries_message_in_reply():
 
 
 def test_registry_tools_answer(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     assert set(TOOL_REGISTRY) == {
         "get_gex_brief", "get_trade_cards", "get_trade_ideas", "get_wheel_ideas",
@@ -269,7 +269,7 @@ def test_route_mcp_tools_list_names_registry():
 
 
 def test_route_mcp_tools_call_trade_cards(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     payload = {"method": "tools/call", "params": {"name": "get_trade_cards", "arguments": {"query": "trade cards"}, "underlying": "TEST"}}
     response = route_http("POST", "/mcp", payload, _seeded_store(), Journal(), CONFIG, NOW)
@@ -381,7 +381,7 @@ def test_health_reports_push_providers_and_model_key():
         "DISCORD_WEBHOOK_URL": "https://discord.example/hook",
         "TELEGRAM_BOT_TOKEN": "tok",
         "TELEGRAM_CHAT_ID": "chat",
-        "META_MODEL_API_KEY": "key-1",
+        "ANTHROPIC_API_KEY": "key-1",
     })
     assert full["push_providers"] == ["discord", "telegram"]
     assert full["model_key_set"] is True
@@ -433,7 +433,7 @@ def test_route_unknown_path_returns_404():
 
 
 def test_harness_routes_text_voice_cards_push(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     harness = Harness()
     harness.post("give me the gex brief", kind="text")
@@ -555,18 +555,6 @@ def test_settings_form_takes_min_confidence_as_percent():
     assert store.read_settings().live_min_confidence == pytest.approx(0.65)
     page = route_http("GET", "/settings", {}, store, journal, CONFIG, NOW)
     assert 'name="live_min_confidence_pct" value="65"' in page.body.decode("utf-8")
-
-
-def test_demo_route_caches_and_snapshot_change_invalidates():
-    store, journal = _seeded_store(), Journal()
-    first = route_http("GET", "/demo?underlying=TEST", {}, store, journal, CONFIG, NOW)
-    assert first.status == 200
-    assert _etag_of(first)
-    second = route_http("GET", "/demo?underlying=TEST", {}, store, journal, CONFIG, NOW)
-    assert second.body == first.body
-    _new_snapshot(store)
-    third = route_http("GET", "/demo?underlying=TEST", {}, store, journal, CONFIG, NOW)
-    assert third.body != first.body
 
 
 def test_replay_csv_route_serves_download():

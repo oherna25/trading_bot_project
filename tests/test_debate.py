@@ -14,9 +14,9 @@ CONFIG = default_operator_config()
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5"}
 
 
 def _card(**overrides):
@@ -84,8 +84,8 @@ def test_fallback_verdict_passes_below_half():
 def test_live_models_argue_and_journal_receipts():
     journal = Journal()
     text = debate_card(_card(), journal, NOW, live_models=True, env=dict(ENV), http_post=_stub_post)
-    assert "BULL [muse-spark-1.3]: muse-spark-1.3 argues." in text
-    assert "BEAR [muse-wonder-1.0]: muse-wonder-1.0 argues." in text
+    assert "BULL [claude-opus-5-5]: claude-opus-5-5 argues." in text
+    assert "BEAR [claude-opus-5-5]: claude-opus-5-5 argues." in text
     assert [e.kind for e in journal.entries()].count("model_receipt") == 2
 
 

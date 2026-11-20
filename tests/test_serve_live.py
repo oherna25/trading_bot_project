@@ -91,7 +91,7 @@ def _status_of(call):
 
 
 def test_serve_cards_health_and_chat_over_socket(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     journal = Journal()
@@ -128,7 +128,7 @@ def test_serve_cards_health_and_chat_over_socket(monkeypatch):
 
 
 def test_serve_enforces_bearer_token_over_socket(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     with LiveServer(_seeded_store(), Journal(), token="secret") as live:
         status, _ = _status_of(lambda: live.get("/cards?underlying=TEST"))

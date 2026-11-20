@@ -34,7 +34,7 @@ Empty `text` gives 400 `missing chat text`; unknown underlying gives
 - `MuseChatRequest.underlying` defaults to `SPY` when missing/blank; always
   pass it explicitly when verifying so the reply is attributable.
 - Setting `llm_router: true` or `live_models: true` leaves the offline
-  path and needs `META_MODEL_API_KEY`; keep them absent/`false` here.
+  path and needs `ANTHROPIC_API_KEY`; keep them absent/`false` here.
 - Chat auth: with `MUSE_AUTH_TOKEN` set, `/chat` needs
   `Authorization: Bearer <token>`; offline verification leaves it unset
   (loopback bind `127.0.0.1` avoids the open-server warning).

@@ -85,7 +85,6 @@ def run_session_core(
     context_factory: Callable[[str], FeedContext] = live_context,
     live_models: bool = False,
     grounding: bool = False,
-    cards: bool = False,
     paper_trade: bool = False,
     broad: bool | None = None,
 ) -> str:
@@ -111,7 +110,6 @@ def run_session_core(
                     context_factory,
                     live_models,
                     grounding,
-                    cards,
                     paper_trade,
                 )
                 push_alerts(symbol, store, journal, moment)
@@ -169,7 +167,6 @@ def run_scheduled_session(
     context_factory: Callable[[str], FeedContext] = live_context,
     live_models: bool = False,
     grounding: bool = False,
-    cards: bool = False,
     paper_trade: bool = False,
 ) -> str:
     store, journal = load_bundle(store_dir)
@@ -184,7 +181,6 @@ def run_scheduled_session(
         context_factory,
         live_models,
         grounding,
-        cards,
         paper_trade,
     )
     moment = now or datetime.now(timezone.utc)

@@ -12,7 +12,7 @@ from bot.shapes import Bar, ChainSnapshot, OptionContract
 from bot.store import SnapshotStore
 
 NOW = datetime(2026, 10, 27, 14, 30, tzinfo=timezone.utc)
-ENV = {"META_MODEL_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
+ENV = {"ANTHROPIC_API_KEY": "key-1", "MODEL_DAY_BUDGET_USD": "5.0"}
 
 
 def _snapshot(at):
@@ -36,7 +36,7 @@ def _stale_store() -> SnapshotStore:
 def _narrate_stub(seen, content="walls are pressing price"):
     def post(url, headers, payload, timeout):
         seen.append(payload)
-        assert payload["model"] == "muse-spark-1.3"
+        assert payload["model"] == "claude-opus-5-5"
         return {
             "choices": [{"message": {"content": content}}],
             "usage": {"prompt_tokens": 80, "completion_tokens": 12},
@@ -68,7 +68,7 @@ def test_narrate_live_uses_spark():
         live_models=True, env=dict(ENV), http_post=_narrate_stub(seen),
     )
     assert narration == "walls are pressing price"
-    assert source == "muse-spark-1.3"
+    assert source == "claude-opus-5-5"
     assert "model_receipt" in [entry.kind for entry in journal.entries()]
 
 

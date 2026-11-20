@@ -310,7 +310,7 @@ def test_submission_spark_scene_shows_live_verdict_when_journaled():
     from bot.video import build_submission_brief
 
     journal = Journal()
-    journal.append(NOW, "spark_claim", {"direction": "short", "confidence": 0.83, "model_id": "muse-spark-1.3"})
+    journal.append(NOW, "spark_claim", {"direction": "short", "confidence": 0.83, "model_id": "claude-opus-5-5"})
     journal.append(NOW, "spark_verdict", {"status": "MATCH", "expected": "short"})
     brief = build_submission_brief("TEST", _seeded_store(), journal, NOW)
     spark = next(s for s in brief.scenes if s.scene_id == "spark-audit")
@@ -351,3 +351,18 @@ def test_submission_narration_script_is_timed_and_written(tmp_path):
     assert "text-to-speech" in script
     write_submission_project(str(tmp_path), brief)
     assert (tmp_path / "narration.txt").read_text(encoding="utf-8") == script
+
+
+def test_gamma_scene_charts_ship_their_own_theme_classes_and_dark_panel():
+    from bot.video import build_submission_brief, submission_composition_html
+
+    pages = (
+        composition_html(build_video_brief(["TEST"], _seeded_store(), Journal(), NOW)),
+        submission_composition_html(build_submission_brief("TEST", _seeded_store(), Journal(), NOW)),
+    )
+    for page in pages:
+        assert 'class="cx ladder"' in page
+        assert ".cx .pos{fill:var(--good)}" in page
+        assert "--good:" in page and "--bad:" in page
+        assert "background:#fff" not in page
+        assert not re.findall(r'(?:fill|stroke)="#', page)

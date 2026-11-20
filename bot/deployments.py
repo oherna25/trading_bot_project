@@ -729,7 +729,7 @@ def deployments_html(store: SnapshotStore, journal: Journal, now: datetime) -> s
         body = (
             "<p>no deployments yet. Create one in chat: "
             "<code>deploy cash_secured_put on SPY paper capital 50000</code></p>"
-            f"<p><a class=\"btn solid\" href=\"/demo?underlying={html_module.escape(settings.default_underlying, quote=True)}\">Open the demo chat</a></p>"
+            f"<p><a class=\"btn solid\" href=\"/dashboard?underlying={html_module.escape(settings.default_underlying, quote=True)}\">Open the desk chat</a></p>"
             f"<h2>Strategies</h2><p>{html_module.escape(list_strategies_text()).replace(chr(10), '<br>')}</p>"
         )
         return page(

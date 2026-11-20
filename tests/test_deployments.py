@@ -212,7 +212,7 @@ def test_deployments_html_shows_utilization_and_positions():
     assert "var(--good)" in body
 
 
-def test_deployments_page_route_and_empty_state_link_to_demo():
+def test_deployments_page_route_and_empty_state_link_to_desk():
     from bot.muse import route_http
     from bot.shapes import default_operator_config
 
@@ -221,7 +221,8 @@ def test_deployments_page_route_and_empty_state_link_to_demo():
     assert response.status == 200
     body = response.body.decode("utf-8")
     assert "no deployments yet" in body
-    assert "Open the demo chat" in body
+    assert 'href="/dashboard?underlying=SPY"' in body
+    assert "/demo" not in body
 
 
 def test_plain_english_deploy_maps_to_put_selling():

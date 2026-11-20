@@ -37,5 +37,5 @@ Expect: `{"ok": true}`; a paths list containing `/chat` and `/healthz`;
   returns 401 without `Authorization: Bearer <token>` when it is set.
 - `/health` `underlyings` is empty until the scratch bundle holds a
   snapshot; seed first (`scripts/seed_offline.py`).
-- `model_key_set` reflects whether `META_MODEL_API_KEY` is visible; it
+- `model_key_set` reflects whether `ANTHROPIC_API_KEY` is visible; it
   is `false` in offline verification. Never export real keys to flip it.

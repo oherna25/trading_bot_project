@@ -50,7 +50,6 @@ def chart_prompt(
     walls: Sequence[tuple[float, float]],
     spot: float | None,
     question: str = "",
-    regions: Sequence[Mapping[str, Any]] = (),
 ) -> str:
     if total_exposure is None:
         context = f"{underlying}: no stored snapshot; read only what the image shows."
@@ -62,12 +61,6 @@ def chart_prompt(
             f"total {total_exposure:,.0f}, flip {flip_point}, spot {spot}, top walls {wall_text}."
         )
     bits = [context]
-    if regions:
-        focus = "; ".join(
-            f"{r.get('label', 'region')} at x={r.get('x')},y={r.get('y')},w={r.get('w')},h={r.get('h')}"
-            for r in regions
-        )
-        bits.append(f"Focus on these image regions (0-1000 scale): {focus}.")
     bits.append(question or "Where is price versus the walls and flip?")
     return " ".join(bits)
 
@@ -80,7 +73,6 @@ def read_chart_image(
     now: datetime,
     live_models: bool = False,
     question: str = "",
-    regions: Sequence[Mapping[str, Any]] = (),
     env: Mapping[str, str] | None = None,
     http_post: HttpPost | None = None,
 ) -> str:
@@ -101,7 +93,7 @@ def read_chart_image(
         return f"chart reading unavailable: {reason}"
     found = store.read_latest(underlying)
     if found is None:
-        snapshot_id, prompt = "", chart_prompt(underlying, "", None, None, [], None, question, regions)
+        snapshot_id, prompt = "", chart_prompt(underlying, "", None, None, [], None, question)
     else:
         snapshot_id, snapshot = found
         bar = store.read_latest_bar(underlying)
@@ -110,7 +102,7 @@ def read_chart_image(
         walls = sorted(profile.per_strike_exposure.items(), key=lambda item: -abs(item[1]))
         prompt = chart_prompt(
             underlying, snapshot_id, profile.total_exposure, profile.flip_point,
-            walls, spot, question, regions,
+            walls, spot, question,
         )
     body = base64.b64encode(image).decode("ascii")
     messages: list[dict[str, Any]] = [
@@ -139,6 +131,6 @@ def read_chart_image(
         return "chart reading returned no text"
     journal.append(
         now, "chart_read",
-        {"underlying": underlying, "bytes": len(image), "kind": kind, "regions": len(regions)},
+        {"underlying": underlying, "bytes": len(image), "kind": kind},
     )
     return reading

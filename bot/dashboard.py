@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import html
+import json
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote as _urlencode
 
-from bot.charts import board_rows
+from bot.charts import board_rows, gex_profile_panel_html
 from bot.diff import compact_dollars
 from bot.journal import Journal
 from bot.store import SnapshotStore, empty_store_text
@@ -119,6 +120,42 @@ def _holdings_html(store: SnapshotStore) -> str:
     return f"<p>{html.escape(lines[0])}</p><ul>{items}</ul>"
 
 
+def _live_models_available() -> bool:
+    from bot.models import model_api_key, portable_config
+
+    return portable_config()[0] is not None or bool(model_api_key())
+
+
+def _chat_box(underlying: str) -> str:
+    # The page does not validate `underlying` against the store, so it must not break out of the script.
+    symbol_js = json.dumps(underlying).replace("<", "\\u003c")
+    chips = "".join(
+        f"<button type=\"button\" class=\"chipbtn\" data-q=\"{html.escape(q, quote=True)}\">{html.escape(q)}</button>"
+        for q in ("gex brief", "trade cards", "claude audit", "wheel ideas", f"shock {underlying} -2%")
+    )
+    checked = " checked" if _live_models_available() else ""
+    return (
+        "<section class=\"chatbox\" aria-label=\"Ask the desk\">"
+        "<span class=\"eyebrow\">Try it live</span><h2 style=\"margin-top:.35rem\">Ask the desk</h2>"
+        "<p class=\"sub\">Same chat loop as the API. Try: <code>gex brief</code>, <code>trade cards</code>, <code>claude audit</code>.</p>"
+        f"<div class=\"chips\">{chips}</div>"
+        "<form id=\"chat-form\"><label class=\"field\" style=\"flex:1 1 16rem\">question"
+        "<input type=\"text\" id=\"chat-q\" name=\"q\" value=\"gex brief\" autocomplete=\"off\" aria-label=\"chat question\"></label>"
+        f"<label class=\"field\">live models<input type=\"checkbox\" id=\"chat-live\"{checked}>"
+        "<span class=\"sub\">on: Claude answers with your key. off: deterministic engine only.</span></label>"
+        "<button class=\"solid\" type=\"submit\">Ask</button></form>"
+        "<pre id=\"chat-reply\" aria-live=\"polite\"></pre>"
+        "<script>"
+        "const f=document.getElementById('chat-form'),q=document.getElementById('chat-q'),r=document.getElementById('chat-reply'),lv=document.getElementById('chat-live');"
+        "document.querySelectorAll('.chipbtn').forEach(b=>b.addEventListener('click',()=>{q.value=b.dataset.q;f.requestSubmit()}));"
+        "f.addEventListener('submit',async e=>{e.preventDefault();r.className='show';r.textContent='thinking…';"
+        "try{const res=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json'},"
+        f"body:JSON.stringify({{text:q.value,underlying:{symbol_js},live_models:lv.checked}})}});const j=await res.json();"
+        "r.textContent=j.reply||j.error||('HTTP '+res.status)}catch(err){r.textContent='chat failed: '+err}});"
+        "</script></section>"
+    )
+
+
 ACTION_LINKS = (
     ("brief", "get_gex_brief", "Computed GEX brief for the symbol."),
     ("ideas", "get_trade_ideas", "Ranked trade ideas with triggers."),
@@ -179,7 +216,7 @@ def _actions_html(underlying: str) -> str:
         "<input type=\"hidden\" name=\"debate\" value=\"1\">"
         "<label class=\"field\">index<input name=\"index\" value=\"0\" size=\"4\"></label>"
         "<button type=\"submit\">debate</button></form></div>"
-        "<div class=\"action\"><h3>share</h3><p>Shareable trade card caption with art.</p>"
+        "<div class=\"action\"><h3>share</h3><p>Shareable trade card caption.</p>"
         f"<form class=\"block\" method=\"get\" action=\"/share\">{hidden_symbol}"
         "<label class=\"field\">index<input name=\"index\" value=\"0\" size=\"4\"></label>"
         "<button type=\"submit\">share</button></form></div>"
@@ -301,7 +338,7 @@ def _overview_html(
         "portfolio and trade overview, from stored snapshots",
         body,
         settings.default_underlying,
-        "dashboard",
+        "home",
         settings,
         "/",
         refresh=True,
@@ -338,6 +375,8 @@ def dashboard_html(
 
     body = (
         f"{stats}"
+        f"{_chat_box(underlying)}"
+        f"{gex_profile_panel_html(store, underlying)}"
         f"{spark_panel_html(store, journal, underlying)}"
         f"<h2>Digest</h2>{_board_table(rows)}{_alerts_list(alerts, now)}"
         f"<h2>Top card</h2>{_top_card_html(underlying, store, journal, now)}"
@@ -354,5 +393,4 @@ def dashboard_html(
         "dashboard",
         settings,
         next_path,
-        refresh=True,
     )

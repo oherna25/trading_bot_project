@@ -9,6 +9,7 @@ from bot.config import read_dotenv as _read_dotenv
 from bot.journal import Journal
 from bot.baseten import baseten_status
 from bot.localmodels import LOCAL_REGISTRY, local_available, local_weights
+from bot.claude import SDK_MISSING, sdk_available
 from bot.models import chat_spec, select_backend, spend_today, user_model_status
 
 TASK_CLASS = {
@@ -22,7 +23,6 @@ TASK_CLASS = {
     "chart": "premium",
     "shock_news": "deep",
     "portfolio": "premium",
-    "share": "deep",
     "review": "premium",
     "coach": "premium",
 }
@@ -119,6 +119,7 @@ def format_tier_status(status: Mapping[str, object]) -> str:
         f"local: {status.get('local_model') or 'none'}",
         f"user model: {user_detail}",
         f"baseten: {baseten_detail}",
+        f"claude sdk: {'installed' if status.get('claude_sdk', True) else SDK_MISSING}",
     ]
     for klass, order in CLASS_ORDER.items():
         lines.append(f"{klass}: {' -> '.join(order)}")
@@ -136,6 +137,7 @@ def tier_status(
         "local_available": found is not None,
         "local_model": LOCAL_REGISTRY[name].model_id if name else None,
         "tasks": dict(TASK_CLASS),
+        "claude_sdk": sdk_available(),
     }
     status.update(user_model_status(env))
     status.update(baseten_status(env))

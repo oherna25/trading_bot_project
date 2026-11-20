@@ -142,7 +142,7 @@ def test_paper_pnl_marks_journaled_fills():
 
 
 def test_trade_cards_answers_beat_ideas_ordering(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     reply = route_chat("trade card ideas", "TEST", store, Journal(), CONFIG, NOW)
@@ -309,7 +309,7 @@ def test_change_line_keeps_percent_for_same_sign_negatives():
 
 
 def test_trade_cards_output_carries_reason_text(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
     store = _seeded_store()
     reply = route_chat("show me trade cards", "TEST", store, Journal(), CONFIG, NOW)

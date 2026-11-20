@@ -110,11 +110,11 @@ class FakeController:
         self.calls = []
         self.fired = threading.Event()
 
-    def run(self, underlying="SPY", live_models=False, grounding=False, cards=False, now=None,
+    def run(self, underlying="SPY", live_models=False, grounding=False, now=None,
             paper_trade=True):
         self.calls.append(
             {"underlying": underlying, "live_models": live_models, "grounding": grounding,
-             "cards": cards, "paper_trade": paper_trade}
+             "paper_trade": paper_trade}
         )
         self.fired.set()
         return "fake brief", ["QQQ"]
@@ -125,7 +125,7 @@ def test_session_endpoint_runs_controller():
     response = route_http(
         "POST",
         "/session",
-        {"underlying": "QQQ", "live_models": True, "grounding": True, "cards": True},
+        {"underlying": "QQQ", "live_models": True, "grounding": True},
         SnapshotStore(),
         Journal(),
         CONFIG,
@@ -135,7 +135,7 @@ def test_session_endpoint_runs_controller():
     assert response.status == 200
     assert json.loads(response.body) == {"ok": True, "reply": "fake brief", "underlyings": ["QQQ"]}
     assert fake.calls == [
-        {"underlying": "QQQ", "live_models": True, "grounding": True, "cards": True, "paper_trade": True}
+        {"underlying": "QQQ", "live_models": True, "grounding": True, "paper_trade": True}
     ]
 
 
@@ -267,7 +267,7 @@ def test_dispatch_run_session_returns_brief_with_controller():
     assert reply.ok is True
     assert reply.reply == "fake brief"
     assert fake.calls == [
-        {"underlying": "QQQ", "live_models": True, "grounding": False, "cards": False, "paper_trade": True}
+        {"underlying": "QQQ", "live_models": True, "grounding": False, "paper_trade": True}
     ]
 
 
@@ -280,7 +280,7 @@ def test_dispatch_run_session_without_controller_fails():
 def test_mcp_run_session_route_passes_controller_under_auth():
     envelope = {
         "method": "tools/call",
-        "params": {"name": "run_session", "arguments": {"cards": True}, "underlying": "QQQ"},
+        "params": {"name": "run_session", "arguments": {"grounding": True}, "underlying": "QQQ"},
     }
     denied = route_http(
         "POST", "/mcp", envelope, SnapshotStore(), Journal(), CONFIG, NOW,
@@ -295,7 +295,7 @@ def test_mcp_run_session_route_passes_controller_under_auth():
     assert allowed.status == 200
     assert json.loads(allowed.body) == {"ok": True, "reply": "fake brief", "error": ""}
     assert fake.calls == [
-        {"underlying": "QQQ", "live_models": False, "grounding": False, "cards": True, "paper_trade": True}
+        {"underlying": "QQQ", "live_models": False, "grounding": True, "paper_trade": True}
     ]
     missing = route_http(
         "POST", "/mcp", envelope, SnapshotStore(), Journal(), CONFIG, NOW,

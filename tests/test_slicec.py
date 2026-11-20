@@ -14,7 +14,7 @@ CONFIG = default_operator_config()
 
 @pytest.fixture(autouse=True)
 def _no_reason_backend(monkeypatch):
-    monkeypatch.delenv("META_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.setattr("bot.metareason._read_dotenv", lambda *args, **kwargs: {})
 
 
@@ -400,4 +400,4 @@ def test_registries_pin_new_tools_without_new_model():
     for name in ("set_alert_rule", "list_alert_rules", "cancel_alert_rule",
                  "get_open_brief", "get_live_board"):
         assert name in TOOL_REGISTRY
-    assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "transcriber", "artist", "grounding"}
+    assert set(MODEL_REGISTRY) == {"analyst", "reviewer", "grounding"}

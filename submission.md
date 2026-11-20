@@ -143,7 +143,7 @@ The shipped `submission.mp4` voices the Muse draft with the macOS system voice
 (muxed via `--narration-audio`); record `narration.txt` yourself and re-mux for a human track.
 
 Plan for the recording (3:00, one case, SPY, live models on).
-0:00 Open `/demo`: hero regime pill, spot vs flip, Spark audit panel. Open
+0:00 Open `/dashboard?underlying=SPY`: GEX profile, spot vs flip, Spark audit panel. Open
 with the disclosure: everything in this repo was built Oct 27 to Nov 4.
 0:25 Click "Ask the desk" → `spark audit`: MATCH/CONTRADICTION verdict pill,
 model vs engine duel, journal tail with `spark_claim` + `spark_verdict`.
