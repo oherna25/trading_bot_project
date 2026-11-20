@@ -521,12 +521,18 @@ def test_cards_route_refreshes_when_a_reason_lands():
     from bot.tradecards import _reason_cache_store
 
     store, journal = _seeded_store(), Journal()
+
+    def card_queries() -> int:
+        # Keyless runs answer the re-query from the card cache ("ideas_cached");
+        # a live reason backend recomputes ("ideas"). Both mean the page was rebuilt.
+        return sum(entry.kind in ("ideas", "ideas_cached") for entry in journal.entries())
+
     route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
     route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
-    assert [entry.kind for entry in journal.entries()].count("ideas") == 1
+    assert card_queries() == 1
     _reason_cache_store("probe", "reason")
     route_http("GET", "/cards?underlying=TEST", {}, store, journal, CONFIG, NOW)
-    assert [entry.kind for entry in journal.entries()].count("ideas") == 2
+    assert card_queries() == 2
 
 
 def test_board_route_caches_and_theme_change_invalidates():
